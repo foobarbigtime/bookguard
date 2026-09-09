@@ -32,7 +32,7 @@
       <article class="card">
         <span class="label">Bindery DB</span>
         <strong>{{ "Connected" if bindery_db_exists else "Not found" }}</strong>
-        <small>Sampling up to {{ sample_files }} file(s) per audiobook association.</small>
+        <small>Sampling up to {{ sample_files }} representative file(s) per audiobook association.</small>
       </article>
       <article class="card scan-card">
         <span class="label">Latest scan</span>
@@ -58,22 +58,46 @@
       </a>
     </section>
 
+    <section class="review-breakdown-card">
+      <div class="breakdown-heading">
+        <div>
+          <strong>REVIEW breakdown</strong>
+          <small>Not every REVIEW is suspicious. Use these reason groups to separate unsupported/no-metadata files from real mismatches.</small>
+        </div>
+      </div>
+      <div class="reason-chips" id="reviewReasonChips">
+        {% if review_reasons %}
+          {% for code, count in review_reasons.items() %}
+            <a class="reason-chip reason-{{ code|lower }} {% if reason_code == code %}active{% endif %}" href="/?classification=REVIEW&reason_code={{ code }}">
+              <span>{{ code|replace('_', ' ') }}</span><strong>{{ count }}</strong>
+            </a>
+          {% endfor %}
+        {% else %}
+          <span class="muted">No REVIEW reasons yet.</span>
+        {% endif %}
+      </div>
+    </section>
+
     <section class="table-card">
       <div class="section-title row-between">
         <div>
-          <h2>{{ classification or "Latest results" }}</h2>
-          <p id="tableHint">{% if classification %}Filtered view. Counts continue updating during a scan.{% else %}Newest scan results appear here while BookGuard is working.{% endif %}</p>
+          <h2>
+            {% if reason_code %}{{ classification or "ALL" }} · {{ reason_code|replace('_', ' ') }}
+            {% elif classification %}{{ classification }}
+            {% else %}Latest results{% endif %}
+          </h2>
+          <p id="tableHint">{% if classification or reason_code %}Filtered view. Counts continue updating during a scan.{% else %}Newest scan results appear here while BookGuard is working.{% endif %}</p>
         </div>
-        {% if classification %}<a class="button-link" href="/">Clear filter</a>{% endif %}
+        {% if classification or reason_code %}<a class="button-link" href="/">Clear filter</a>{% endif %}
       </div>
 
       <div id="resultsContainer">
       {% if results %}
       <div class="table-wrap">
-        <table>
+        <table class="results-table">
           <thead>
             <tr>
-              <th>Risk</th><th>State</th><th>Author</th><th>Book</th><th>Format</th><th>Why</th><th>Path</th>
+              <th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th>
               {% if allow_actions %}<th>Actions</th>{% endif %}
             </tr>
           </thead>
@@ -82,8 +106,13 @@
             <tr>
               <td><strong>{{ row.risk_score }}</strong></td>
               <td><span class="pill {{ row.classification|lower }}">{{ row.classification }}</span></td>
-              <td>{{ row.author }}</td>
-              <td>{{ row.title }}</td>
+              <td><span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_', ' ') }}</span></td>
+              <td class="book-cell"><strong>{{ row.title }}</strong><small>{{ row.author }}</small></td>
+              <td class="book-cell detected-cell">
+                <strong>{{ row.detected_title or "—" }}</strong>
+                <small>{{ row.detected_author or "No detected author" }}</small>
+                {% if row.detected_genre %}<small class="genre">{{ row.detected_genre }}</small>{% endif %}
+              </td>
               <td>{{ row.format }}</td>
               <td>{{ row.reasons|join(" ") }}</td>
               <td class="path">{{ row.stored_path }}</td>
@@ -108,6 +137,7 @@
 <script>
 const scanButton = document.getElementById("scanButton");
 const classificationFilter = {{ classification|tojson }};
+const reasonFilter = {{ reason_code|tojson }};
 const allowActions = {{ allow_actions|tojson }};
 const defaultPollMs = {{ poll_ms }};
 
@@ -131,8 +161,16 @@ function formatDuration(seconds) {
   return `${s}s`;
 }
 
+function reasonLabel(code) {
+  return String(code || "UNKNOWN").replaceAll("_", " ");
+}
+
 function resultRow(row) {
   const reasons = (row.reasons || []).join(" ");
+  const detectedTitle = row.detected_title || "—";
+  const detectedAuthor = row.detected_author || "No detected author";
+  const genre = row.detected_genre ? `<small class="genre">${escapeHtml(row.detected_genre)}</small>` : "";
+  const code = row.reason_code || "UNKNOWN";
   let actions = "";
   if (allowActions) {
     actions = row.classification === "PASS"
@@ -142,8 +180,9 @@ function resultRow(row) {
   return `<tr>
     <td><strong>${escapeHtml(row.risk_score)}</strong></td>
     <td><span class="pill ${escapeHtml(row.classification.toLowerCase())}">${escapeHtml(row.classification)}</span></td>
-    <td>${escapeHtml(row.author)}</td>
-    <td>${escapeHtml(row.title)}</td>
+    <td><span class="reason-badge reason-${escapeHtml(code.toLowerCase())}">${escapeHtml(reasonLabel(code))}</span></td>
+    <td class="book-cell"><strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.author)}</small></td>
+    <td class="book-cell detected-cell"><strong>${escapeHtml(detectedTitle)}</strong><small>${escapeHtml(detectedAuthor)}</small>${genre}</td>
     <td>${escapeHtml(row.format)}</td>
     <td>${escapeHtml(reasons)}</td>
     <td class="path">${escapeHtml(row.stored_path)}</td>
@@ -151,16 +190,29 @@ function resultRow(row) {
   </tr>`;
 }
 
+function renderReviewReasons(counts) {
+  const container = document.getElementById("reviewReasonChips");
+  const entries = Object.entries(counts || {});
+  if (!entries.length) {
+    container.innerHTML = '<span class="muted">No REVIEW reasons yet.</span>';
+    return;
+  }
+  container.innerHTML = entries.map(([code, count]) => {
+    const active = reasonFilter === code ? " active" : "";
+    return `<a class="reason-chip reason-${escapeHtml(code.toLowerCase())}${active}" href="/?classification=REVIEW&reason_code=${encodeURIComponent(code)}"><span>${escapeHtml(reasonLabel(code))}</span><strong>${escapeHtml(count)}</strong></a>`;
+  }).join("");
+}
+
 function renderLiveResults(rows) {
-  if (classificationFilter) return;
+  if (classificationFilter || reasonFilter) return;
   const container = document.getElementById("resultsContainer");
   if (!rows || rows.length === 0) {
     container.innerHTML = '<div class="empty" id="emptyResults">No results yet.</div>';
     return;
   }
   const actionHeader = allowActions ? "<th>Actions</th>" : "";
-  container.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Risk</th><th>State</th><th>Author</th><th>Book</th><th>Format</th><th>Why</th><th>Path</th>${actionHeader}</tr></thead>
+  container.innerHTML = `<div class="table-wrap"><table class="results-table">
+    <thead><tr><th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th>${actionHeader}</tr></thead>
     <tbody id="resultsBody">${rows.map(resultRow).join("")}</tbody>
   </table></div>`;
 }
@@ -205,6 +257,7 @@ async function pollStatus(reloadWhenDone=false) {
     document.getElementById(`count${label}`).textContent = value;
   }
   document.getElementById("countALL").textContent = total;
+  renderReviewReasons(body.review_reasons || {});
   renderLiveResults(body.recent_results || []);
 
   if (scan.status === "running") {
