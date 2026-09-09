@@ -19,13 +19,21 @@ from .db import (
     latest_results,
     latest_scan,
     load_persisted_settings,
+    recent_metadata_repairs,
     result_by_id,
     save_persisted_settings,
+)
+from .repair import (
+    RepairError,
+    apply_metadata_repair,
+    build_repair_preview,
+    repair_candidate_summary,
+    undo_metadata_repair,
 )
 from .scanner import start_scan
 
 
-app = FastAPI(title="BookGuard", version="0.3.1")
+app = FastAPI(title="BookGuard", version="0.4.0")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -104,6 +112,7 @@ def _compact_result(row: dict) -> dict:
         "detected_title": detected_title,
         "detected_author": detected_author,
         "detected_genre": detected_genre,
+        "repair": repair_candidate_summary(row),
     }
 
 
@@ -136,6 +145,7 @@ def dashboard(
             "classification": classification or "",
             "reason_code": reason_code or "",
             "allow_actions": settings.allow_actions,
+            "repair_mode": settings.metadata_repair_mode,
             "bindery_db_exists": os.path.exists(settings.bindery_db),
             "sample_files": settings.sample_files,
             "poll_ms": settings.dashboard_poll_ms,
@@ -158,6 +168,19 @@ def settings_page(request: Request):
             "ebook_root_exists": os.path.exists(settings.ebook_root),
             "quarantine_root_exists": os.path.exists(settings.quarantine_root),
             "scan": latest_scan(),
+            "version": app.version,
+        },
+    )
+
+
+@app.get("/repairs", response_class=HTMLResponse)
+def repairs_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="repairs.html",
+        context={
+            "repairs": recent_metadata_repairs(200),
+            "repair_mode": settings.metadata_repair_mode,
             "version": app.version,
         },
     )
@@ -186,6 +209,7 @@ def api_status():
         "timing": _scan_timing(scan),
         "recent_results": recent,
         "poll_ms": settings.dashboard_poll_ms,
+        "repair_mode": settings.metadata_repair_mode,
     }
 
 
@@ -228,6 +252,37 @@ def api_reset_settings():
     settings.__dict__.update(defaults.__dict__)
     clear_persisted_settings()
     return {"ok": True, "settings": settings.public_dict()}
+
+
+@app.get("/api/results/{result_id}/repair-preview")
+def api_repair_preview(result_id: int):
+    item = result_by_id(result_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Result not found.")
+    try:
+        preview = build_repair_preview(item)
+    except RepairError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"result_id": result_id, "mode": settings.metadata_repair_mode, **preview}
+
+
+@app.post("/api/results/{result_id}/repair")
+def api_repair(result_id: int):
+    item = result_by_id(result_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Result not found.")
+    try:
+        return {"ok": True, **apply_metadata_repair(item)}
+    except RepairError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/repairs/{repair_id}/undo")
+def api_undo_repair(repair_id: int):
+    try:
+        return undo_metadata_repair(repair_id)
+    except RepairError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/api/results/{result_id}/detach")
