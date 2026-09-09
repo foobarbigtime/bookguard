@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>BookGuard</h1>
+      <p>Validation and quarantine for Bindery imports.</p>
+    </div>
+    <button id="scanButton" class="primary">Run scan</button>
+  </header>
+
+  <main>
+    <section class="status-grid">
+      <article class="card">
+        <span class="label">Mode</span>
+        <strong>{{ "Actions enabled" if allow_actions else "Audit only" }}</strong>
+        <small>{{ "Detach/quarantine controls are live." if allow_actions else "Nothing will be changed automatically." }}</small>
+      </article>
+      <article class="card">
+        <span class="label">Bindery DB</span>
+        <strong>{{ "Connected" if bindery_db_exists else "Not found" }}</strong>
+        <small>Sampling up to {{ sample_files }} file(s) per audiobook association.</small>
+      </article>
+      <article class="card">
+        <span class="label">Latest scan</span>
+        <strong id="scanState">{{ scan.status if scan else "Never run" }}</strong>
+        <small id="scanProgress">{% if scan %}{{ scan.processed }} / {{ scan.total }}{% else %}Start a scan to audit the library.{% endif %}</small>
+      </article>
+    </section>
+
+    <section class="counts">
+      {% for label in ["PASS","REVIEW","REJECT","MISSING"] %}
+        <a class="count-card {{ label|lower }}" href="/?classification={{ label }}">
+          <span>{{ label }}</span>
+          <strong>{{ counts.get(label, 0) }}</strong>
+        </a>
+      {% endfor %}
+      <a class="count-card" href="/">
+        <span>ALL</span>
+        <strong>{{ counts.values()|sum if counts else 0 }}</strong>
+      </a>
+    </section>
+
+    <section class="table-card">
+      <div class="section-title">
+        <div>
+          <h2>{{ classification or "Latest results" }}</h2>
+          <p>Higher risk scores deserve attention first. BookGuard never auto-deletes.</p>
+        </div>
+      </div>
+
+      {% if results %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Risk</th><th>State</th><th>Author</th><th>Book</th><th>Format</th><th>Why</th><th>Path</th>
+              {% if allow_actions %}<th>Actions</th>{% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in results %}
+            <tr>
+              <td><strong>{{ row.risk_score }}</strong></td>
+              <td><span class="pill {{ row.classification|lower }}">{{ row.classification }}</span></td>
+              <td>{{ row.author }}</td>
+              <td>{{ row.title }}</td>
+              <td>{{ row.format }}</td>
+              <td>{{ row.reasons|join(" ") }}</td>
+              <td class="path">{{ row.stored_path }}</td>
+              {% if allow_actions %}
+              <td class="actions">
+                {% if row.classification != "PASS" %}
+                <button onclick="runAction({{ row.id }}, 'detach')">Detach</button>
+                <button class="danger" onclick="runAction({{ row.id }}, 'quarantine')">Quarantine</button>
+                {% else %}<span class="muted">Protected</span>{% endif %}
+              </td>
+              {% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<div class="empty">No results yet.</div>{% endif %}
+    </section>
+  </main>
+
+<script>
+const scanButton = document.getElementById("scanButton");
+
+async function startScan() {
+  scanButton.disabled = true;
+  scanButton.textContent = "Starting…";
+  const response = await fetch("/api/scan", {method: "POST"});
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    alert(body.detail || "Unable to start scan.");
+    scanButton.disabled = false;
+    scanButton.textContent = "Run scan";
+    return;
+  }
+  pollStatus(true);
+}
+
+async function pollStatus(reloadWhenDone=false) {
+  const response = await fetch("/api/status");
+  if (!response.ok) return;
+  const body = await response.json();
+  if (!body.scan) return;
+  document.getElementById("scanState").textContent = body.scan.status;
+  document.getElementById("scanProgress").textContent = `${body.scan.processed} / ${body.scan.total}`;
+  if (body.scan.status === "running") {
+    scanButton.disabled = true;
+    scanButton.textContent = "Scanning…";
+    setTimeout(() => pollStatus(true), 1500);
+  } else {
+    scanButton.disabled = false;
+    scanButton.textContent = "Run scan";
+    if (reloadWhenDone) window.location.reload();
+  }
+}
+
+async function runAction(id, action) {
+  const warning = action === "quarantine"
+    ? "This will detach the item from Bindery and move the physical file/folder into BookGuard quarantine. Continue?"
+    : "This will detach the tracked path from Bindery without deleting the physical file. Continue?";
+  if (!confirm(warning)) return;
+  const response = await fetch(`/api/results/${id}/${action}`, {method: "POST"});
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    alert(body.detail || "Action failed.");
+    return;
+  }
+  alert(action === "quarantine" ? `Moved to ${body.destination}` : "Detached.");
+  window.location.reload();
+}
+
+scanButton.addEventListener("click", startScan);
+pollStatus(false);
+</script>
+</body>
+</html>
