@@ -19,8 +19,18 @@ def test_title_mismatch():
     assert not title_match("English Girl", "California Girl")
 
 
+def test_catalogue_article_variants_match():
+    assert title_match("Order", "The Order")
+    assert title_match("Messenger, The", "The Messenger")
+    assert title_match("Cellist, The", "The Cellist")
+
+
 def test_author_match():
     assert author_match("James Patterson", "James Patterson / Michael Ledwidge")
+
+
+def test_reversed_author_name_matches():
+    assert author_match("Ann Patchett", "Patchett, Ann")
 
 
 def test_pen_name_alias_match_is_bidirectional():
@@ -44,6 +54,22 @@ def test_music_mismatch_is_reject():
     assert code == "MUSIC_MISMATCH"
 
 
+def test_music_title_collision_is_still_reject():
+    state, score, code, _ = classify_audio(
+        "Something Borrowed",
+        "Emily Giffin",
+        [{
+            "artist": "John Prine",
+            "album": "Something Borrowed, Something New: A Tribute To John Anderson",
+            "title": "Something Borrowed",
+            "genre": "Country",
+        }],
+    )
+    assert state == "REJECT"
+    assert score == 100
+    assert code == "MUSIC_MISMATCH"
+
+
 def test_good_audiobook_is_pass():
     state, score, code, _ = classify_audio(
         "Finders Keepers",
@@ -52,6 +78,22 @@ def test_good_audiobook_is_pass():
             "artist": "Stephen King",
             "album": "Finders Keepers",
             "title": "Chapter 01",
+            "genre": "Audiobook",
+        }],
+    )
+    assert state == "PASS"
+    assert score < 20
+    assert code == "MATCH"
+
+
+def test_narrator_artist_with_author_in_album_is_pass():
+    state, score, code, _ = classify_audio(
+        "How to train your dragon",
+        "Cressida Cowell",
+        [{
+            "artist": "David Tennant",
+            "album": "Cressida Cowell - How To Train Your Dragon",
+            "title": "Track 01",
             "genre": "Audiobook",
         }],
     )
@@ -75,6 +117,26 @@ def test_wrong_spoken_word_is_strong_reject():
     assert score == 95
     assert code == "STRONG_MISMATCH"
     assert "California Girl" in reasons[0]
+
+
+def test_composer_fallback_can_support_strong_mismatch_detection():
+    state, score, code, reasons = classify_audio(
+        "Something Blue",
+        "Emily Giffin",
+        [{
+            "artist": "",
+            "album_artist": "",
+            "author": "",
+            "composer": "Alan Drew",
+            "album": "Gardens of Water",
+            "title": "Chapter 01",
+            "genre": "Fiction",
+        }],
+    )
+    assert state == "REJECT"
+    assert score == 95
+    assert code == "STRONG_MISMATCH"
+    assert "Gardens of Water" in reasons[0]
 
 
 def test_blank_metadata_stays_review():
