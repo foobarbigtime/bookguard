@@ -11,12 +11,13 @@
     <div class="brand">
       <div>
         <h1>BookGuard</h1>
-        <p>Validation and quarantine for Bindery imports.</p>
+        <p>Validation, quarantine, and metadata repair for Bindery imports.</p>
       </div>
       <span class="version">v{{ version }}</span>
     </div>
     <nav class="topnav">
       <a class="nav-link active" href="/">Dashboard</a>
+      <a class="nav-link" href="/repairs">Repairs</a>
       <a class="nav-link" href="/settings">Settings</a>
       <button id="scanButton" class="primary">Run scan</button>
     </nav>
@@ -25,9 +26,14 @@
   <main>
     <section class="status-grid">
       <article class="card">
-        <span class="label">Mode</span>
-        <strong>{{ "Actions enabled" if allow_actions else "Audit only" }}</strong>
-        <small>{{ "Detach/quarantine controls are live." if allow_actions else "Nothing will be changed automatically." }}</small>
+        <span class="label">Bindery actions</span>
+        <strong>{{ "Enabled" if allow_actions else "Audit only" }}</strong>
+        <small>{{ "Detach/quarantine controls are live." if allow_actions else "Detach and quarantine are disabled." }}</small>
+      </article>
+      <article class="card">
+        <span class="label">Metadata repair</span>
+        <strong>{{ repair_mode|upper }}</strong>
+        <small>{% if repair_mode == 'safe' %}Safe repair writes are enabled when media mounts are writable.{% elif repair_mode == 'preview' %}Repair proposals are visible, but files remain unchanged.{% else %}Metadata repair is disabled.{% endif %}</small>
       </article>
       <article class="card">
         <span class="label">Bindery DB</span>
@@ -98,7 +104,7 @@
           <thead>
             <tr>
               <th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th>
-              {% if allow_actions %}<th>Actions</th>{% endif %}
+              {% if allow_actions or repair_mode != 'off' %}<th>Actions</th>{% endif %}
             </tr>
           </thead>
           <tbody id="resultsBody">
@@ -116,12 +122,15 @@
               <td>{{ row.format }}</td>
               <td>{{ row.reasons|join(" ") }}</td>
               <td class="path">{{ row.stored_path }}</td>
-              {% if allow_actions %}
+              {% if allow_actions or repair_mode != 'off' %}
               <td class="actions">
-                {% if row.classification != "PASS" %}
-                <button onclick="runAction({{ row.id }}, 'detach')">Detach</button>
-                <button class="danger" onclick="runAction({{ row.id }}, 'quarantine')">Quarantine</button>
-                {% else %}<span class="muted">Protected</span>{% endif %}
+                {% if row.repair.eligible and repair_mode != 'off' %}
+                  <button class="repair-button" onclick="runRepair({{ row.id }})">{{ 'Repair' if repair_mode == 'safe' else 'Preview repair' }}</button>
+                {% endif %}
+                {% if allow_actions and row.classification != "PASS" %}
+                  <button onclick="runAction({{ row.id }}, 'detach')">Detach</button>
+                  <button class="danger" onclick="runAction({{ row.id }}, 'quarantine')">Quarantine</button>
+                {% elif not row.repair.eligible and row.classification == "PASS" %}<span class="muted">Protected</span>{% endif %}
               </td>
               {% endif %}
             </tr>
@@ -139,6 +148,7 @@ const scanButton = document.getElementById("scanButton");
 const classificationFilter = {{ classification|tojson }};
 const reasonFilter = {{ reason_code|tojson }};
 const allowActions = {{ allow_actions|tojson }};
+const repairMode = {{ repair_mode|tojson }};
 const defaultPollMs = {{ poll_ms }};
 
 function escapeHtml(value) {
@@ -172,10 +182,17 @@ function resultRow(row) {
   const genre = row.detected_genre ? `<small class="genre">${escapeHtml(row.detected_genre)}</small>` : "";
   const code = row.reason_code || "UNKNOWN";
   let actions = "";
-  if (allowActions) {
-    actions = row.classification === "PASS"
-      ? '<td class="actions"><span class="muted">Protected</span></td>'
-      : `<td class="actions"><button onclick="runAction(${row.id}, 'detach')">Detach</button> <button class="danger" onclick="runAction(${row.id}, 'quarantine')">Quarantine</button></td>`;
+  if (allowActions || repairMode !== "off") {
+    const parts = [];
+    if (repairMode !== "off" && row.repair && row.repair.eligible) {
+      parts.push(`<button class="repair-button" onclick="runRepair(${row.id})">${repairMode === "safe" ? "Repair" : "Preview repair"}</button>`);
+    }
+    if (allowActions && row.classification !== "PASS") {
+      parts.push(`<button onclick="runAction(${row.id}, 'detach')">Detach</button>`);
+      parts.push(`<button class="danger" onclick="runAction(${row.id}, 'quarantine')">Quarantine</button>`);
+    }
+    if (!parts.length && row.classification === "PASS") parts.push('<span class="muted">Protected</span>');
+    actions = `<td class="actions">${parts.join(" ")}</td>`;
   }
   return `<tr>
     <td><strong>${escapeHtml(row.risk_score)}</strong></td>
@@ -210,7 +227,7 @@ function renderLiveResults(rows) {
     container.innerHTML = '<div class="empty" id="emptyResults">No results yet.</div>';
     return;
   }
-  const actionHeader = allowActions ? "<th>Actions</th>" : "";
+  const actionHeader = (allowActions || repairMode !== "off") ? "<th>Actions</th>" : "";
   container.innerHTML = `<div class="table-wrap"><table class="results-table">
     <thead><tr><th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th>${actionHeader}</tr></thead>
     <tbody id="resultsBody">${rows.map(resultRow).join("")}</tbody>
@@ -244,9 +261,7 @@ async function pollStatus(reloadWhenDone=false) {
   document.getElementById("progressBar").style.width = `${timing.percent || 0}%`;
 
   let timingText = `${timing.percent || 0}% · elapsed ${formatDuration(timing.elapsed_seconds)}`;
-  if (scan.status === "running" && timing.eta_seconds !== null && timing.eta_seconds !== undefined) {
-    timingText += ` · ETA ${formatDuration(timing.eta_seconds)}`;
-  }
+  if (scan.status === "running" && timing.eta_seconds !== null && timing.eta_seconds !== undefined) timingText += ` · ETA ${formatDuration(timing.eta_seconds)}`;
   document.getElementById("scanTiming").textContent = timingText;
 
   const counts = body.counts || {};
@@ -271,6 +286,42 @@ async function pollStatus(reloadWhenDone=false) {
   }
 }
 
+function repairPreviewText(preview) {
+  let text = `${preview.reason || "Metadata repair proposal"}\n\n`;
+  if (preview.kind === "EPUB_METADATA") {
+    text += `Before\nTitle: ${preview.before.title || "—"}\nAuthor: ${preview.before.author || "—"}\n\n`;
+    text += `After\nTitle: ${preview.after.title || "—"}\nAuthor: ${preview.after.author || "—"}`;
+    return text;
+  }
+  const beforeFiles = (preview.before && preview.before.files) || [];
+  const afterFiles = (preview.after && preview.after.files) || [];
+  text += `${afterFiles.length} audio file(s)\n`;
+  if (beforeFiles.length && afterFiles.length) {
+    const b = beforeFiles[0].tags || {};
+    const a = afterFiles[0].tags || {};
+    text += `\nExample first file:\nAlbum: ${b.album || "—"} -> ${a.album || "—"}\nAlbum Artist: ${b.albumartist || "—"} -> ${a.albumartist || "—"}\nGenre: ${b.genre || "—"} -> ${a.genre || "—"}`;
+  }
+  return text;
+}
+
+async function runRepair(id) {
+  const previewResponse = await fetch(`/api/results/${id}/repair-preview`, {cache: "no-store"});
+  const preview = await previewResponse.json().catch(() => ({}));
+  if (!previewResponse.ok) { alert(preview.detail || "Unable to build repair preview."); return; }
+  if (!preview.eligible || !preview.safe) { alert(preview.reason || "This result is not eligible for safe repair."); return; }
+  const text = repairPreviewText(preview);
+  if (repairMode !== "safe") {
+    alert(`${text}\n\nPreview only: no file was changed. Switch Metadata repair mode to Safe in Settings when you are ready.`);
+    return;
+  }
+  if (!confirm(`${text}\n\nApply this metadata repair?`)) return;
+  const response = await fetch(`/api/results/${id}/repair`, {method: "POST"});
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { alert(body.detail || "Metadata repair failed."); return; }
+  alert(`Metadata repair completed and verified. Repair history ID: ${body.repair_id}`);
+  window.location.reload();
+}
+
 async function runAction(id, action) {
   const warning = action === "quarantine"
     ? "This will detach the item from Bindery and move the physical file/folder into BookGuard quarantine. Continue?"
@@ -278,10 +329,7 @@ async function runAction(id, action) {
   if (!confirm(warning)) return;
   const response = await fetch(`/api/results/${id}/${action}`, {method: "POST"});
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    alert(body.detail || "Action failed.");
-    return;
-  }
+  if (!response.ok) { alert(body.detail || "Action failed."); return; }
   alert(action === "quarantine" ? `Moved to ${body.destination}` : "Detached.");
   window.location.reload();
 }
