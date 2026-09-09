@@ -123,6 +123,25 @@ def init_local_db() -> None:
                 value_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS metadata_repairs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id INTEGER NOT NULL,
+                scan_id TEXT NOT NULL,
+                file_id INTEGER NOT NULL,
+                book_id INTEGER NOT NULL,
+                format TEXT NOT NULL,
+                stored_path TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                repair_kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                before_json TEXT NOT NULL,
+                after_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                undone_at TEXT,
+                error TEXT
+            );
             """
         )
 
@@ -142,6 +161,10 @@ def init_local_db() -> None:
                 ON scan_results(scan_id, classification);
             CREATE INDEX IF NOT EXISTS idx_scan_results_reason
                 ON scan_results(scan_id, reason_code);
+            CREATE INDEX IF NOT EXISTS idx_metadata_repairs_created
+                ON metadata_repairs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_metadata_repairs_result
+                ON metadata_repairs(result_id);
             """
         )
         conn.commit()
@@ -353,3 +376,65 @@ def result_by_id(result_id: int) -> dict | None:
     if not row:
         return None
     return _decode_results([row])[0]
+
+
+def create_metadata_repair(result: dict, repair_kind: str, before: dict, after: dict) -> int:
+    with local_conn() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO metadata_repairs(
+                result_id, scan_id, file_id, book_id, format, stored_path, local_path,
+                repair_kind, status, before_json, after_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)
+            """,
+            (
+                result["id"], result["scan_id"], result["file_id"], result["book_id"],
+                result["format"], result["stored_path"], result["local_path"], repair_kind,
+                json.dumps(before, ensure_ascii=False), json.dumps(after, ensure_ascii=False), utc_now(),
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def finish_metadata_repair(repair_id: int, status: str, error: str | None = None) -> None:
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE metadata_repairs
+            SET status=?, completed_at=?, error=?
+            WHERE id=?
+            """,
+            (status, utc_now(), error, repair_id),
+        )
+        conn.commit()
+
+
+def mark_metadata_repair_undone(repair_id: int) -> None:
+    with local_conn() as conn:
+        conn.execute(
+            "UPDATE metadata_repairs SET status='undone', undone_at=? WHERE id=?",
+            (utc_now(), repair_id),
+        )
+        conn.commit()
+
+
+def _decode_repair(row) -> dict:
+    item = dict(row)
+    item["before"] = json.loads(item.pop("before_json"))
+    item["after"] = json.loads(item.pop("after_json"))
+    return item
+
+
+def metadata_repair_by_id(repair_id: int) -> dict | None:
+    with local_conn() as conn:
+        row = conn.execute("SELECT * FROM metadata_repairs WHERE id=?", (repair_id,)).fetchone()
+    return _decode_repair(row) if row else None
+
+
+def recent_metadata_repairs(limit: int = 100) -> list[dict]:
+    with local_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM metadata_repairs ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [_decode_repair(row) for row in rows]
