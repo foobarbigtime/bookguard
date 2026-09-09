@@ -1,0 +1,33 @@
+services:
+  bookguard:
+    build: .
+    container_name: bookguard
+    restart: unless-stopped
+    ports:
+      - "8788:8788"
+    environment:
+      TZ: ${TZ:-America/Toronto}
+      BINDERY_DB: /bindery/bindery.db
+      BINDERY_URL: ${BINDERY_URL:-http://bindery:8787}
+      BINDERY_API_KEY: ${BINDERY_API_KEY:-}
+      AUDIOBOOK_ROOT: /audiobooks
+      AUDIOBOOK_BINDERY_PREFIX: ${AUDIOBOOK_BINDERY_PREFIX:-/data/media/audiobooks}
+      EBOOK_ROOT: /books
+      EBOOK_BINDERY_PREFIX: ${EBOOK_BINDERY_PREFIX:-/data/media/books}
+      CONFIG_DIR: /config
+      QUARANTINE_ROOT: /quarantine
+      BOOKGUARD_ALLOW_ACTIONS: ${BOOKGUARD_ALLOW_ACTIONS:-false}
+      BOOKGUARD_SAMPLE_FILES: ${BOOKGUARD_SAMPLE_FILES:-3}
+      BOOKGUARD_SCAN_ON_START: ${BOOKGUARD_SCAN_ON_START:-false}
+    volumes:
+      - /mnt/cache/appdata/bookguard:/config
+      - /mnt/cache/appdata/bindery:/bindery:ro
+      - /mnt/user/data/media/audiobooks:/audiobooks:ro
+      - /mnt/user/data/media/books:/books:ro
+      - /mnt/user/data/bookguard-quarantine:/quarantine
+    networks:
+      - arrs_internal
+
+networks:
+  arrs_internal:
+    external: true
