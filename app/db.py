@@ -111,6 +111,7 @@ def init_local_db() -> None:
                 local_path TEXT NOT NULL,
                 classification TEXT NOT NULL,
                 risk_score INTEGER NOT NULL,
+                reason_code TEXT NOT NULL DEFAULT 'UNKNOWN',
                 reasons_json TEXT NOT NULL,
                 metadata_json TEXT NOT NULL,
                 scanned_at TEXT NOT NULL,
@@ -122,11 +123,25 @@ def init_local_db() -> None:
                 value_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            """
+        )
 
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(scan_results)").fetchall()
+        }
+        if "reason_code" not in columns:
+            conn.execute(
+                "ALTER TABLE scan_results ADD COLUMN reason_code TEXT NOT NULL DEFAULT 'UNKNOWN'"
+            )
+
+        conn.executescript(
+            """
             CREATE INDEX IF NOT EXISTS idx_scan_results_scan
                 ON scan_results(scan_id);
             CREATE INDEX IF NOT EXISTS idx_scan_results_class
                 ON scan_results(scan_id, classification);
+            CREATE INDEX IF NOT EXISTS idx_scan_results_reason
+                ON scan_results(scan_id, reason_code);
             """
         )
         conn.commit()
@@ -204,9 +219,9 @@ def add_result(scan_id: str, result: dict) -> None:
             """
             INSERT INTO scan_results(
                 scan_id, file_id, book_id, author, title, format,
-                stored_path, local_path, classification, risk_score,
+                stored_path, local_path, classification, risk_score, reason_code,
                 reasons_json, metadata_json, scanned_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 scan_id,
@@ -219,6 +234,7 @@ def add_result(scan_id: str, result: dict) -> None:
                 result["local_path"],
                 result["classification"],
                 result["risk_score"],
+                result.get("reason_code", "UNKNOWN"),
                 json.dumps(result.get("reasons", []), ensure_ascii=False),
                 json.dumps(result.get("metadata", {}), ensure_ascii=False),
                 utc_now(),
@@ -239,11 +255,16 @@ def _decode_results(rows) -> list[dict]:
         item = dict(row)
         item["reasons"] = json.loads(item.pop("reasons_json"))
         item["metadata"] = json.loads(item.pop("metadata_json"))
+        item["reason_code"] = item.get("reason_code") or "UNKNOWN"
         out.append(item)
     return out
 
 
-def latest_results(classification: str | None = None, limit: int = 1000) -> list[dict]:
+def latest_results(
+    classification: str | None = None,
+    reason_code: str | None = None,
+    limit: int = 1000,
+) -> list[dict]:
     scan = latest_scan()
     if not scan:
         return []
@@ -252,6 +273,9 @@ def latest_results(classification: str | None = None, limit: int = 1000) -> list
     if classification:
         where += " AND classification=?"
         params.append(classification)
+    if reason_code:
+        where += " AND reason_code=?"
+        params.append(reason_code)
     params.append(limit)
     with local_conn() as conn:
         rows = conn.execute(
@@ -298,6 +322,29 @@ def latest_counts() -> dict[str, int]:
             (scan["id"],),
         ).fetchall()
     return {r["classification"]: r["n"] for r in rows}
+
+
+def latest_reason_counts(classification: str | None = None) -> dict[str, int]:
+    scan = latest_scan()
+    if not scan:
+        return {}
+    params: list[object] = [scan["id"]]
+    where = "scan_id=?"
+    if classification:
+        where += " AND classification=?"
+        params.append(classification)
+    with local_conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT reason_code, COUNT(*) AS n
+            FROM scan_results
+            WHERE {where}
+            GROUP BY reason_code
+            ORDER BY n DESC, reason_code
+            """,
+            params,
+        ).fetchall()
+    return {(r["reason_code"] or "UNKNOWN"): r["n"] for r in rows}
 
 
 def result_by_id(result_id: int) -> dict | None:
