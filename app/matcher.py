@@ -32,6 +32,18 @@ def meaningful_words(value: str | None) -> set[str]:
     return {word for word in normalize(value).split() if word and word not in STOPWORDS}
 
 
+def _strict_title_equivalent(expected: str, observed: str) -> bool:
+    e = normalize(expected)
+    o = normalize(observed)
+    if not e or not o:
+        return False
+    if e == o:
+        return True
+    ew = meaningful_words(e)
+    ow = meaningful_words(o)
+    return bool(ew) and ew == ow
+
+
 def title_match(expected: str, metadata_text: str) -> bool:
     e = normalize(expected)
     m = normalize(metadata_text)
@@ -100,8 +112,32 @@ def _author_candidate_match(candidate: str, credits: str) -> bool:
     return len(last) >= 4 and f" {last} " in f" {c} "
 
 
+def _author_candidate_match_strict(candidate: str, credits: str) -> bool:
+    """Match a complete author identity without surname-only fallback."""
+    e = normalize(candidate)
+    c = normalize(credits)
+    if not e or not c:
+        return False
+    if e == c:
+        return True
+    e_tokens = e.split()
+    c_tokens = c.split()
+    return (
+        len(e_tokens) >= 2
+        and len(e_tokens) == len(c_tokens)
+        and set(e_tokens) == set(c_tokens)
+    )
+
+
 def author_match(expected: str, credits: str) -> bool:
     return any(_author_candidate_match(candidate, credits) for candidate in _author_alias_group(expected))
+
+
+def author_match_strict(expected: str, credits: str) -> bool:
+    return any(
+        _author_candidate_match_strict(candidate, credits)
+        for candidate in _author_alias_group(expected)
+    )
 
 
 def author_mentioned_in_text(expected: str, text: str) -> bool:
@@ -275,6 +311,20 @@ def classify_ebook(
         return "PASS", 5, "MATCH", [
             "Embedded ebook title and author support the Bindery assignment."
         ]
+
+    # Some ebook files have their title and creator fields accidentally swapped.
+    # Only accept this when both cross-field matches are strict so a loose title
+    # overlap or surname-only author match cannot turn a real mismatch into PASS.
+    if (
+        title
+        and author
+        and author_match_strict(expected_author, title)
+        and _strict_title_equivalent(expected_title, author)
+    ):
+        return "PASS", 10, "SWAPPED_METADATA", [
+            "Embedded ebook title and author fields appear to be swapped, but both identify the expected book."
+        ]
+
     if tm:
         return "REVIEW", 35, "PARTIAL_MATCH", [
             "Ebook title matches, but embedded author does not."
