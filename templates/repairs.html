@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard Repairs</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div><h1>BookGuard</h1><p>Metadata repair history</p></div>
+      <span class="version">v{{ version }}</span>
+    </div>
+    <nav class="topnav">
+      <a class="nav-link" href="/">Dashboard</a>
+      <a class="nav-link active" href="/repairs">Repairs</a>
+      <a class="nav-link" href="/settings">Settings</a>
+    </nav>
+  </header>
+  <main>
+    <section class="card repair-mode-card">
+      <span class="label">Metadata repair mode</span>
+      <strong>{{ repair_mode|upper }}</strong>
+      <small>{% if repair_mode == 'safe' %}Safe repair and undo actions are enabled, but only for candidates that pass BookGuard's conservative repair rules.{% elif repair_mode == 'preview' %}Proposals can be previewed, but files cannot be modified.{% else %}Metadata repair is disabled.{% endif %}</small>
+    </section>
+
+    <section class="table-card">
+      <div class="section-title"><h2>Repair history</h2><p>BookGuard stores before/after metadata for every repair it attempts.</p></div>
+      {% if repairs %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ID</th><th>Status</th><th>Kind</th><th>Format</th><th>Path</th><th>Created</th><th>Error</th><th>Action</th></tr></thead>
+          <tbody>
+          {% for row in repairs %}
+            <tr>
+              <td>{{ row.id }}</td>
+              <td><span class="pill {{ 'pass' if row.status == 'applied' else 'review' if row.status == 'undone' else 'reject' if row.status == 'failed' else '' }}">{{ row.status|upper }}</span></td>
+              <td>{{ row.repair_kind|replace('_',' ') }}</td>
+              <td>{{ row.format }}</td>
+              <td class="path">{{ row.stored_path }}</td>
+              <td>{{ row.created_at }}</td>
+              <td>{{ row.error or '—' }}</td>
+              <td class="actions">
+                {% if row.status == 'applied' and repair_mode == 'safe' %}
+                  <button onclick="undoRepair({{ row.id }})">Undo</button>
+                {% else %}<span class="muted">—</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<div class="empty">No metadata repairs have been performed yet.</div>{% endif %}
+    </section>
+  </main>
+<script>
+async function undoRepair(id) {
+  if (!confirm("Undo this metadata repair? BookGuard will refuse if the file metadata has changed since the repair.")) return;
+  const response = await fetch(`/api/repairs/${id}/undo`, {method: "POST"});
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { alert(body.detail || "Undo failed."); return; }
+  alert("Metadata repair undone.");
+  window.location.reload();
+}
+</script>
+</body>
+</html>
