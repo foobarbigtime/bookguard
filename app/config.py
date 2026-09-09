@@ -13,6 +13,12 @@ DEFAULT_MUSIC_GENRES = [
     "christian & gospel",
 ]
 
+DEFAULT_AUTHOR_ALIASES = [
+    "J.K. Rowling = Robert Galbraith | Joanne Rowling | Joanne K. Rowling",
+    "Stephen King = Richard Bachman",
+    "Lemony Snicket = Daniel Handler",
+]
+
 
 def _bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
@@ -32,10 +38,36 @@ def _clamp(value: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(value, maximum))
 
 
+def _lines_env(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return list(default)
+    raw = raw.replace("\\n", "\n")
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+def _clean_lines(raw: object) -> list[str]:
+    if isinstance(raw, str):
+        parts = raw.replace("\r", "\n").split("\n")
+    elif isinstance(raw, list):
+        parts = raw
+    else:
+        return []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        value = str(part).strip()
+        key = value.casefold()
+        if value and key not in seen:
+            seen.add(key)
+            cleaned.append(value)
+    return cleaned
+
+
 @dataclass
 class Settings:
     # Docker/deployment location for BookGuard's own persistent database.
-    # This one intentionally remains environment-only because changing it would
+    # This intentionally remains environment-only because changing it would
     # move the settings database while the app is running.
     config_dir: str = os.getenv("CONFIG_DIR", "/config")
 
@@ -65,7 +97,17 @@ class Settings:
     title_min_shared_words: int = _clamp(_int("BOOKGUARD_TITLE_MIN_SHARED_WORDS", 2), 1, 5)
     allow_author_surname_match: bool = _bool("BOOKGUARD_AUTHOR_SURNAME_MATCH", True)
     reject_music_mismatch: bool = _bool("BOOKGUARD_REJECT_MUSIC_MISMATCH", True)
+    reject_strong_mismatch: bool = _bool("BOOKGUARD_REJECT_STRONG_MISMATCH", True)
+    strong_mismatch_min_samples: int = _clamp(
+        _int("BOOKGUARD_STRONG_MISMATCH_MIN_SAMPLES", 1), 1, 10
+    )
+    strong_mismatch_consensus_percent: int = _clamp(
+        _int("BOOKGUARD_STRONG_MISMATCH_CONSENSUS_PERCENT", 67), 50, 100
+    )
     music_genres: list[str] = field(default_factory=lambda: list(DEFAULT_MUSIC_GENRES))
+    author_aliases: list[str] = field(
+        default_factory=lambda: _lines_env("BOOKGUARD_AUTHOR_ALIASES", DEFAULT_AUTHOR_ALIASES)
+    )
 
     # Dashboard behavior.
     dashboard_poll_ms: int = _clamp(_int("BOOKGUARD_DASHBOARD_POLL_MS", 1500), 500, 10000)
@@ -80,12 +122,14 @@ class Settings:
         }
         bool_fields = {
             "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
-            "allow_author_surname_match", "reject_music_mismatch",
+            "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
         }
         int_bounds = {
             "sample_files": (1, 50),
             "progress_every": (1, 100),
             "title_min_shared_words": (1, 5),
+            "strong_mismatch_min_samples": (1, 10),
+            "strong_mismatch_consensus_percent": (50, 100),
             "dashboard_poll_ms": (500, 10000),
             "live_results_limit": (5, 100),
             "dashboard_result_limit": (50, 5000),
@@ -116,20 +160,11 @@ class Settings:
         if "music_genres" in values:
             raw = values["music_genres"]
             if isinstance(raw, str):
-                parts = raw.replace("\r", "\n").replace(",", "\n").split("\n")
-            elif isinstance(raw, list):
-                parts = raw
-            else:
-                parts = []
-            cleaned = []
-            seen = set()
-            for part in parts:
-                value = str(part).strip()
-                key = value.casefold()
-                if value and key not in seen:
-                    seen.add(key)
-                    cleaned.append(value)
-            self.music_genres = cleaned
+                raw = raw.replace(",", "\n")
+            self.music_genres = _clean_lines(raw)
+
+        if "author_aliases" in values:
+            self.author_aliases = _clean_lines(values["author_aliases"])
 
     def public_dict(self) -> dict:
         return {
@@ -150,7 +185,11 @@ class Settings:
             "title_min_shared_words": self.title_min_shared_words,
             "allow_author_surname_match": self.allow_author_surname_match,
             "reject_music_mismatch": self.reject_music_mismatch,
+            "reject_strong_mismatch": self.reject_strong_mismatch,
+            "strong_mismatch_min_samples": self.strong_mismatch_min_samples,
+            "strong_mismatch_consensus_percent": self.strong_mismatch_consensus_percent,
             "music_genres": list(self.music_genres),
+            "author_aliases": list(self.author_aliases),
             "dashboard_poll_ms": self.dashboard_poll_ms,
             "live_results_limit": self.live_results_limit,
             "dashboard_result_limit": self.dashboard_result_limit,
