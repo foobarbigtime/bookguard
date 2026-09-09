@@ -117,12 +117,47 @@ def init_local_db() -> None:
                 FOREIGN KEY(scan_id) REFERENCES scans(id)
             );
 
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_scan_results_scan
                 ON scan_results(scan_id);
             CREATE INDEX IF NOT EXISTS idx_scan_results_class
                 ON scan_results(scan_id, classification);
             """
         )
+        conn.commit()
+
+
+def load_persisted_settings() -> dict:
+    with local_conn() as conn:
+        rows = conn.execute("SELECT key, value_json FROM app_settings").fetchall()
+    out = {}
+    for row in rows:
+        try:
+            out[row["key"]] = json.loads(row["value_json"])
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def save_persisted_settings(values: dict) -> None:
+    now = utc_now()
+    with local_conn() as conn:
+        for key, value in values.items():
+            conn.execute(
+                """
+                INSERT INTO app_settings(key, value_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value_json=excluded.value_json,
+                    updated_at=excluded.updated_at
+                """,
+                (key, json.dumps(value, ensure_ascii=False), now),
+            )
         conn.commit()
 
 
@@ -192,6 +227,16 @@ def latest_scan() -> dict | None:
     return dict(row) if row else None
 
 
+def _decode_results(rows) -> list[dict]:
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["reasons"] = json.loads(item.pop("reasons_json"))
+        item["metadata"] = json.loads(item.pop("metadata_json"))
+        out.append(item)
+    return out
+
+
 def latest_results(classification: str | None = None, limit: int = 1000) -> list[dict]:
     scan = latest_scan()
     if not scan:
@@ -212,13 +257,24 @@ def latest_results(classification: str | None = None, limit: int = 1000) -> list
             """,
             params,
         ).fetchall()
-    out = []
-    for row in rows:
-        item = dict(row)
-        item["reasons"] = json.loads(item.pop("reasons_json"))
-        item["metadata"] = json.loads(item.pop("metadata_json"))
-        out.append(item)
-    return out
+    return _decode_results(rows)
+
+
+def latest_recent_results(limit: int = 20) -> list[dict]:
+    scan = latest_scan()
+    if not scan:
+        return []
+    with local_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM scan_results
+            WHERE scan_id=?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (scan["id"], limit),
+        ).fetchall()
+    return _decode_results(rows)
 
 
 def latest_counts() -> dict[str, int]:
@@ -243,7 +299,4 @@ def result_by_id(result_id: int) -> dict | None:
         row = conn.execute("SELECT * FROM scan_results WHERE id=?", (result_id,)).fetchone()
     if not row:
         return None
-    item = dict(row)
-    item["reasons"] = json.loads(item.pop("reasons_json"))
-    item["metadata"] = json.loads(item.pop("metadata_json"))
-    return item
+    return _decode_results([row])[0]
