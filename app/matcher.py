@@ -3,18 +3,12 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from .config import settings
+
+
 STOPWORDS = {
     "the", "a", "an", "and", "of", "to", "in", "on", "for", "with",
     "book", "volume", "vol", "part", "edition", "unabridged", "audiobook",
-}
-
-MUSIC_GENRES = {
-    "rock", "classic rock", "pop", "country", "jazz", "metal", "heavy metal",
-    "punk", "punk rock", "progressive rock", "alternative", "indie", "indie rock", "blues",
-    "classical", "soundtrack", "film soundtrack", "movie soundtrack",
-    "electronic", "electronica", "dance", "house", "techno", "trance",
-    "ambient", "rap", "hip hop", "hip-hop", "r&b", "soul", "funk",
-    "reggae", "folk", "christian & gospel",
 }
 
 
@@ -44,7 +38,8 @@ def title_match(expected: str, metadata_text: str) -> bool:
     ew = meaningful_words(e)
     mw = meaningful_words(m)
     shared = ew & mw
-    if len(ew) >= 2 and len(shared) >= 2:
+    minimum = settings.title_min_shared_words
+    if len(ew) >= minimum and len(shared) >= minimum:
         return True
     if len(ew) == 1 and e == m:
         return True
@@ -60,6 +55,8 @@ def author_match(expected: str, credits: str) -> bool:
         return True
     if len(e) >= 5 and f" {e} " in f" {c} ":
         return True
+    if not settings.allow_author_surname_match:
+        return False
     parts = [p for p in e.split() if len(p) >= 3]
     if not parts:
         return False
@@ -70,7 +67,7 @@ def author_match(expected: str, credits: str) -> bool:
 def genre_is_music(genre: str | None) -> bool:
     if not genre:
         return False
-    normalized_genres = {normalize(x) for x in MUSIC_GENRES}
+    normalized_genres = {normalize(x) for x in settings.music_genres}
     g = normalize(genre)
     if g in normalized_genres:
         return True
@@ -88,14 +85,24 @@ def classify_audio(expected_title: str, expected_author: str, samples: list[dict
 
     for sample in samples:
         title_text = " ".join(filter(None, [sample.get("album"), sample.get("title")]))
-        credits = " ".join(filter(None, [sample.get("artist"), sample.get("album_artist"), sample.get("author"), sample.get("composer")]))
+        credits = " ".join(
+            filter(
+                None,
+                [
+                    sample.get("artist"),
+                    sample.get("album_artist"),
+                    sample.get("author"),
+                    sample.get("composer"),
+                ],
+            )
+        )
         any_title = any_title or title_match(expected_title, title_text)
         any_author = any_author or author_match(expected_author, credits)
         any_music = any_music or genre_is_music(sample.get("genre"))
 
     if any_title and any_author:
         return "PASS", 5, ["Embedded title and author metadata support the Bindery assignment."]
-    if any_music and not any_title and not any_author:
+    if settings.reject_music_mismatch and any_music and not any_title and not any_author:
         return "REJECT", 100, ["Metadata looks like music and does not match the expected book or author."]
     if not any_title and not any_author:
         return "REVIEW", 80, ["Neither title nor author metadata matches the Bindery assignment."]
