@@ -82,9 +82,10 @@ def _scan_one(row: dict) -> dict:
 
 def run_scan(scan_id: str, rows: list[dict]) -> None:
     try:
+        total = len(rows)
         for i, row in enumerate(rows, start=1):
             add_result(scan_id, _scan_one(row))
-            if i == len(rows) or i % 10 == 0:
+            if i == total or i % settings.progress_every == 0:
                 update_scan_progress(scan_id, i)
         finish_scan(scan_id)
     except Exception as exc:
@@ -101,6 +102,11 @@ def start_scan() -> str | None:
         if _current_thread and _current_thread.is_alive():
             return None
         rows = load_bindery_files()
+        rows = [
+            row for row in rows
+            if (row["format"] == "audiobook" and settings.scan_audiobooks)
+            or (row["format"] != "audiobook" and settings.scan_ebooks)
+        ]
         scan_id = uuid.uuid4().hex
         create_scan(scan_id, len(rows))
         thread = threading.Thread(
