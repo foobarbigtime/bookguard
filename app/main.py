@@ -14,6 +14,7 @@ from .db import (
     clear_persisted_settings,
     init_local_db,
     latest_counts,
+    latest_reason_counts,
     latest_recent_results,
     latest_results,
     latest_scan,
@@ -24,7 +25,7 @@ from .db import (
 from .scanner import start_scan
 
 
-app = FastAPI(title="BookGuard", version="0.2.0")
+app = FastAPI(title="BookGuard", version="0.3.0")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -73,25 +74,54 @@ def _scan_timing(scan: dict | None) -> dict:
     }
 
 
+def _detected_fields(row: dict) -> tuple[str, str, str]:
+    metadata = row.get("metadata") or {}
+    if row.get("format") == "audiobook":
+        return (
+            str(metadata.get("detected_title") or ""),
+            str(metadata.get("detected_author") or ""),
+            str(metadata.get("detected_genre") or ""),
+        )
+    return (
+        str(metadata.get("title") or ""),
+        str(metadata.get("author") or ""),
+        "",
+    )
+
+
 def _compact_result(row: dict) -> dict:
+    detected_title, detected_author, detected_genre = _detected_fields(row)
     return {
         "id": row["id"],
         "risk_score": row["risk_score"],
         "classification": row["classification"],
+        "reason_code": row.get("reason_code") or "UNKNOWN",
         "author": row["author"],
         "title": row["title"],
         "format": row["format"],
         "reasons": row["reasons"],
         "stored_path": row["stored_path"],
+        "detected_title": detected_title,
+        "detected_author": detected_author,
+        "detected_genre": detected_genre,
     }
 
 
+def _enrich_results(rows: list[dict]) -> list[dict]:
+    return [{**row, **_compact_result(row)} for row in rows]
+
+
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, classification: str | None = None):
+def dashboard(
+    request: Request,
+    classification: str | None = None,
+    reason_code: str | None = None,
+):
     scan = latest_scan()
     counts = latest_counts()
     results = latest_results(
         classification=classification,
+        reason_code=reason_code,
         limit=settings.dashboard_result_limit,
     )
     return templates.TemplateResponse(
@@ -101,8 +131,10 @@ def dashboard(request: Request, classification: str | None = None):
             "scan": scan,
             "timing": _scan_timing(scan),
             "counts": counts,
-            "results": results,
+            "review_reasons": latest_reason_counts("REVIEW"),
+            "results": _enrich_results(results),
             "classification": classification or "",
+            "reason_code": reason_code or "",
             "allow_actions": settings.allow_actions,
             "bindery_db_exists": os.path.exists(settings.bindery_db),
             "sample_files": settings.sample_files,
@@ -150,6 +182,7 @@ def api_status():
     return {
         "scan": scan,
         "counts": counts,
+        "review_reasons": latest_reason_counts("REVIEW"),
         "timing": _scan_timing(scan),
         "recent_results": recent,
         "poll_ms": settings.dashboard_poll_ms,
