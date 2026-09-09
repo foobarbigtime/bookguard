@@ -8,7 +8,7 @@ It answers a question that a normal download/import pipeline often cannot:
 
 BookGuard is designed around **audit first, destructive actions second**. By default it is read-only.
 
-## What v0.1 does
+## What v0.2 does
 
 - Reads Bindery's `book_files`, books, and authors from the Bindery SQLite database in **read-only mode**.
 - Audits audiobook associations with `ffprobe`.
@@ -17,8 +17,9 @@ BookGuard is designed around **audit first, destructive actions second**. By def
 - Audits EPUB and PDF title/author metadata.
 - Finds tracked Bindery paths that no longer exist.
 - Assigns each result a state: `PASS`, `REVIEW`, `REJECT`, or `MISSING`.
-- Stores scan history in `/config/bookguard.db`.
-- Provides a web dashboard on port `8788`.
+- Stores scan history and persistent settings in `/config/bookguard.db`.
+- Provides a live web dashboard on port `8788` with progress, counts, elapsed time, ETA, and incoming scan results.
+- Provides a Settings page for Bindery connection details, path mapping, scan behavior, matching rules, dashboard behavior, music detection, and safety controls.
 - Can optionally detach a tracked path using Bindery's API.
 - Can optionally detach and move a single, non-shared tracked path into quarantine.
 
@@ -93,6 +94,21 @@ The supplied Compose file uses these host paths:
 
 Adjust `compose.yaml` if your layout differs.
 
+## Settings
+
+Most BookGuard behavior can be changed at `/settings` without editing `.env` or recreating the container. UI settings are persisted in `/config/bookguard.db` and override environment defaults.
+
+Configurable areas include:
+
+- Bindery URL, database path, and API key
+- audiobook/ebook path mapping and quarantine path
+- scan scope, sample count, scan-on-start, and progress cadence
+- title-word matching, author surname matching, music rejection behavior, and music genre list
+- live dashboard polling and result limits
+- action enable/disable safety control
+
+Docker bind mounts remain deployment-level settings. Changing a container path in BookGuard does not create a Docker mount automatically.
+
 ## Updating
 
 From the repository directory:
@@ -104,17 +120,11 @@ docker compose up -d --build
 
 ## Enabling detach actions
 
-When you are satisfied with BookGuard's classifications, put the Bindery API key in `.env` and enable:
+When you are satisfied with BookGuard's classifications, configure the Bindery API key and enable actions either in the Settings page or through environment defaults:
 
 ```env
 BINDERY_API_KEY=your_key_here
 BOOKGUARD_ALLOW_ACTIONS=true
-```
-
-Then recreate:
-
-```bash
-docker compose up -d
 ```
 
 The media mounts can remain read-only if you only want the **Detach** button.
@@ -123,7 +133,7 @@ The media mounts can remain read-only if you only want the **Detach** button.
 
 Quarantine physically moves media. Keep it disabled until you trust the scanner.
 
-To use it, `BOOKGUARD_ALLOW_ACTIONS=true` is required and the appropriate media mount must be writable. For example:
+To use it, actions must be enabled and the appropriate media mount must be writable. For example:
 
 ```yaml
 - /mnt/user/data/media/audiobooks:/audiobooks
@@ -135,16 +145,16 @@ rather than:
 - /mnt/user/data/media/audiobooks:/audiobooks:ro
 ```
 
-BookGuard does not enable this for you.
+BookGuard does not enable writable mounts for you.
 
 ## Current matching philosophy
 
-BookGuard deliberately favors false positives in `REVIEW` over dangerous automatic conclusions.
+BookGuard deliberately favors `REVIEW` over dangerous automatic conclusions.
 
 For audiobooks:
 
 - title + author support -> `PASS`
-- obvious music metadata + neither title nor author support -> `REJECT`
+- obvious music metadata + neither title nor author support -> `REJECT` when music rejection is enabled
 - neither title nor author support -> `REVIEW`
 - title-only or author-only support -> `REVIEW`
 
