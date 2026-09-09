@@ -9,14 +9,12 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <div>
-        <h1>BookGuard</h1>
-        <p>Configuration</p>
-      </div>
+      <div><h1>BookGuard</h1><p>Configuration</p></div>
       <span class="version">v{{ version }}</span>
     </div>
     <nav class="topnav">
       <a class="nav-link" href="/">Dashboard</a>
+      <a class="nav-link" href="/repairs">Repairs</a>
       <a class="nav-link active" href="/settings">Settings</a>
     </nav>
   </header>
@@ -27,188 +25,97 @@
     {% endif %}
 
     <div class="settings-header">
-      <div>
-        <h2>Settings</h2>
-        <p>Changes are stored in <code>{{ config_dir }}/bookguard.db</code> and override environment defaults.</p>
-      </div>
-      <div class="settings-actions">
-        <button id="resetButton">Reset to environment defaults</button>
-        <button id="saveButton" class="primary">Save settings</button>
-      </div>
+      <div><h2>Settings</h2><p>Changes are stored in <code>{{ config_dir }}/bookguard.db</code> and override environment defaults.</p></div>
+      <div class="settings-actions"><button id="resetButton">Reset to environment defaults</button><button id="saveButton" class="primary">Save settings</button></div>
     </div>
 
     <form id="settingsForm" autocomplete="off">
       <section class="settings-section">
-        <div class="settings-section-title">
-          <h3>Bindery connection</h3>
-          <p>BookGuard reads Bindery's database directly and uses the HTTP API only for optional actions.</p>
-        </div>
+        <div class="settings-section-title"><h3>Bindery connection</h3><p>BookGuard reads Bindery's database directly and uses the HTTP API only for optional Bindery actions.</p></div>
         <div class="form-grid">
-          <label class="field span-2">
-            <span>Bindery URL</span>
-            <input name="bindery_url" type="text" value="{{ settings.bindery_url }}" placeholder="http://host.docker.internal:8787">
-            <small>Used for detach/quarantine actions.</small>
-          </label>
-          <label class="field span-2">
-            <span>Bindery database path</span>
-            <input name="bindery_db" type="text" value="{{ settings.bindery_db }}">
-            <small class="path-state {{ 'ok' if bindery_db_exists else 'bad' }}">{{ 'Path exists' if bindery_db_exists else 'Path not found inside the container' }}</small>
-          </label>
-          <label class="field span-2">
-            <span>Bindery API key</span>
-            <input name="bindery_api_key" type="password" value="" placeholder="{{ 'Configured — leave blank to keep it' if settings.bindery_api_key_set else 'Not configured' }}">
-            <small>The key is never displayed back in the browser after saving.</small>
-          </label>
-          <label class="check-field">
-            <input name="clear_api_key" type="checkbox">
-            <span>Clear saved API key</span>
-          </label>
+          <label class="field span-2"><span>Bindery URL</span><input name="bindery_url" type="text" value="{{ settings.bindery_url }}" placeholder="http://host.docker.internal:8787"><small>Used for detach/quarantine actions.</small></label>
+          <label class="field span-2"><span>Bindery database path</span><input name="bindery_db" type="text" value="{{ settings.bindery_db }}"><small class="path-state {{ 'ok' if bindery_db_exists else 'bad' }}">{{ 'Path exists' if bindery_db_exists else 'Path not found inside the container' }}</small></label>
+          <label class="field span-2"><span>Bindery API key</span><input name="bindery_api_key" type="password" value="" placeholder="{{ 'Configured — leave blank to keep it' if settings.bindery_api_key_set else 'Not configured' }}"><small>The key is never displayed back in the browser after saving.</small></label>
+          <label class="check-field"><input name="clear_api_key" type="checkbox"><span>Clear saved API key</span></label>
         </div>
       </section>
 
       <section class="settings-section">
-        <div class="settings-section-title">
-          <h3>Library paths</h3>
-          <p>Container paths map Bindery's stored paths to the media mounted into BookGuard.</p>
-        </div>
+        <div class="settings-section-title"><h3>Library paths</h3><p>Container paths map Bindery's stored paths to media mounted into BookGuard.</p></div>
         <div class="form-grid">
-          <label class="field">
-            <span>Audiobook container root</span>
-            <input name="audiobook_root" type="text" value="{{ settings.audiobook_root }}">
-            <small class="path-state {{ 'ok' if audiobook_root_exists else 'bad' }}">{{ 'Path exists' if audiobook_root_exists else 'Path not found' }}</small>
-          </label>
-          <label class="field">
-            <span>Bindery audiobook prefix</span>
-            <input name="audiobook_bindery_prefix" type="text" value="{{ settings.audiobook_bindery_prefix }}">
-            <small>Example: /data/media/audiobooks</small>
-          </label>
-          <label class="field">
-            <span>Ebook container root</span>
-            <input name="ebook_root" type="text" value="{{ settings.ebook_root }}">
-            <small class="path-state {{ 'ok' if ebook_root_exists else 'bad' }}">{{ 'Path exists' if ebook_root_exists else 'Path not found' }}</small>
-          </label>
-          <label class="field">
-            <span>Bindery ebook prefix</span>
-            <input name="ebook_bindery_prefix" type="text" value="{{ settings.ebook_bindery_prefix }}">
-            <small>Example: /data/media/books</small>
-          </label>
-          <label class="field span-2">
-            <span>Quarantine root</span>
-            <input name="quarantine_root" type="text" value="{{ settings.quarantine_root }}">
-            <small class="path-state {{ 'ok' if quarantine_root_exists else 'muted' }}">{{ 'Path exists' if quarantine_root_exists else 'Directory can be created when quarantine is used and the mount is writable' }}</small>
-          </label>
+          <label class="field"><span>Audiobook container root</span><input name="audiobook_root" type="text" value="{{ settings.audiobook_root }}"><small class="path-state {{ 'ok' if audiobook_root_exists else 'bad' }}">{{ 'Path exists' if audiobook_root_exists else 'Path not found' }}</small></label>
+          <label class="field"><span>Bindery audiobook prefix</span><input name="audiobook_bindery_prefix" type="text" value="{{ settings.audiobook_bindery_prefix }}"><small>Example: /data/media/audiobooks</small></label>
+          <label class="field"><span>Ebook container root</span><input name="ebook_root" type="text" value="{{ settings.ebook_root }}"><small class="path-state {{ 'ok' if ebook_root_exists else 'bad' }}">{{ 'Path exists' if ebook_root_exists else 'Path not found' }}</small></label>
+          <label class="field"><span>Bindery ebook prefix</span><input name="ebook_bindery_prefix" type="text" value="{{ settings.ebook_bindery_prefix }}"><small>Example: /data/media/books</small></label>
+          <label class="field span-2"><span>Quarantine root</span><input name="quarantine_root" type="text" value="{{ settings.quarantine_root }}"><small class="path-state {{ 'ok' if quarantine_root_exists else 'muted' }}">{{ 'Path exists' if quarantine_root_exists else 'Directory can be created when quarantine is used and the mount is writable' }}</small></label>
         </div>
-        <div class="notice info">Docker bind mounts themselves are deployment settings. Changing a container path here does not create a new Docker mount; the path must already be available inside the container.</div>
+        <div class="notice info">Docker bind mounts are deployment settings. Changing a path here does not make a read-only mount writable.</div>
       </section>
 
       <section class="settings-section">
-        <div class="settings-section-title">
-          <h3>Scanning</h3>
-          <p>Control what BookGuard scans and how aggressively it samples files.</p>
-        </div>
+        <div class="settings-section-title"><h3>Scanning</h3><p>Control what BookGuard scans and how aggressively it samples files.</p></div>
         <div class="form-grid compact-grid">
           <label class="check-field"><input name="scan_audiobooks" type="checkbox" {% if settings.scan_audiobooks %}checked{% endif %}><span>Scan audiobooks</span></label>
           <label class="check-field"><input name="scan_ebooks" type="checkbox" {% if settings.scan_ebooks %}checked{% endif %}><span>Scan ebooks</span></label>
           <label class="check-field"><input name="scan_on_start" type="checkbox" {% if settings.scan_on_start %}checked{% endif %}><span>Run a scan on container start</span></label>
-          <label class="field">
-            <span>Audio samples per association</span>
-            <input name="sample_files" type="number" min="1" max="50" value="{{ settings.sample_files }}">
-            <small>Samples are spread across the audiobook instead of only taking the first files.</small>
-          </label>
-          <label class="field">
-            <span>Progress update interval</span>
-            <input name="progress_every" type="number" min="1" max="100" value="{{ settings.progress_every }}">
-            <small>Update scan progress every N associations.</small>
-          </label>
+          <label class="field"><span>Audio samples per association</span><input name="sample_files" type="number" min="1" max="50" value="{{ settings.sample_files }}"><small>Samples are spread across the audiobook.</small></label>
+          <label class="field"><span>Progress update interval</span><input name="progress_every" type="number" min="1" max="100" value="{{ settings.progress_every }}"></label>
         </div>
-        <div class="notice info">Ebook inspection supports EPUB, PDF, MOBI, AZW/AZW3, CBZ ComicInfo.xml, RTF metadata, and explicit Title:/Author: headers in TXT. Unknown/unsupported formats remain REVIEW → UNSUPPORTED rather than being treated as bad.</div>
       </section>
 
       <section class="settings-section">
-        <div class="settings-section-title">
-          <h3>Matching</h3>
-          <p>These settings affect future classifications. Existing scan results are not rewritten.</p>
-        </div>
+        <div class="settings-section-title"><h3>Matching</h3><p>These settings affect future classifications. Existing scan results are not rewritten.</p></div>
         <div class="form-grid">
-          <label class="field">
-            <span>Minimum shared title words</span>
-            <input name="title_min_shared_words" type="number" min="1" max="5" value="{{ settings.title_min_shared_words }}">
-            <small>Default 2. Lower values are more permissive.</small>
-          </label>
-          <div class="field checks-stack">
-            <span>Author matching</span>
-            <label class="check-field"><input name="allow_author_surname_match" type="checkbox" {% if settings.allow_author_surname_match %}checked{% endif %}><span>Allow surname-only author matches</span></label>
-            <small>Useful for tags like “King” instead of “Stephen King”, but less strict.</small>
-          </div>
-
-          <label class="field span-2">
-            <span>Author aliases / pen names</span>
-            <textarea name="author_aliases" rows="6">{{ settings.author_aliases|join('\n') }}</textarea>
-            <small>One group per line: <code>Canonical Name = Alias One | Alias Two</code>. Matching is bidirectional within each group. This is useful for pen names such as Stephen King / Richard Bachman and J.K. Rowling / Robert Galbraith.</small>
-          </label>
-
-          <div class="field checks-stack span-2 option-panel">
-            <span>Strong semantic mismatch</span>
-            <label class="check-field"><input name="reject_strong_mismatch" type="checkbox" {% if settings.reject_strong_mismatch %}checked{% endif %}><span>Promote confident wrong spoken-word imports to REJECT</span></label>
-            <small>Requires stable embedded title + author evidence that supports neither the expected book nor any configured author alias. Generic “Chapter 1” / “Track 01” labels are ignored.</small>
-          </div>
-          <label class="field">
-            <span>Minimum informative samples</span>
-            <input name="strong_mismatch_min_samples" type="number" min="1" max="10" value="{{ settings.strong_mismatch_min_samples }}">
-            <small>Default 1 permits a single-file audiobook to be rejected when its metadata is explicit.</small>
-          </label>
-          <label class="field">
-            <span>Consensus required (%)</span>
-            <input name="strong_mismatch_consensus_percent" type="number" min="50" max="100" value="{{ settings.strong_mismatch_consensus_percent }}">
-            <small>Default 67. Higher values require more agreement across sampled files.</small>
-          </label>
-
-          <div class="field checks-stack span-2 option-panel">
-            <span>Music detection</span>
-            <label class="check-field"><input name="reject_music_mismatch" type="checkbox" {% if settings.reject_music_mismatch %}checked{% endif %}><span>Classify unmatched music-like audio as REJECT</span></label>
-            <small>When disabled, unmatched music-like audio falls back to REVIEW.</small>
-          </div>
-          <label class="field span-2">
-            <span>Music genres</span>
-            <textarea name="music_genres" rows="8">{{ settings.music_genres|join('\n') }}</textarea>
-            <small>One genre per line. Matching is case-insensitive and also checks semicolon/comma/slash-separated genre tags.</small>
-          </label>
+          <label class="field"><span>Minimum shared title words</span><input name="title_min_shared_words" type="number" min="1" max="5" value="{{ settings.title_min_shared_words }}"><small>Default 2. Lower values are more permissive.</small></label>
+          <div class="field checks-stack"><span>Author matching</span><label class="check-field"><input name="allow_author_surname_match" type="checkbox" {% if settings.allow_author_surname_match %}checked{% endif %}><span>Allow surname-only author matches</span></label></div>
+          <label class="field span-2"><span>Author aliases / pen names</span><textarea name="author_aliases" rows="6">{{ settings.author_aliases|join('\n') }}</textarea><small>One group per line: <code>Canonical Name = Alias One | Alias Two</code>.</small></label>
+          <div class="field checks-stack span-2 option-panel"><span>Strong semantic mismatch</span><label class="check-field"><input name="reject_strong_mismatch" type="checkbox" {% if settings.reject_strong_mismatch %}checked{% endif %}><span>Promote confident wrong spoken-word imports to REJECT</span></label></div>
+          <label class="field"><span>Minimum informative samples</span><input name="strong_mismatch_min_samples" type="number" min="1" max="10" value="{{ settings.strong_mismatch_min_samples }}"></label>
+          <label class="field"><span>Consensus required (%)</span><input name="strong_mismatch_consensus_percent" type="number" min="50" max="100" value="{{ settings.strong_mismatch_consensus_percent }}"></label>
+          <div class="field checks-stack span-2 option-panel"><span>Music detection</span><label class="check-field"><input name="reject_music_mismatch" type="checkbox" {% if settings.reject_music_mismatch %}checked{% endif %}><span>Classify unmatched music-like audio as REJECT</span></label></div>
+          <label class="field span-2"><span>Music genres</span><textarea name="music_genres" rows="8">{{ settings.music_genres|join('\n') }}</textarea></label>
         </div>
       </section>
 
-      <section class="settings-section">
-        <div class="settings-section-title">
-          <h3>Dashboard</h3>
-          <p>Tune live updates and how many results BookGuard renders.</p>
+      <section class="settings-section metadata-repair-section">
+        <div class="settings-section-title"><h3>Metadata repair</h3><p>SongKong-style book metadata cleanup with preview, conservative safe writes, verification, history, and undo.</p></div>
+        <div class="form-grid">
+          <label class="field span-2">
+            <span>Repair mode</span>
+            <select name="metadata_repair_mode">
+              <option value="off" {% if settings.metadata_repair_mode == 'off' %}selected{% endif %}>Off</option>
+              <option value="preview" {% if settings.metadata_repair_mode == 'preview' %}selected{% endif %}>Preview only</option>
+              <option value="safe" {% if settings.metadata_repair_mode == 'safe' %}selected{% endif %}>Safe repairs enabled</option>
+            </select>
+            <small>Preview is the default. Safe mode permits writes only when BookGuard has strong identity evidence and the Docker media mount is writable.</small>
+          </label>
+          <label class="check-field"><input name="repair_audiobooks" type="checkbox" {% if settings.repair_audiobooks %}checked{% endif %}><span>Repair audiobook metadata</span></label>
+          <label class="check-field"><input name="repair_ebooks" type="checkbox" {% if settings.repair_ebooks %}checked{% endif %}><span>Repair ebook metadata</span></label>
+          <label class="check-field span-2"><input name="repair_normalize_pass" type="checkbox" {% if settings.repair_normalize_pass %}checked{% endif %}><span>Offer canonical metadata normalization for confirmed PASS items</span></label>
+          <div class="field checks-stack span-2 option-panel">
+            <span>Audiobook fields</span>
+            <label class="check-field"><input name="repair_audio_album" type="checkbox" {% if settings.repair_audio_album %}checked{% endif %}><span>Set Album to the Bindery book title</span></label>
+            <label class="check-field"><input name="repair_audio_album_artist" type="checkbox" {% if settings.repair_audio_album_artist %}checked{% endif %}><span>Set Album Artist to the Bindery author</span></label>
+            <label class="check-field"><input name="repair_audio_genre" type="checkbox" {% if settings.repair_audio_genre %}checked{% endif %}><span>Set Genre during repair</span></label>
+          </div>
+          <label class="field span-2"><span>Audiobook genre value</span><input name="repair_audio_genre_value" type="text" value="{{ settings.repair_audio_genre_value }}"><small>Only used when “Set Genre during repair” is enabled.</small></label>
         </div>
+        <div class="notice info">v0.4 writes confirmed EPUB title/creator metadata and common audiobook tags (MP3, FLAC, M4A/M4B/MP4, OGG/Opus). PDF, MOBI/AZW/AZW3 and other ebook formats remain inspect-only for now. Track titles and narrator/Artist tags are preserved.</div>
+        <div class="notice warning">The supplied Compose file keeps media mounts read-only. Safe mode alone cannot alter files until you deliberately make the relevant Docker media mount writable.</div>
+      </section>
+
+      <section class="settings-section">
+        <div class="settings-section-title"><h3>Dashboard</h3><p>Tune live updates and how many results BookGuard renders.</p></div>
         <div class="form-grid compact-grid">
-          <label class="field">
-            <span>Live refresh interval (ms)</span>
-            <input name="dashboard_poll_ms" type="number" min="500" max="10000" step="100" value="{{ settings.dashboard_poll_ms }}">
-          </label>
-          <label class="field">
-            <span>Live results shown</span>
-            <input name="live_results_limit" type="number" min="5" max="100" value="{{ settings.live_results_limit }}">
-          </label>
-          <label class="field">
-            <span>Results per completed view</span>
-            <input name="dashboard_result_limit" type="number" min="50" max="5000" value="{{ settings.dashboard_result_limit }}">
-          </label>
+          <label class="field"><span>Live refresh interval (ms)</span><input name="dashboard_poll_ms" type="number" min="500" max="10000" step="100" value="{{ settings.dashboard_poll_ms }}"></label>
+          <label class="field"><span>Live results shown</span><input name="live_results_limit" type="number" min="5" max="100" value="{{ settings.live_results_limit }}"></label>
+          <label class="field"><span>Results per completed view</span><input name="dashboard_result_limit" type="number" min="50" max="5000" value="{{ settings.dashboard_result_limit }}"></label>
         </div>
       </section>
 
       <section class="settings-section safety-section">
-        <div class="settings-section-title">
-          <h3>Safety and actions</h3>
-          <p>BookGuard defaults to read-only auditing. Enable actions only after you trust its classifications.</p>
-        </div>
-        <label class="toggle-row danger-toggle">
-          <div>
-            <strong>Enable Bindery actions</strong>
-            <small>Allows Detach and Quarantine buttons for non-PASS results. Quarantine also requires writable Docker media mounts.</small>
-          </div>
-          <input name="allow_actions" type="checkbox" {% if settings.allow_actions %}checked{% endif %}>
-        </label>
+        <div class="settings-section-title"><h3>Safety and Bindery actions</h3><p>Detach/quarantine remains separate from metadata repair.</p></div>
+        <label class="toggle-row danger-toggle"><div><strong>Enable Bindery actions</strong><small>Allows Detach and Quarantine buttons for non-PASS results.</small></div><input name="allow_actions" type="checkbox" {% if settings.allow_actions %}checked{% endif %}></label>
       </section>
     </form>
 
@@ -220,18 +127,17 @@ const form = document.getElementById("settingsForm");
 const saveButton = document.getElementById("saveButton");
 const resetButton = document.getElementById("resetButton");
 const saveStatus = document.getElementById("saveStatus");
-
 const booleanFields = [
   "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
   "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
-  "clear_api_key"
+  "repair_audiobooks", "repair_ebooks", "repair_normalize_pass", "repair_audio_album",
+  "repair_audio_album_artist", "repair_audio_genre", "clear_api_key"
 ];
 const integerFields = [
   "sample_files", "progress_every", "title_min_shared_words",
   "strong_mismatch_min_samples", "strong_mismatch_consensus_percent",
   "dashboard_poll_ms", "live_results_limit", "dashboard_result_limit"
 ];
-
 function collectSettings() {
   const data = {};
   for (const element of form.elements) {
@@ -242,43 +148,24 @@ function collectSettings() {
   }
   return data;
 }
-
-function showStatus(message, kind="ok") {
-  saveStatus.className = `save-status visible ${kind}`;
-  saveStatus.textContent = message;
-}
-
+function showStatus(message, kind="ok") { saveStatus.className = `save-status visible ${kind}`; saveStatus.textContent = message; }
 saveButton.addEventListener("click", async () => {
-  saveButton.disabled = true;
-  saveButton.textContent = "Saving…";
-  const response = await fetch("/api/settings", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(collectSettings())
-  });
+  saveButton.disabled = true; saveButton.textContent = "Saving…";
+  const response = await fetch("/api/settings", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(collectSettings())});
   const body = await response.json().catch(() => ({}));
-  saveButton.disabled = false;
-  saveButton.textContent = "Save settings";
-  if (!response.ok) {
-    showStatus(body.detail || "Unable to save settings.", "bad");
-    return;
-  }
-  showStatus("Settings saved. New scans will use the updated configuration.");
+  saveButton.disabled = false; saveButton.textContent = "Save settings";
+  if (!response.ok) { showStatus(body.detail || "Unable to save settings.", "bad"); return; }
+  showStatus("Settings saved. New scans and repair previews will use the updated configuration.");
   setTimeout(() => window.location.reload(), 700);
 });
-
 resetButton.addEventListener("click", async () => {
   if (!confirm("Reset all saved BookGuard settings to the current environment/default values?")) return;
   resetButton.disabled = true;
   const response = await fetch("/api/settings/reset", {method: "POST"});
   const body = await response.json().catch(() => ({}));
   resetButton.disabled = false;
-  if (!response.ok) {
-    showStatus(body.detail || "Unable to reset settings.", "bad");
-    return;
-  }
-  showStatus("Settings reset. Reloading…");
-  setTimeout(() => window.location.reload(), 500);
+  if (!response.ok) { showStatus(body.detail || "Unable to reset settings.", "bad"); return; }
+  showStatus("Settings reset. Reloading…"); setTimeout(() => window.location.reload(), 500);
 });
 </script>
 </body>
