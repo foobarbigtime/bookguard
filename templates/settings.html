@@ -113,7 +113,7 @@
           <label class="field">
             <span>Audio samples per association</span>
             <input name="sample_files" type="number" min="1" max="50" value="{{ settings.sample_files }}">
-            <small>More samples improve confidence but make scans slower.</small>
+            <small>Samples are spread across the audiobook instead of only taking the first files.</small>
           </label>
           <label class="field">
             <span>Progress update interval</span>
@@ -121,6 +121,7 @@
             <small>Update scan progress every N associations.</small>
           </label>
         </div>
+        <div class="notice info">Ebook inspection supports EPUB, PDF, MOBI, AZW/AZW3, CBZ ComicInfo.xml, RTF metadata, and explicit Title:/Author: headers in TXT. Unknown/unsupported formats remain REVIEW → UNSUPPORTED rather than being treated as bad.</div>
       </section>
 
       <section class="settings-section">
@@ -139,7 +140,30 @@
             <label class="check-field"><input name="allow_author_surname_match" type="checkbox" {% if settings.allow_author_surname_match %}checked{% endif %}><span>Allow surname-only author matches</span></label>
             <small>Useful for tags like “King” instead of “Stephen King”, but less strict.</small>
           </div>
-          <div class="field checks-stack span-2">
+
+          <label class="field span-2">
+            <span>Author aliases / pen names</span>
+            <textarea name="author_aliases" rows="6">{{ settings.author_aliases|join('\n') }}</textarea>
+            <small>One group per line: <code>Canonical Name = Alias One | Alias Two</code>. Matching is bidirectional within each group. This is useful for pen names such as Stephen King / Richard Bachman and J.K. Rowling / Robert Galbraith.</small>
+          </label>
+
+          <div class="field checks-stack span-2 option-panel">
+            <span>Strong semantic mismatch</span>
+            <label class="check-field"><input name="reject_strong_mismatch" type="checkbox" {% if settings.reject_strong_mismatch %}checked{% endif %}><span>Promote confident wrong spoken-word imports to REJECT</span></label>
+            <small>Requires stable embedded title + author evidence that supports neither the expected book nor any configured author alias. Generic “Chapter 1” / “Track 01” labels are ignored.</small>
+          </div>
+          <label class="field">
+            <span>Minimum informative samples</span>
+            <input name="strong_mismatch_min_samples" type="number" min="1" max="10" value="{{ settings.strong_mismatch_min_samples }}">
+            <small>Default 1 permits a single-file audiobook to be rejected when its metadata is explicit.</small>
+          </label>
+          <label class="field">
+            <span>Consensus required (%)</span>
+            <input name="strong_mismatch_consensus_percent" type="number" min="50" max="100" value="{{ settings.strong_mismatch_consensus_percent }}">
+            <small>Default 67. Higher values require more agreement across sampled files.</small>
+          </label>
+
+          <div class="field checks-stack span-2 option-panel">
             <span>Music detection</span>
             <label class="check-field"><input name="reject_music_mismatch" type="checkbox" {% if settings.reject_music_mismatch %}checked{% endif %}><span>Classify unmatched music-like audio as REJECT</span></label>
             <small>When disabled, unmatched music-like audio falls back to REVIEW.</small>
@@ -199,10 +223,12 @@ const saveStatus = document.getElementById("saveStatus");
 
 const booleanFields = [
   "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
-  "allow_author_surname_match", "reject_music_mismatch", "clear_api_key"
+  "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
+  "clear_api_key"
 ];
 const integerFields = [
   "sample_files", "progress_every", "title_min_shared_words",
+  "strong_mismatch_min_samples", "strong_mismatch_consensus_percent",
   "dashboard_poll_ms", "live_results_limit", "dashboard_result_limit"
 ];
 
