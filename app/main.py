@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 
 from fastapi import FastAPI, HTTPException, Request
@@ -8,12 +9,22 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .actions import ActionError, detach, quarantine
-from .config import settings
-from .db import init_local_db, latest_counts, latest_results, latest_scan, result_by_id
+from .config import Settings, settings
+from .db import (
+    clear_persisted_settings,
+    init_local_db,
+    latest_counts,
+    latest_recent_results,
+    latest_results,
+    latest_scan,
+    load_persisted_settings,
+    result_by_id,
+    save_persisted_settings,
+)
 from .scanner import start_scan
 
 
-app = FastAPI(title="BookGuard", version="0.1.0")
+app = FastAPI(title="BookGuard", version="0.2.0")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -21,31 +32,101 @@ templates = Jinja2Templates(directory="templates")
 @app.on_event("startup")
 def startup() -> None:
     init_local_db()
+    settings.apply(load_persisted_settings())
     if settings.scan_on_start:
         start_scan()
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": app.version}
+
+
+def _scan_timing(scan: dict | None) -> dict:
+    if not scan:
+        return {"percent": 0.0, "elapsed_seconds": 0, "eta_seconds": None}
+    try:
+        started = datetime.fromisoformat(scan["started_at"])
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        end = datetime.now(timezone.utc)
+        if scan.get("finished_at"):
+            end = datetime.fromisoformat(scan["finished_at"])
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+        elapsed = max(0.0, (end - started).total_seconds())
+    except Exception:
+        elapsed = 0.0
+
+    total = int(scan.get("total") or 0)
+    processed = int(scan.get("processed") or 0)
+    percent = (processed / total * 100.0) if total else 100.0
+    eta = None
+    if scan.get("status") == "running" and processed > 0 and elapsed > 0 and total > processed:
+        rate = processed / elapsed
+        if rate > 0:
+            eta = int((total - processed) / rate)
+    return {
+        "percent": round(percent, 1),
+        "elapsed_seconds": int(elapsed),
+        "eta_seconds": eta,
+    }
+
+
+def _compact_result(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "risk_score": row["risk_score"],
+        "classification": row["classification"],
+        "author": row["author"],
+        "title": row["title"],
+        "format": row["format"],
+        "reasons": row["reasons"],
+        "stored_path": row["stored_path"],
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, classification: str | None = None):
     scan = latest_scan()
     counts = latest_counts()
-    results = latest_results(classification=classification, limit=1000)
+    results = latest_results(
+        classification=classification,
+        limit=settings.dashboard_result_limit,
+    )
     return templates.TemplateResponse(
         request=request,
         name="index.html",
         context={
             "scan": scan,
+            "timing": _scan_timing(scan),
             "counts": counts,
             "results": results,
             "classification": classification or "",
             "allow_actions": settings.allow_actions,
             "bindery_db_exists": os.path.exists(settings.bindery_db),
             "sample_files": settings.sample_files,
+            "poll_ms": settings.dashboard_poll_ms,
+            "version": app.version,
+        },
+    )
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request):
+    values = settings.public_dict()
+    return templates.TemplateResponse(
+        request=request,
+        name="settings.html",
+        context={
+            "settings": values,
+            "config_dir": settings.config_dir,
+            "bindery_db_exists": os.path.exists(settings.bindery_db),
+            "audiobook_root_exists": os.path.exists(settings.audiobook_root),
+            "ebook_root_exists": os.path.exists(settings.ebook_root),
+            "quarantine_root_exists": os.path.exists(settings.quarantine_root),
+            "scan": latest_scan(),
+            "version": app.version,
         },
     )
 
@@ -63,7 +144,57 @@ def api_scan():
 
 @app.get("/api/status")
 def api_status():
-    return {"scan": latest_scan(), "counts": latest_counts()}
+    scan = latest_scan()
+    counts = latest_counts()
+    recent = [_compact_result(row) for row in latest_recent_results(settings.live_results_limit)]
+    return {
+        "scan": scan,
+        "counts": counts,
+        "timing": _scan_timing(scan),
+        "recent_results": recent,
+        "poll_ms": settings.dashboard_poll_ms,
+    }
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    return settings.public_dict()
+
+
+@app.post("/api/settings")
+async def api_save_settings(request: Request):
+    scan = latest_scan()
+    if scan and scan.get("status") == "running":
+        raise HTTPException(status_code=409, detail="Wait for the current scan to finish before changing settings.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid settings payload.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid settings payload.")
+
+    # Blank API key means "keep the existing key" unless explicitly cleared.
+    if payload.get("clear_api_key"):
+        payload["bindery_api_key"] = ""
+    elif not str(payload.get("bindery_api_key", "")).strip():
+        payload.pop("bindery_api_key", None)
+    payload.pop("clear_api_key", None)
+
+    settings.apply(payload)
+    save_persisted_settings(settings.persistable_dict())
+    return {"ok": True, "settings": settings.public_dict()}
+
+
+@app.post("/api/settings/reset")
+def api_reset_settings():
+    scan = latest_scan()
+    if scan and scan.get("status") == "running":
+        raise HTTPException(status_code=409, detail="Wait for the current scan to finish before resetting settings.")
+    defaults = Settings()
+    settings.__dict__.update(defaults.__dict__)
+    clear_persisted_settings()
+    return {"ok": True, "settings": settings.public_dict()}
 
 
 @app.post("/api/results/{result_id}/detach")
