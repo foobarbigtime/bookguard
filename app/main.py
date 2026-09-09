@@ -25,7 +25,7 @@ from .db import (
 from .scanner import start_scan
 
 
-app = FastAPI(title="BookGuard", version="0.3.0")
+app = FastAPI(title="BookGuard", version="0.3.1")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
