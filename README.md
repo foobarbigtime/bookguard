@@ -16,11 +16,7 @@ BookGuard is designed around **audit first, destructive actions second**. By def
 - Detects obvious music-like imports when they do not match the expected book.
 - Audits EPUB and PDF title/author metadata.
 - Finds tracked Bindery paths that no longer exist.
-- Assigns each result a state:
-  - `PASS`
-  - `REVIEW`
-  - `REJECT`
-  - `MISSING`
+- Assigns each result a state: `PASS`, `REVIEW`, `REJECT`, or `MISSING`.
 - Stores scan history in `/config/bookguard.db`.
 - Provides a web dashboard on port `8788`.
 - Can optionally detach a tracked path using Bindery's API.
@@ -36,17 +32,9 @@ The default is:
 BOOKGUARD_ALLOW_ACTIONS=false
 ```
 
-In that mode BookGuard only reads:
+In that mode BookGuard only reads the Bindery database, audiobook files, and ebook files. The supplied Compose file mounts those sources read-only.
 
-- the Bindery database;
-- audiobook files;
-- ebook files.
-
-The supplied Compose file mounts those sources read-only.
-
-If actions are enabled, BookGuard still refuses to detach or quarantine a result classified as `PASS`.
-
-Quarantine also refuses to move a path when more than one Bindery `book_files` association lives under that tracked path.
+If actions are enabled, BookGuard still refuses to detach or quarantine a result classified as `PASS`. Quarantine also refuses to move a path when more than one Bindery `book_files` association lives under that tracked path.
 
 ### Detach vs quarantine
 
@@ -73,10 +61,10 @@ cd bookguard
 cp .env.example .env
 ```
 
-Edit `.env`. For audit-only use, you can leave the API key blank:
+For audit-only use, you can leave the API key blank. The example uses Unraid's host gateway to reach Bindery, so BookGuard does not need to share Bindery's Docker network:
 
 ```env
-BINDERY_URL=http://bindery:8787
+BINDERY_URL=http://host.docker.internal:8787
 BINDERY_API_KEY=
 BOOKGUARD_ALLOW_ACTIONS=false
 ```
@@ -93,13 +81,7 @@ Open:
 http://<unraid-ip>:8788
 ```
 
-The included Compose file assumes the existing Docker network is named:
-
-```text
-arrs_internal
-```
-
-and uses these host paths:
+The supplied Compose file uses these host paths:
 
 ```text
 /mnt/cache/appdata/bindery
@@ -179,7 +161,7 @@ Future releases can add stronger release-history correlation, multi-file root pr
 python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt pytest
-pytest -q
+PYTHONPATH=. pytest -q
 uvicorn app.main:app --reload --port 8788
 ```
 
