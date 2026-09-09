@@ -4,7 +4,7 @@ from app.config import Settings
 
 def test_app_imports():
     assert app.title == "BookGuard"
-    assert app.version == "0.3.0"
+    assert app.version == "0.3.1"
 
 
 def test_settings_clamp_and_lists():
