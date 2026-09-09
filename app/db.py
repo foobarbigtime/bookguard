@@ -161,6 +161,12 @@ def save_persisted_settings(values: dict) -> None:
         conn.commit()
 
 
+def clear_persisted_settings() -> None:
+    with local_conn() as conn:
+        conn.execute("DELETE FROM app_settings")
+        conn.commit()
+
+
 def create_scan(scan_id: str, total: int) -> None:
     with local_conn() as conn:
         conn.execute(
