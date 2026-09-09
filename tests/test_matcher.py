@@ -1,5 +1,5 @@
 from app.config import Settings, settings
-from app.matcher import author_match, classify_audio, title_match
+from app.matcher import author_match, classify_audio, classify_ebook, title_match
 
 
 def _reset_settings():
@@ -36,6 +36,27 @@ def test_reversed_author_name_matches():
 def test_pen_name_alias_match_is_bidirectional():
     assert author_match("Stephen King", "Richard Bachman")
     assert author_match("Robert Galbraith", "J.K. Rowling")
+
+
+def test_swapped_ebook_metadata_is_pass():
+    state, score, code, _ = classify_ebook(
+        "Bel Canto",
+        "Ann Patchett",
+        {"title": "Patchett, Ann", "author": "Bel Canto"},
+    )
+    assert state == "PASS"
+    assert score == 10
+    assert code == "SWAPPED_METADATA"
+
+
+def test_swapped_ebook_rule_is_strict():
+    state, _, code, _ = classify_ebook(
+        "Bel Canto",
+        "Ann Patchett",
+        {"title": "Patchett", "author": "Bel"},
+    )
+    assert state == "REVIEW"
+    assert code == "MISMATCH"
 
 
 def test_music_mismatch_is_reject():
