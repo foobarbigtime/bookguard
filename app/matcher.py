@@ -41,13 +41,19 @@ def title_match(expected: str, metadata_text: str) -> bool:
         return True
     if len(e) >= 6 and f" {e} " in f" {m} ":
         return True
+
     ew = meaningful_words(e)
     mw = meaningful_words(m)
+
+    # Treat harmless leading/trailing article changes and catalogue-style title
+    # inversions as equivalent when the meaningful title words are identical.
+    # Examples: "Order" == "The Order", "Messenger, The" == "The Messenger".
+    if ew and ew == mw:
+        return True
+
     shared = ew & mw
     minimum = settings.title_min_shared_words
     if len(ew) >= minimum and len(shared) >= minimum:
-        return True
-    if len(ew) == 1 and e == m:
         return True
     return False
 
@@ -76,6 +82,15 @@ def _author_candidate_match(candidate: str, credits: str) -> bool:
         return True
     if len(e) >= 5 and f" {e} " in f" {c} ":
         return True
+
+    # EPUB/PDF/MOBI metadata frequently stores "Surname, Given". After
+    # normalization that becomes a token-order difference, not an identity
+    # difference. Require the complete token set to match before accepting it.
+    e_tokens = e.split()
+    c_tokens = c.split()
+    if len(e_tokens) >= 2 and len(e_tokens) == len(c_tokens) and set(e_tokens) == set(c_tokens):
+        return True
+
     if not settings.allow_author_surname_match:
         return False
     parts = [p for p in e.split() if len(p) >= 3]
@@ -87,6 +102,19 @@ def _author_candidate_match(candidate: str, credits: str) -> bool:
 
 def author_match(expected: str, credits: str) -> bool:
     return any(_author_candidate_match(candidate, credits) for candidate in _author_alias_group(expected))
+
+
+def author_mentioned_in_text(expected: str, text: str) -> bool:
+    """Find a full configured author/alias in descriptive text without surname-only matching."""
+    haystack = normalize(text)
+    if not haystack:
+        return False
+    padded = f" {haystack} "
+    for candidate in _author_alias_group(expected):
+        needle = normalize(candidate)
+        if needle and len(needle) >= 5 and f" {needle} " in padded:
+            return True
+    return False
 
 
 def genre_is_music(genre: str | None) -> bool:
@@ -115,6 +143,7 @@ def _sample_author(sample: dict) -> str:
         sample.get("author")
         or sample.get("album_artist")
         or sample.get("artist")
+        or sample.get("composer")
         or ""
     ).strip()
 
@@ -186,6 +215,10 @@ def classify_audio(
         )
         any_title = any_title or title_match(expected_title, title_text)
         any_author = any_author or author_match(expected_author, credits)
+        # Some commercial audiobooks tag the narrator as Artist while embedding
+        # the author's full name in Album. Accept the full author/alias there,
+        # but deliberately do not use surname-only matching in descriptive text.
+        any_author = any_author or author_mentioned_in_text(expected_author, title_text)
         any_music = any_music or genre_is_music(sample.get("genre"))
 
     if any_title and any_author:
@@ -193,9 +226,12 @@ def classify_audio(
             "Embedded title and author metadata support the Bindery assignment."
         ]
 
-    if settings.reject_music_mismatch and any_music and not any_title and not any_author:
+    # A music file can coincidentally share a book title. If it is explicitly
+    # music-like and there is no author support, title alone is not enough to
+    # save it from rejection.
+    if settings.reject_music_mismatch and any_music and not any_author:
         return "REJECT", 100, "MUSIC_MISMATCH", [
-            "Metadata looks like music and does not match the expected book or author."
+            "Metadata looks like music and does not match the expected author; a title-only coincidence is not treated as audiobook evidence."
         ]
 
     if (
