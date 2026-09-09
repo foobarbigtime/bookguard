@@ -8,11 +8,16 @@ import uuid
 from .config import settings
 from .db import add_result, create_scan, finish_scan, load_bindery_files, update_scan_progress
 from .matcher import classify_audio, classify_ebook
-from .metadata import audio_files, ebook_metadata, ffprobe_metadata
+from .metadata import audio_files, audio_metadata_summary, ebook_metadata, ffprobe_metadata
 
 
 _scan_lock = threading.Lock()
 _current_thread: threading.Thread | None = None
+
+EBOOK_CANDIDATE_SUFFIXES = {
+    ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".rtf", ".txt",
+    ".cbr", ".lit",
+}
 
 
 def map_path(stored_path: str, fmt: str) -> str:
@@ -31,49 +36,67 @@ def map_path(stored_path: str, fmt: str) -> str:
 
 def _scan_one(row: dict) -> dict:
     local_path = map_path(row["stored_path"], row["format"])
-    base = {**row, "local_path": local_path, "metadata": {}, "reasons": []}
+    base = {
+        **row,
+        "local_path": local_path,
+        "metadata": {},
+        "reason_code": "UNKNOWN",
+        "reasons": [],
+    }
 
     if not os.path.exists(local_path):
         base.update(
             classification="MISSING",
             risk_score=100,
+            reason_code="MISSING",
             reasons=["Bindery tracks this path, but it does not exist on disk."],
         )
         return base
 
     if row["format"] == "audiobook":
         samples = [ffprobe_metadata(path) for path in audio_files(local_path, settings.sample_files)]
-        classification, score, reasons = classify_audio(row["title"], row["author"], samples)
+        summary = audio_metadata_summary(samples)
+        classification, score, reason_code, reasons = classify_audio(
+            row["title"], row["author"], samples
+        )
         base.update(
             classification=classification,
             risk_score=score,
+            reason_code=reason_code,
             reasons=reasons,
-            metadata={"samples": samples},
+            metadata={"samples": samples, **summary},
         )
         return base
 
     target = local_path
     if os.path.isdir(local_path):
-        candidates = []
-        for suffix in ("*.epub", "*.pdf"):
-            candidates.extend(Path(local_path).rglob(suffix))
+        candidates: list[Path] = []
+        for candidate in Path(local_path).rglob("*"):
+            if candidate.is_file() and candidate.suffix.lower() in EBOOK_CANDIDATE_SUFFIXES:
+                candidates.append(candidate)
         if candidates:
-            target = str(sorted(candidates)[0])
+            target = str(sorted(candidates, key=lambda path: str(path).casefold())[0])
 
     md = ebook_metadata(target)
     if "unsupported" in md:
         base.update(
             classification="REVIEW",
-            risk_score=60,
+            risk_score=20,
+            reason_code="UNSUPPORTED",
             reasons=[f"Ebook format {md['unsupported']} is not inspected yet."],
             metadata=md,
         )
         return base
 
-    classification, score, reasons = classify_ebook(row["title"], row["author"], md)
+    classification, score, reason_code, reasons = classify_ebook(
+        row["title"], row["author"], md
+    )
+    if md.get("error") and reason_code == "NO_METADATA":
+        reasons = [*reasons, f"Metadata parser reported: {md['error']}"]
     base.update(
         classification=classification,
         risk_score=score,
+        reason_code=reason_code,
         reasons=reasons,
         metadata=md,
     )
