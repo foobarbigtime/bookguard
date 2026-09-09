@@ -9,18 +9,27 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       TZ: ${TZ:-America/Toronto}
-      BINDERY_DB: /bindery/bindery.db
+      BINDERY_DB: ${BINDERY_DB:-/bindery/bindery.db}
       BINDERY_URL: ${BINDERY_URL:-http://host.docker.internal:8787}
       BINDERY_API_KEY: ${BINDERY_API_KEY:-}
-      AUDIOBOOK_ROOT: /audiobooks
+      AUDIOBOOK_ROOT: ${AUDIOBOOK_ROOT:-/audiobooks}
       AUDIOBOOK_BINDERY_PREFIX: ${AUDIOBOOK_BINDERY_PREFIX:-/data/media/audiobooks}
-      EBOOK_ROOT: /books
+      EBOOK_ROOT: ${EBOOK_ROOT:-/books}
       EBOOK_BINDERY_PREFIX: ${EBOOK_BINDERY_PREFIX:-/data/media/books}
       CONFIG_DIR: /config
-      QUARANTINE_ROOT: /quarantine
+      QUARANTINE_ROOT: ${QUARANTINE_ROOT:-/quarantine}
       BOOKGUARD_ALLOW_ACTIONS: ${BOOKGUARD_ALLOW_ACTIONS:-false}
       BOOKGUARD_SAMPLE_FILES: ${BOOKGUARD_SAMPLE_FILES:-3}
       BOOKGUARD_SCAN_ON_START: ${BOOKGUARD_SCAN_ON_START:-false}
+      BOOKGUARD_SCAN_AUDIOBOOKS: ${BOOKGUARD_SCAN_AUDIOBOOKS:-true}
+      BOOKGUARD_SCAN_EBOOKS: ${BOOKGUARD_SCAN_EBOOKS:-true}
+      BOOKGUARD_PROGRESS_EVERY: ${BOOKGUARD_PROGRESS_EVERY:-10}
+      BOOKGUARD_TITLE_MIN_SHARED_WORDS: ${BOOKGUARD_TITLE_MIN_SHARED_WORDS:-2}
+      BOOKGUARD_AUTHOR_SURNAME_MATCH: ${BOOKGUARD_AUTHOR_SURNAME_MATCH:-true}
+      BOOKGUARD_REJECT_MUSIC_MISMATCH: ${BOOKGUARD_REJECT_MUSIC_MISMATCH:-true}
+      BOOKGUARD_DASHBOARD_POLL_MS: ${BOOKGUARD_DASHBOARD_POLL_MS:-1500}
+      BOOKGUARD_LIVE_RESULTS_LIMIT: ${BOOKGUARD_LIVE_RESULTS_LIMIT:-20}
+      BOOKGUARD_RESULT_LIMIT: ${BOOKGUARD_RESULT_LIMIT:-1000}
     volumes:
       - /mnt/cache/appdata/bookguard:/config
       - /mnt/cache/appdata/bindery:/bindery:ro
