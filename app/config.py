@@ -19,6 +19,8 @@ DEFAULT_AUTHOR_ALIASES = [
     "Lemony Snicket = Daniel Handler",
 ]
 
+REPAIR_MODES = {"off", "preview", "safe"}
+
 
 def _bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
@@ -36,6 +38,11 @@ def _int(name: str, default: int) -> int:
 
 def _clamp(value: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(value, maximum))
+
+
+def _repair_mode(value: object, default: str = "preview") -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in REPAIR_MODES else default
 
 
 def _lines_env(name: str, default: list[str]) -> list[str]:
@@ -67,8 +74,6 @@ def _clean_lines(raw: object) -> list[str]:
 @dataclass
 class Settings:
     # Docker/deployment location for BookGuard's own persistent database.
-    # This intentionally remains environment-only because changing it would
-    # move the settings database while the app is running.
     config_dir: str = os.getenv("CONFIG_DIR", "/config")
 
     # Bindery connection and library mapping.
@@ -109,6 +114,18 @@ class Settings:
         default_factory=lambda: _lines_env("BOOKGUARD_AUTHOR_ALIASES", DEFAULT_AUTHOR_ALIASES)
     )
 
+    # Metadata repair. Preview is intentionally the default; it never writes files.
+    metadata_repair_mode: str = field(
+        default_factory=lambda: _repair_mode(os.getenv("BOOKGUARD_METADATA_REPAIR_MODE", "preview"))
+    )
+    repair_audiobooks: bool = _bool("BOOKGUARD_REPAIR_AUDIOBOOKS", True)
+    repair_ebooks: bool = _bool("BOOKGUARD_REPAIR_EBOOKS", True)
+    repair_normalize_pass: bool = _bool("BOOKGUARD_REPAIR_NORMALIZE_PASS", True)
+    repair_audio_album: bool = _bool("BOOKGUARD_REPAIR_AUDIO_ALBUM", True)
+    repair_audio_album_artist: bool = _bool("BOOKGUARD_REPAIR_AUDIO_ALBUM_ARTIST", True)
+    repair_audio_genre: bool = _bool("BOOKGUARD_REPAIR_AUDIO_GENRE", False)
+    repair_audio_genre_value: str = os.getenv("BOOKGUARD_REPAIR_AUDIO_GENRE_VALUE", "Audiobook")
+
     # Dashboard behavior.
     dashboard_poll_ms: int = _clamp(_int("BOOKGUARD_DASHBOARD_POLL_MS", 1500), 500, 10000)
     live_results_limit: int = _clamp(_int("BOOKGUARD_LIVE_RESULTS_LIMIT", 20), 5, 100)
@@ -118,11 +135,13 @@ class Settings:
         string_fields = {
             "bindery_db", "bindery_url", "bindery_api_key", "audiobook_root",
             "audiobook_bindery_prefix", "ebook_root", "ebook_bindery_prefix",
-            "quarantine_root",
+            "quarantine_root", "repair_audio_genre_value",
         }
         bool_fields = {
             "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
             "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
+            "repair_audiobooks", "repair_ebooks", "repair_normalize_pass",
+            "repair_audio_album", "repair_audio_album_artist", "repair_audio_genre",
         }
         int_bounds = {
             "sample_files": (1, 50),
@@ -141,6 +160,9 @@ class Settings:
                 if key in {"bindery_url", "audiobook_bindery_prefix", "ebook_bindery_prefix"}:
                     value = value.rstrip("/")
                 setattr(self, key, value)
+
+        if "metadata_repair_mode" in values:
+            self.metadata_repair_mode = _repair_mode(values["metadata_repair_mode"], self.metadata_repair_mode)
 
         for key in bool_fields:
             if key in values:
@@ -190,6 +212,14 @@ class Settings:
             "strong_mismatch_consensus_percent": self.strong_mismatch_consensus_percent,
             "music_genres": list(self.music_genres),
             "author_aliases": list(self.author_aliases),
+            "metadata_repair_mode": self.metadata_repair_mode,
+            "repair_audiobooks": self.repair_audiobooks,
+            "repair_ebooks": self.repair_ebooks,
+            "repair_normalize_pass": self.repair_normalize_pass,
+            "repair_audio_album": self.repair_audio_album,
+            "repair_audio_album_artist": self.repair_audio_album_artist,
+            "repair_audio_genre": self.repair_audio_genre,
+            "repair_audio_genre_value": self.repair_audio_genre_value,
             "dashboard_poll_ms": self.dashboard_poll_ms,
             "live_results_limit": self.live_results_limit,
             "dashboard_result_limit": self.dashboard_result_limit,
