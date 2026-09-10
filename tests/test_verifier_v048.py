@@ -1,4 +1,4 @@
-import app.verifier_v048_refined as verifier
+import app.verifier_v048_final as verifier
 
 
 def sample_result(title="Cat of Death!", author="Aaron Blabey"):
@@ -27,7 +27,7 @@ def classify(result, metadata, text, front=None):
         [],
         "test",
         [],
-        front if front is not None else text[: verifier.base.FRONT_TEXT_CHARS],
+        front if front is not None else text[: verifier.refined.base.FRONT_TEXT_CHARS],
     )
 
 
@@ -153,3 +153,28 @@ def test_short_expected_title_inside_longer_embedded_title_is_not_independent_ev
     assert verdict == "INSUFFICIENT_EVIDENCE"
     assert confidence == 70
     assert "shorter phrase" in evidence["explanation"]
+
+
+def test_collection_like_embedded_title_blocks_single_book_metadata_repair():
+    result = sample_result(title="Siren Depths", author="Martha Wells")
+    text = "Siren Depths by Martha Wells. " + ("story " * 1000)
+    verdict, confidence, evidence = classify(
+        result,
+        {"title": "The Books of the Raksura: The Complete Raksura Series", "author": "Martha Wells"},
+        text,
+    )
+    assert verdict == "INSUFFICIENT_EVIDENCE"
+    assert confidence == 70
+    assert "collection" in evidence["explanation"].lower() or "series" in evidence["explanation"].lower()
+
+
+def test_non_collection_bad_metadata_can_still_be_repaired():
+    result = sample_result(title="The Enchantment", author="Kristin Hannah")
+    text = "The Enchantment by Kristin Hannah. " + ("story " * 1000)
+    verdict, confidence, evidence = classify(
+        result,
+        {"title": "Wrong Metadata", "author": "Wrong Author"},
+        text,
+    )
+    assert verdict == "METADATA_ERROR"
+    assert confidence == 97
