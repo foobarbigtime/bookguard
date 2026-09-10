@@ -7,10 +7,12 @@ from . import verifier_v048_refined as refined
 
 # Final v0.4.8 safety refinement. Invalidate prior v0.4.8 verifier caches while
 # keeping the public application version at 0.4.8.
-legacy.VERIFIER_VERSION = "5"
+legacy.VERIFIER_VERSION = "6"
 
 COLLECTION_TITLE_PATTERNS = (
-    r"\bcomplete\s+(?:series|collection|works|novels|stories)\b",
+    # Handles both "Complete Series" and named forms such as
+    # "The Complete Raksura Series" / "Complete Murderbot Collection".
+    r"\bcomplete(?:\s+[\w'’-]+){0,4}\s+(?:series|collection|works|novels|stories)\b",
     r"\bomnibus\b",
     r"\bbox(?:ed)?\s+set\b",
     r"\bcollection\b",
