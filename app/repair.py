@@ -19,7 +19,6 @@ from .db import (
 from .matcher import (
     author_match_strict,
     author_mentioned_in_text,
-    meaningful_words,
     normalize,
 )
 from .metadata import AUDIO_EXTENSIONS, ebook_metadata
@@ -47,17 +46,24 @@ def _same_text(left: str | None, right: str | None) -> bool:
     return normalize(left) == normalize(right)
 
 
-def _repair_title_equivalent(expected: str | None, observed: str | None) -> bool:
-    """Much stricter than scan matching: safe repair requires the same title identity."""
+def _same_author_person(expected: str | None, observed: str | None) -> bool:
+    """Match the same literal name with token order ignored, but do not collapse pen names/aliases."""
     e = normalize(expected)
     o = normalize(observed)
     if not e or not o:
         return False
     if e == o:
         return True
-    ew = meaningful_words(expected)
-    ow = meaningful_words(observed)
-    return bool(ew) and ew == ow
+    e_tokens = e.split()
+    o_tokens = o.split()
+    return len(e_tokens) >= 2 and len(e_tokens) == len(o_tokens) and sorted(e_tokens) == sorted(o_tokens)
+
+
+def _repair_title_equivalent(expected: str | None, observed: str | None) -> bool:
+    """Safe normalization requires an exact normalized title, not fuzzy scan equivalence."""
+    e = normalize(expected)
+    o = normalize(observed)
+    return bool(e) and e == o
 
 
 def _resolve_ebook_target(local_path: str) -> str:
@@ -128,20 +134,22 @@ def repair_candidate_summary(result: dict) -> dict:
         metadata = result.get("metadata") or {}
         current_title = str(metadata.get("detected_title") or "")
         current_author = str(metadata.get("detected_author") or "")
+        author_order_change = (
+            settings.repair_audio_album_artist
+            and current_author
+            and _same_author_person(result["author"], current_author)
+            and normalize(current_author) != normalize(result["author"])
+        )
         needs_change = (
             (settings.repair_audio_album and not _same_text(current_title, result["title"]))
-            or (
-                settings.repair_audio_album_artist
-                and current_author
-                and not author_match_strict(result["author"], current_author)
-            )
+            or author_order_change
             or settings.repair_audio_genre
         )
         return {
             "eligible": needs_change,
             "safe": needs_change,
             "kind": "AUDIO_TAGS",
-            "reason": "Canonicalize confirmed audiobook album metadata from Bindery." if needs_change else "No canonical audio metadata changes are needed.",
+            "reason": "Conservatively normalize exact-title audiobook metadata; valid aliases are preserved." if needs_change else "No conservative audio metadata changes are needed.",
         }
 
     if not settings.repair_ebooks:
@@ -171,23 +179,24 @@ def repair_candidate_summary(result: dict) -> dict:
         safe_identity = _repair_title_equivalent(result["title"], current_title) and author_match_strict(
             result["author"], current_author
         )
-        needs_change = safe_identity and (
-            not _same_text(current_title, result["title"])
-            or normalize(current_author) != normalize(result["author"])
+        author_order_change = (
+            safe_identity
+            and _same_author_person(result["author"], current_author)
+            and normalize(current_author) != normalize(result["author"])
         )
-        if needs_change:
+        if author_order_change:
             return {
                 "eligible": True,
                 "safe": True,
                 "kind": "EPUB_METADATA",
-                "reason": "Normalize confirmed EPUB title/author metadata from Bindery.",
+                "reason": "Normalize confirmed EPUB author-name ordering; title variants and pen-name credits are preserved.",
             }
 
     return {
         "eligible": False,
         "safe": False,
         "kind": "",
-        "reason": "The result does not meet BookGuard's safe repair rules.",
+        "reason": "The result does not meet BookGuard's conservative repair rules.",
     }
 
 
@@ -247,9 +256,13 @@ def _audio_preview(result: dict) -> dict:
     for path in paths:
         before = _read_audio_fields(path)
         after = dict(before)
-        if settings.repair_audio_album:
+        if settings.repair_audio_album and not _same_text(before.get("album"), result["title"]):
             after["album"] = result["title"]
-        if settings.repair_audio_album_artist:
+        if (
+            settings.repair_audio_album_artist
+            and _same_author_person(result["author"], before.get("albumartist"))
+            and normalize(before.get("albumartist")) != normalize(result["author"])
+        ):
             after["albumartist"] = result["author"]
         if settings.repair_audio_genre:
             after["genre"] = settings.repair_audio_genre_value or "Audiobook"
@@ -262,7 +275,7 @@ def _audio_preview(result: dict) -> dict:
         "eligible": changed > 0,
         "safe": changed > 0,
         "kind": "AUDIO_TAGS",
-        "reason": f"{changed} of {len(paths)} audio file(s) would receive canonical book-level tags.",
+        "reason": f"{changed} of {len(paths)} audio file(s) would receive conservative book-level tag cleanup.",
         "before": {"files": before_files},
         "after": {"files": after_files},
     }
@@ -345,12 +358,20 @@ def _epub_preview(result: dict) -> dict:
         "title": str(current.get("title") or ""),
         "author": str(current.get("author") or ""),
     }
-    after = {"path": target, "title": result["title"], "author": result["author"]}
+    if result.get("reason_code") == "SWAPPED_METADATA":
+        after = {"path": target, "title": result["title"], "author": result["author"]}
+    else:
+        after = dict(before)
+        if (
+            _same_author_person(result["author"], before["author"])
+            and normalize(before["author"]) != normalize(result["author"])
+        ):
+            after["author"] = result["author"]
     return {
         "eligible": before != after,
         "safe": before != after,
         "kind": "EPUB_METADATA",
-        "reason": "Rewrite EPUB package title/creator from the confirmed Bindery assignment.",
+        "reason": "Rewrite only the confirmed defective EPUB metadata fields.",
         "before": before,
         "after": after,
     }
