@@ -17,9 +17,10 @@
     </div>
     <nav class="topnav">
       <a class="nav-link active" href="/">Dashboard</a>
+      <a class="nav-link" href="/triage">Triage</a>
       <a class="nav-link" href="/repairs">Repairs</a>
       <a class="nav-link" href="/settings">Settings</a>
-      <button id="scanButton" class="primary">Run scan</button>
+      <button id="scanButton" class="primary">Scan library</button>
     </nav>
   </header>
 
@@ -162,11 +163,11 @@
                   {% endif %}
                 {% else %}
                   {% if row.repair.eligible and repair_mode != 'off' %}
-                    <button class="repair-button" onclick="runRepair({{ row.id }})">{{ 'Repair' if repair_mode == 'safe' else 'Preview repair' }}</button>
+                    <button class="repair-button" onclick="runRepair({{ row.id }})">{{ 'Apply repair' if repair_mode == 'safe' else 'Preview repair' }}</button>
                   {% endif %}
                   {% if allow_actions and row.classification != "PASS" %}
-                    <button onclick="runAction({{ row.id }}, 'detach')">Detach</button>
-                    <button class="danger" onclick="runAction({{ row.id }}, 'quarantine')">Quarantine</button>
+                    <button onclick="runAction({{ row.id }}, 'detach')">Detach association</button>
+                    <button class="danger" onclick="runAction({{ row.id }}, 'quarantine')">Quarantine item</button>
                   {% elif not row.repair.eligible and row.classification == "PASS" %}<span class="muted">Protected</span>{% endif %}
                 {% endif %}
               </td>
@@ -259,11 +260,11 @@ function resultRow(row) {
       }
     } else {
       if (repairMode !== "off" && row.repair && row.repair.eligible) {
-        parts.push(`<button class="repair-button" onclick="runRepair(${row.id})">${repairMode === "safe" ? "Repair" : "Preview repair"}</button>`);
+        parts.push(`<button class="repair-button" onclick="runRepair(${row.id})">${repairMode === "safe" ? "Apply repair" : "Preview repair"}</button>`);
       }
       if (allowActions && row.classification !== "PASS") {
-        parts.push(`<button onclick="runAction(${row.id}, 'detach')">Detach</button>`);
-        parts.push(`<button class="danger" onclick="runAction(${row.id}, 'quarantine')">Quarantine</button>`);
+        parts.push(`<button onclick="runAction(${row.id}, 'detach')">Detach association</button>`);
+        parts.push(`<button class="danger" onclick="runAction(${row.id}, 'quarantine')">Quarantine item</button>`);
       }
       if (!parts.length && row.classification === "PASS") parts.push('<span class="muted">Protected</span>');
     }
@@ -318,7 +319,7 @@ async function startScan() {
     const body = await response.json().catch(() => ({}));
     alert(body.detail || "Unable to start scan.");
     scanButton.disabled = false;
-    scanButton.textContent = "Run scan";
+    scanButton.textContent = "Scan library";
     return;
   }
   pollStatus(true);
@@ -357,7 +358,7 @@ async function pollStatus(reloadWhenDone=false) {
     setTimeout(() => pollStatus(true), body.poll_ms || defaultPollMs);
   } else {
     scanButton.disabled = false;
-    scanButton.textContent = "Run scan";
+    scanButton.textContent = "Scan library";
     if (reloadWhenDone) window.location.reload();
   }
 }
