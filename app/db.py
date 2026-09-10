@@ -45,6 +45,29 @@ def load_bindery_files() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def bindery_file_by_id(file_id: int) -> dict | None:
+    """Read one current Bindery file association by its stable row id."""
+    with bindery_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                bf.id AS file_id,
+                bf.book_id,
+                bf.format,
+                bf.path AS stored_path,
+                b.title,
+                a.name AS author
+            FROM book_files bf
+            JOIN books b ON b.id = bf.book_id
+            JOIN authors a ON a.id = b.author_id
+            WHERE bf.id = ?
+            LIMIT 1
+            """,
+            (file_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def associations_inside_path(stored_path: str) -> list[dict]:
     escaped = stored_path.rstrip("/")
     like = escaped.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
@@ -142,6 +165,25 @@ def init_local_db() -> None:
                 undone_at TEXT,
                 error TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS cleanup_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id INTEGER NOT NULL,
+                scan_id TEXT NOT NULL,
+                file_id INTEGER NOT NULL,
+                book_id INTEGER NOT NULL,
+                classification TEXT NOT NULL,
+                format TEXT NOT NULL,
+                author TEXT NOT NULL,
+                title TEXT NOT NULL,
+                stored_path TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                action_kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                error TEXT
+            );
             """
         )
 
@@ -165,6 +207,10 @@ def init_local_db() -> None:
                 ON metadata_repairs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_metadata_repairs_result
                 ON metadata_repairs(result_id);
+            CREATE INDEX IF NOT EXISTS idx_cleanup_actions_created
+                ON cleanup_actions(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_cleanup_actions_result
+                ON cleanup_actions(result_id);
             """
         )
         conn.commit()
@@ -376,6 +422,47 @@ def result_by_id(result_id: int) -> dict | None:
     if not row:
         return None
     return _decode_results([row])[0]
+
+
+def create_cleanup_action(result: dict, action_kind: str) -> int:
+    with local_conn() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO cleanup_actions(
+                result_id, scan_id, file_id, book_id, classification, format,
+                author, title, stored_path, local_path, action_kind, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+            """,
+            (
+                result["id"], result["scan_id"], result["file_id"], result["book_id"],
+                result["classification"], result["format"], result["author"], result["title"],
+                result["stored_path"], result["local_path"], action_kind, utc_now(),
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def finish_cleanup_action(cleanup_id: int, status: str, error: str | None = None) -> None:
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE cleanup_actions
+            SET status=?, completed_at=?, error=?
+            WHERE id=?
+            """,
+            (status, utc_now(), error, cleanup_id),
+        )
+        conn.commit()
+
+
+def recent_cleanup_actions(limit: int = 100) -> list[dict]:
+    with local_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM cleanup_actions ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def create_metadata_repair(result: dict, repair_kind: str, before: dict, after: dict) -> int:
