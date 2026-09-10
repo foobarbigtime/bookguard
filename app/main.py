@@ -33,7 +33,7 @@ from .repair import (
 from .scanner import start_scan
 
 
-app = FastAPI(title="BookGuard", version="0.4.3")
+app = FastAPI(title="BookGuard", version="0.4.4")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -121,15 +121,34 @@ def _enrich_results(rows: list[dict]) -> list[dict]:
 
 
 def _latest_repair_candidates(limit: int = 500) -> list[dict]:
-    """Return safe repair proposals from the latest scan, independent of dashboard risk ordering."""
+    """Return only actually actionable safe repairs from the latest scan."""
     if settings.metadata_repair_mode == "off":
         return []
     rows = latest_results(limit=10000)
     candidates: list[dict] = []
     for row in rows:
         enriched = {**row, **_compact_result(row)}
-        if enriched["repair"].get("eligible") and enriched["repair"].get("safe"):
-            candidates.append(enriched)
+        summary = enriched["repair"]
+        if not summary.get("eligible") or not summary.get("safe"):
+            continue
+
+        # The cheap scan-level summary is only a gate. A detailed preview reads
+        # the real file metadata and can discover that a proposed repair is a
+        # no-op (for example, an audiobook whose writable tags are already
+        # correct). Never show those as repair candidates.
+        try:
+            preview = build_repair_preview(row)
+        except RepairError:
+            continue
+        if not preview.get("eligible") or not preview.get("safe"):
+            continue
+
+        enriched["repair"] = {
+            **summary,
+            "kind": preview.get("kind") or summary.get("kind", ""),
+            "reason": preview.get("reason") or summary.get("reason", ""),
+        }
+        candidates.append(enriched)
     candidates.sort(
         key=lambda row: (
             0 if row.get("reason_code") == "SWAPPED_METADATA" else 1,
