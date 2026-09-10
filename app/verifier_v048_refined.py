@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from . import verifier as legacy
 from . import verifier_v048 as base
-from .matcher import author_match_strict
+from .matcher import author_match_strict, normalize
 
-# This refinement deliberately invalidates the first v0.4.8 cache generation.
+# This refinement deliberately invalidates the previous v0.4.8 cache generation.
 # It keeps the same public BookGuard version while forcing fresh verifier results.
-legacy.VERIFIER_VERSION = "3"
+legacy.VERIFIER_VERSION = "4"
 
 # Automatic metadata repair should require title-page-like evidence, not merely
 # two strings occurring somewhere in the first 160k characters.
@@ -23,6 +23,15 @@ def _downgrade_metadata_error(evidence: dict, reason: str) -> tuple[str, int, di
         "Automatic metadata repair withheld by the stricter v0.4.8 structural safety gate."
     )
     return "INSUFFICIENT_EVIDENCE", 70, evidence
+
+
+def _title_is_strict_subphrase(shorter: str, longer: str) -> bool:
+    """True when one normalized title is a complete word-sequence inside a longer title."""
+    short = normalize(shorter)
+    long = normalize(longer)
+    if not short or not long or short == long:
+        return False
+    return f" {short} " in f" {long} "
 
 
 def _classify_identity(
@@ -57,6 +66,19 @@ def _classify_identity(
 
     metadata_title_match = base._title_identity_match(expected_title, embedded_title)
     metadata_author_match = author_match_strict(expected_author, embedded_author)
+
+    # If the expected title is merely a shorter phrase inside the conflicting
+    # embedded title (e.g. "Return" inside "The Return (BookShots Flames)"),
+    # finding that short phrase in the content is not independent identity
+    # evidence. Never use that pattern to authorize an automatic rewrite.
+    if (
+        not metadata_title_match
+        and _title_is_strict_subphrase(expected_title, embedded_title)
+    ):
+        return _downgrade_metadata_error(
+            evidence,
+            "The expected title is only a shorter phrase within the conflicting embedded title, so it is not independent evidence for an automatic metadata rewrite.",
+        )
 
     # Same-title/different-author records are too ambiguous for an automatic
     # metadata rewrite. They can represent anthologies, editions, contributors,
