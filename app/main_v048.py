@@ -6,7 +6,7 @@ from .config import settings
 from .main import app
 from .db import latest_results, latest_scan, result_by_id
 from .repair import RepairError
-from .verifier_v048_refined import (
+from .verifier_v048_final import (
     apply_verified_metadata_repair,
     init_verification_db,
     start_verification_job,
