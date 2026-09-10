@@ -9,7 +9,7 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <div><h1>BookGuard</h1><p>Metadata repair history</p></div>
+      <div><h1>BookGuard</h1><p>Metadata repair proposals and history</p></div>
       <span class="version">v{{ version }}</span>
     </div>
     <nav class="topnav">
@@ -22,10 +22,50 @@
     <section class="card repair-mode-card">
       <span class="label">Metadata repair mode</span>
       <strong>{{ repair_mode|upper }}</strong>
-      <small>{% if repair_mode == 'safe' %}Safe repair and undo actions are enabled, but only for candidates that pass BookGuard's conservative repair rules.{% elif repair_mode == 'preview' %}Proposals can be previewed, but files cannot be modified.{% else %}Metadata repair is disabled.{% endif %}</small>
+      <small>{% if repair_mode == 'safe' %}Safe repair and undo actions are enabled, but only for candidates that pass BookGuard's conservative repair rules.{% elif repair_mode == 'preview' %}Repair proposals are listed below. Previewing them does not modify files.{% else %}Metadata repair is disabled.{% endif %}</small>
     </section>
 
-    <section class="table-card">
+    <section class="table-card repair-candidates-card">
+      <div class="section-title row-between">
+        <div>
+          <h2>Repair candidates</h2>
+          <p>Safe proposals from the latest scan. BookGuard does not list REJECT or MISSING items here.</p>
+        </div>
+        <span class="candidate-count"><strong>{{ candidate_count }}</strong> candidate{{ '' if candidate_count == 1 else 's' }}</span>
+      </div>
+      {% if candidates %}
+      <div class="table-wrap">
+        <table class="results-table">
+          <thead>
+            <tr><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Repair</th><th>Path</th><th>Action</th></tr>
+          </thead>
+          <tbody>
+          {% for row in candidates %}
+            <tr>
+              <td><span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_',' ') }}</span></td>
+              <td class="book-cell"><strong>{{ row.title }}</strong><small>{{ row.author }}</small></td>
+              <td class="book-cell detected-cell">
+                <strong>{{ row.detected_title or '—' }}</strong>
+                <small>{{ row.detected_author or 'No detected author' }}</small>
+                {% if row.detected_genre %}<small class="genre">{{ row.detected_genre }}</small>{% endif %}
+              </td>
+              <td>{{ row.format }}</td>
+              <td><strong>{{ row.repair.kind|replace('_',' ') }}</strong><small>{{ row.repair.reason }}</small></td>
+              <td class="path">{{ row.stored_path }}</td>
+              <td class="actions"><button class="repair-button" onclick="runRepair({{ row.id }})">{{ 'Repair' if repair_mode == 'safe' else 'Preview repair' }}</button></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% elif repair_mode == 'off' %}
+        <div class="empty">Metadata repair is off. Enable Preview mode in Settings to discover safe repair candidates.</div>
+      {% else %}
+        <div class="empty">No safe metadata repair candidates were found in the latest scan.</div>
+      {% endif %}
+    </section>
+
+    <section class="table-card repair-history-card">
       <div class="section-title"><h2>Repair history</h2><p>BookGuard stores before/after metadata for every repair it attempts.</p></div>
       {% if repairs %}
       <div class="table-wrap">
@@ -51,10 +91,48 @@
           </tbody>
         </table>
       </div>
-      {% else %}<div class="empty">No metadata repairs have been performed yet.</div>{% endif %}
+      {% else %}<div class="empty">No metadata repairs have been performed yet. Preview proposals above first.</div>{% endif %}
     </section>
   </main>
 <script>
+const repairMode = {{ repair_mode|tojson }};
+
+function repairPreviewText(preview) {
+  let text = `${preview.reason || "Metadata repair proposal"}\n\n`;
+  if (preview.kind === "EPUB_METADATA") {
+    text += `Before\nTitle: ${preview.before.title || "—"}\nAuthor: ${preview.before.author || "—"}\n\n`;
+    text += `After\nTitle: ${preview.after.title || "—"}\nAuthor: ${preview.after.author || "—"}`;
+    return text;
+  }
+  const beforeFiles = (preview.before && preview.before.files) || [];
+  const afterFiles = (preview.after && preview.after.files) || [];
+  text += `${afterFiles.length} audio file(s)\n`;
+  if (beforeFiles.length && afterFiles.length) {
+    const b = beforeFiles[0].tags || {};
+    const a = afterFiles[0].tags || {};
+    text += `\nExample first file:\nAlbum: ${b.album || "—"} -> ${a.album || "—"}\nAlbum Artist: ${b.albumartist || "—"} -> ${a.albumartist || "—"}\nGenre: ${b.genre || "—"} -> ${a.genre || "—"}`;
+  }
+  return text;
+}
+
+async function runRepair(id) {
+  const previewResponse = await fetch(`/api/results/${id}/repair-preview`, {cache: "no-store"});
+  const preview = await previewResponse.json().catch(() => ({}));
+  if (!previewResponse.ok) { alert(preview.detail || "Unable to build repair preview."); return; }
+  if (!preview.eligible || !preview.safe) { alert(preview.reason || "This result is not eligible for safe repair."); return; }
+  const text = repairPreviewText(preview);
+  if (repairMode !== "safe") {
+    alert(`${text}\n\nPreview only: no file was changed. Switch Metadata repair mode to Safe in Settings when you are ready.`);
+    return;
+  }
+  if (!confirm(`${text}\n\nApply this metadata repair?`)) return;
+  const response = await fetch(`/api/results/${id}/repair`, {method: "POST"});
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { alert(body.detail || "Metadata repair failed."); return; }
+  alert(`Metadata repair completed and verified. Repair history ID: ${body.repair_id}`);
+  window.location.reload();
+}
+
 async function undoRepair(id) {
   if (!confirm("Undo this metadata repair? BookGuard will refuse if the file metadata has changed since the repair.")) return;
   const response = await fetch(`/api/repairs/${id}/undo`, {method: "POST"});
