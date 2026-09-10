@@ -1,3 +1,5 @@
+from jinja2 import Environment, FileSystemLoader
+
 import app.main as main
 from app.config import Settings
 
@@ -5,6 +7,11 @@ from app.config import Settings
 def test_app_imports():
     assert main.app.title == "BookGuard"
     assert main.app.version == "0.4.5"
+
+
+def test_index_template_parses():
+    env = Environment(loader=FileSystemLoader("templates"))
+    env.get_template("index.html")
 
 
 def test_settings_clamp_and_lists():
