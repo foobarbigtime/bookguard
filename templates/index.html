@@ -28,7 +28,7 @@
       <article class="card">
         <span class="label">Bindery actions</span>
         <strong>{{ "Enabled" if allow_actions else "Audit only" }}</strong>
-        <small>{{ "Detach/quarantine controls are live." if allow_actions else "Detach and quarantine are disabled." }}</small>
+        <small>{{ "Detach/quarantine controls are live." if allow_actions else "Generic detach and quarantine are disabled. Guarded MISSING cleanup remains available." }}</small>
       </article>
       <article class="card">
         <span class="label">Metadata repair</span>
@@ -63,6 +63,36 @@
         <strong id="countALL">{{ counts.values()|sum if counts else 0 }}</strong>
       </a>
     </section>
+
+    {% if classification == "MISSING" and missing_cleanup %}
+    <section class="cleanup-card">
+      <div class="cleanup-copy">
+        <span class="label">Guarded MISSING cleanup</span>
+        <strong>{{ missing_cleanup.safe_count }} safe stale association{{ '' if missing_cleanup.safe_count == 1 else 's' }}</strong>
+        <small>
+          BookGuard rechecks that each physical path is absent and the exact Bindery <code>book_files</code> row still matches before detaching.
+          This workflow never deletes or moves media.
+        </small>
+        {% if missing_cleanup.already_detached_count %}
+          <small class="cleanup-note">{{ missing_cleanup.already_detached_count }} scan result{{ '' if missing_cleanup.already_detached_count == 1 else 's' }} already have no matching Bindery row. Run a fresh scan to clear them.</small>
+        {% endif %}
+        {% if missing_cleanup.attention_count %}
+          <small class="cleanup-note warning-text">{{ missing_cleanup.attention_count }} item{{ '' if missing_cleanup.attention_count == 1 else 's' }} need attention and block bulk cleanup.</small>
+        {% endif %}
+      </div>
+      <div class="cleanup-stats">
+        <div><span>Total MISSING</span><strong>{{ missing_cleanup.total }}</strong></div>
+        <div><span>Safe</span><strong>{{ missing_cleanup.safe_count }}</strong></div>
+        <div><span>Attention</span><strong>{{ missing_cleanup.attention_count }}</strong></div>
+      </div>
+      <button
+        id="detachAllMissingButton"
+        class="missing-cleanup-button"
+        onclick="detachAllMissing()"
+        {% if missing_cleanup.safe_count == 0 or missing_cleanup.attention_count > 0 or missing_cleanup.safe_count != missing_cleanup.total %}disabled{% endif %}
+      >Detach all confirmed missing</button>
+    </section>
+    {% endif %}
 
     <section class="review-breakdown-card">
       <div class="breakdown-heading">
@@ -104,7 +134,7 @@
           <thead>
             <tr>
               <th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th>
-              {% if allow_actions or repair_mode != 'off' %}<th>Actions</th>{% endif %}
+              {% if allow_actions or repair_mode != 'off' or classification == 'MISSING' %}<th>Actions</th>{% endif %}
             </tr>
           </thead>
           <tbody id="resultsBody">
@@ -122,15 +152,23 @@
               <td>{{ row.format }}</td>
               <td>{{ row.reasons|join(" ") }}</td>
               <td class="path">{{ row.stored_path }}</td>
-              {% if allow_actions or repair_mode != 'off' %}
+              {% if allow_actions or repair_mode != 'off' or row.classification == 'MISSING' %}
               <td class="actions">
-                {% if row.repair.eligible and repair_mode != 'off' %}
-                  <button class="repair-button" onclick="runRepair({{ row.id }})">{{ 'Repair' if repair_mode == 'safe' else 'Preview repair' }}</button>
+                {% if row.classification == "MISSING" %}
+                  {% if row.missing_cleanup.safe %}
+                    <button class="missing-cleanup-button" onclick="detachMissing({{ row.id }})">Detach stale association</button>
+                  {% else %}
+                    <span class="muted" title="{{ row.missing_cleanup.reason }}">{{ row.missing_cleanup.state|replace('_', ' ') }}</span>
+                  {% endif %}
+                {% else %}
+                  {% if row.repair.eligible and repair_mode != 'off' %}
+                    <button class="repair-button" onclick="runRepair({{ row.id }})">{{ 'Repair' if repair_mode == 'safe' else 'Preview repair' }}</button>
+                  {% endif %}
+                  {% if allow_actions and row.classification != "PASS" %}
+                    <button onclick="runAction({{ row.id }}, 'detach')">Detach</button>
+                    <button class="danger" onclick="runAction({{ row.id }}, 'quarantine')">Quarantine</button>
+                  {% elif not row.repair.eligible and row.classification == "PASS" %}<span class="muted">Protected</span>{% endif %}
                 {% endif %}
-                {% if allow_actions and row.classification != "PASS" %}
-                  <button onclick="runAction({{ row.id }}, 'detach')">Detach</button>
-                  <button class="danger" onclick="runAction({{ row.id }}, 'quarantine')">Quarantine</button>
-                {% elif not row.repair.eligible and row.classification == "PASS" %}<span class="muted">Protected</span>{% endif %}
               </td>
               {% endif %}
             </tr>
@@ -141,6 +179,33 @@
       {% else %}<div class="empty" id="emptyResults">No results yet.</div>{% endif %}
       </div>
     </section>
+
+    {% if classification == "MISSING" and cleanup_history %}
+    <section class="table-card cleanup-history-card">
+      <div class="section-title">
+        <h2>Cleanup history</h2>
+        <p>Guarded cleanup actions performed through the BookGuard UI/API.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ID</th><th>Status</th><th>Action</th><th>Book</th><th>File ID</th><th>Completed</th><th>Error</th></tr></thead>
+          <tbody>
+          {% for action in cleanup_history %}
+            <tr>
+              <td>#{{ action.id }}</td>
+              <td>{{ action.status }}</td>
+              <td>{{ action.action_kind|replace('_', ' ') }}</td>
+              <td class="book-cell"><strong>{{ action.title }}</strong><small>{{ action.author }}</small></td>
+              <td>{{ action.file_id }}</td>
+              <td>{{ action.completed_at or '—' }}</td>
+              <td>{{ action.error or '—' }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
   </main>
 
 <script>
@@ -181,17 +246,27 @@ function resultRow(row) {
   const detectedAuthor = row.detected_author || "No detected author";
   const genre = row.detected_genre ? `<small class="genre">${escapeHtml(row.detected_genre)}</small>` : "";
   const code = row.reason_code || "UNKNOWN";
+  const showActions = allowActions || repairMode !== "off" || row.classification === "MISSING";
   let actions = "";
-  if (allowActions || repairMode !== "off") {
+  if (showActions) {
     const parts = [];
-    if (repairMode !== "off" && row.repair && row.repair.eligible) {
-      parts.push(`<button class="repair-button" onclick="runRepair(${row.id})">${repairMode === "safe" ? "Repair" : "Preview repair"}</button>`);
+    if (row.classification === "MISSING") {
+      const cleanup = row.missing_cleanup || {};
+      if (cleanup.safe) {
+        parts.push(`<button class="missing-cleanup-button" onclick="detachMissing(${row.id})">Detach stale association</button>`);
+      } else {
+        parts.push(`<span class="muted" title="${escapeHtml(cleanup.reason || "Safety recheck required")}">${escapeHtml((cleanup.state || "recheck required").replaceAll("_", " "))}</span>`);
+      }
+    } else {
+      if (repairMode !== "off" && row.repair && row.repair.eligible) {
+        parts.push(`<button class="repair-button" onclick="runRepair(${row.id})">${repairMode === "safe" ? "Repair" : "Preview repair"}</button>`);
+      }
+      if (allowActions && row.classification !== "PASS") {
+        parts.push(`<button onclick="runAction(${row.id}, 'detach')">Detach</button>`);
+        parts.push(`<button class="danger" onclick="runAction(${row.id}, 'quarantine')">Quarantine</button>`);
+      }
+      if (!parts.length && row.classification === "PASS") parts.push('<span class="muted">Protected</span>');
     }
-    if (allowActions && row.classification !== "PASS") {
-      parts.push(`<button onclick="runAction(${row.id}, 'detach')">Detach</button>`);
-      parts.push(`<button class="danger" onclick="runAction(${row.id}, 'quarantine')">Quarantine</button>`);
-    }
-    if (!parts.length && row.classification === "PASS") parts.push('<span class="muted">Protected</span>');
     actions = `<td class="actions">${parts.join(" ")}</td>`;
   }
   return `<tr>
@@ -227,7 +302,8 @@ function renderLiveResults(rows) {
     container.innerHTML = '<div class="empty" id="emptyResults">No results yet.</div>';
     return;
   }
-  const actionHeader = (allowActions || repairMode !== "off") ? "<th>Actions</th>" : "";
+  const hasMissing = rows.some(row => row.classification === "MISSING");
+  const actionHeader = (allowActions || repairMode !== "off" || hasMissing) ? "<th>Actions</th>" : "";
   container.innerHTML = `<div class="table-wrap"><table class="results-table">
     <thead><tr><th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th>${actionHeader}</tr></thead>
     <tbody id="resultsBody">${rows.map(resultRow).join("")}</tbody>
@@ -320,6 +396,78 @@ async function runRepair(id) {
   if (!response.ok) { alert(body.detail || "Metadata repair failed."); return; }
   alert(`Metadata repair completed and verified. Repair history ID: ${body.repair_id}`);
   window.location.reload();
+}
+
+async function detachMissing(id) {
+  const previewResponse = await fetch(`/api/results/${id}/missing-detach-preview`, {cache: "no-store"});
+  const preview = await previewResponse.json().catch(() => ({}));
+  if (!previewResponse.ok) { alert(preview.detail || "Unable to validate MISSING cleanup."); return; }
+  if (!preview.safe) { alert(preview.reason || "This MISSING association is not safe to detach."); return; }
+
+  const warning = `Detach this stale Bindery association?\n\n${preview.stored_path}\n\nBookGuard has rechecked that the physical path is absent and the exact Bindery row still matches. No physical file will be deleted or moved.`;
+  if (!confirm(warning)) return;
+
+  const response = await fetch(`/api/results/${id}/detach-missing`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({confirm: "DETACH"}),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { alert(body.detail || "MISSING cleanup failed."); return; }
+  alert(`${body.message}\nCleanup history ID: ${body.cleanup_id}\n\nRun a fresh scan when you are finished with individual cleanup.`);
+  window.location.reload();
+}
+
+async function detachAllMissing() {
+  const button = document.getElementById("detachAllMissingButton");
+  if (button) button.disabled = true;
+
+  const previewResponse = await fetch("/api/missing/preview", {cache: "no-store"});
+  const preview = await previewResponse.json().catch(() => ({}));
+  if (!previewResponse.ok) {
+    alert(preview.detail || "Unable to validate MISSING cleanup.");
+    if (button) button.disabled = false;
+    return;
+  }
+
+  if (!preview.safe_count) {
+    alert("There are no confirmed stale MISSING associations to detach.");
+    return;
+  }
+  if (preview.attention_count || preview.already_detached_count || preview.safe_count !== preview.total) {
+    alert(`Bulk cleanup refused. Safe: ${preview.safe_count}, attention: ${preview.attention_count}, already detached/stale scan: ${preview.already_detached_count}. Run a fresh scan or review the blocked items first.`);
+    if (button) button.disabled = false;
+    return;
+  }
+
+  const warning = `Detach all ${preview.safe_count} confirmed stale Bindery associations?\n\nBookGuard will perform a full preflight before the first detach and recheck each item immediately before its own detach.\n\n0 physical files will be deleted or moved.\n\nA validation scan will start automatically afterward.`;
+  if (!confirm(warning)) {
+    if (button) button.disabled = false;
+    return;
+  }
+
+  if (button) button.textContent = "Detaching…";
+  const response = await fetch("/api/missing/detach-all", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({confirm: "DETACH", scan_id: preview.scan_id}),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    alert(body.detail || "Bulk MISSING cleanup failed.");
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Detach all confirmed missing";
+    }
+    return;
+  }
+
+  alert(body.message || `Detached ${body.detached || 0} stale associations.`);
+  if (body.scan_id) {
+    pollStatus(true);
+  } else {
+    window.location.reload();
+  }
 }
 
 async function runAction(id, action) {
