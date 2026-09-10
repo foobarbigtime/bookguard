@@ -38,9 +38,20 @@ from .repair import (
     undo_metadata_repair,
 )
 from .scanner import start_scan
+from .triage import (
+    TRIAGE_CLASSES,
+    clear_keep_decision,
+    init_triage_db,
+    save_keep_decision,
+    triage_action_preview,
+    triage_detach,
+    triage_quarantine,
+    triage_state,
+    triage_summary,
+)
 
 
-app = FastAPI(title="BookGuard", version="0.4.5")
+app = FastAPI(title="BookGuard", version="0.4.6")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -48,6 +59,7 @@ templates = Jinja2Templates(directory="templates")
 @app.on_event("startup")
 def startup() -> None:
     init_local_db()
+    init_triage_db()
     settings.apply(load_persisted_settings())
     if settings.scan_on_start:
         start_scan()
@@ -159,9 +171,6 @@ def _latest_repair_candidates(limit: int = 500) -> list[dict]:
         if not summary.get("eligible") or not summary.get("safe"):
             continue
 
-        # The cheap scan-level summary is only a gate. A detailed preview reads
-        # the real file metadata and can discover that a proposed repair is a
-        # no-op. Never show those as repair candidates.
         try:
             preview = build_repair_preview(row)
         except RepairError:
@@ -235,6 +244,15 @@ def _latest_missing_cleanup() -> dict:
     }
 
 
+def _triage_item(result_id: int) -> dict:
+    item = result_by_id(result_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Result not found.")
+    if item.get("classification") not in TRIAGE_CLASSES:
+        raise HTTPException(status_code=400, detail="Only REVIEW and REJECT results can use triage.")
+    return item
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(
     request: Request,
@@ -267,6 +285,46 @@ def dashboard(
             "poll_ms": settings.dashboard_poll_ms,
             "missing_cleanup": missing_cleanup,
             "cleanup_history": recent_cleanup_actions(50) if classification == "MISSING" else [],
+            "version": app.version,
+        },
+    )
+
+
+@app.get("/triage", response_class=HTMLResponse)
+def triage_page(
+    request: Request,
+    classification: str = "REVIEW",
+    reason_code: str | None = None,
+    show_resolved: int = 0,
+):
+    classification = str(classification or "REVIEW").upper()
+    if classification not in TRIAGE_CLASSES:
+        classification = "REVIEW"
+
+    rows = latest_results(
+        classification=classification,
+        reason_code=reason_code,
+        limit=5000,
+    )
+    enriched = []
+    for row in rows:
+        state = triage_state(row)
+        if not show_resolved and state["resolved"]:
+            continue
+        enriched.append({**row, **_compact_result(row), "triage": state})
+
+    return templates.TemplateResponse(
+        request=request,
+        name="triage.html",
+        context={
+            "classification": classification,
+            "reason_code": reason_code or "",
+            "show_resolved": bool(show_resolved),
+            "summary": triage_summary(),
+            "reasons": latest_reason_counts(classification),
+            "rows": enriched,
+            "allow_actions": settings.allow_actions,
+            "cleanup_history": recent_cleanup_actions(100),
             "version": app.version,
         },
     )
@@ -352,7 +410,6 @@ async def api_save_settings(request: Request):
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid settings payload.")
 
-    # Blank API key means "keep the existing key" unless explicitly cleared.
     if payload.get("clear_api_key"):
         payload["bindery_api_key"] = ""
     elif not str(payload.get("bindery_api_key", "")).strip():
@@ -404,6 +461,131 @@ def api_undo_repair(repair_id: int):
         return undo_metadata_repair(repair_id)
     except RepairError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/triage/{result_id}/keep")
+async def api_triage_keep(result_id: int, request: Request):
+    item = _triage_item(result_id)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict) or payload.get("confirm") != "KEEP":
+        raise HTTPException(status_code=400, detail="Explicit KEEP confirmation is required.")
+    try:
+        decision_id = save_keep_decision(item)
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "ok": True,
+        "decision_id": decision_id,
+        "message": "Triage decision saved. Bindery and media files were not changed.",
+    }
+
+
+@app.post("/api/triage/keep-selected")
+async def api_triage_keep_selected(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict) or payload.get("confirm") != "KEEP":
+        raise HTTPException(status_code=400, detail="Explicit KEEP confirmation is required.")
+    ids = payload.get("ids")
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="Select at least one triage result.")
+    if len(ids) > 5000:
+        raise HTTPException(status_code=400, detail="Too many selected results.")
+
+    scan = latest_scan()
+    if not scan or scan.get("status") != "complete":
+        raise HTTPException(status_code=409, detail="A completed latest scan is required.")
+
+    items = []
+    for raw_id in ids:
+        try:
+            result_id = int(raw_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid result id in selection.")
+        item = _triage_item(result_id)
+        if item.get("scan_id") != scan["id"]:
+            raise HTTPException(status_code=409, detail="The scan changed. Refresh triage before saving selections.")
+        items.append(item)
+
+    decision_ids = []
+    try:
+        for item in items:
+            decision_ids.append(save_keep_decision(item))
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True, "saved": len(decision_ids), "decision_ids": decision_ids}
+
+
+@app.post("/api/triage/{result_id}/reopen")
+async def api_triage_reopen(result_id: int, request: Request):
+    item = _triage_item(result_id)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict) or payload.get("confirm") != "REOPEN":
+        raise HTTPException(status_code=400, detail="Explicit REOPEN confirmation is required.")
+    try:
+        removed = clear_keep_decision(item)
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True, "removed": removed}
+
+
+@app.get("/api/triage/{result_id}/action-preview")
+def api_triage_action_preview(result_id: int, action: str):
+    item = _triage_item(result_id)
+    try:
+        preview = triage_action_preview(item, action)
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"result_id": result_id, **preview}
+
+
+@app.post("/api/triage/{result_id}/detach")
+async def api_triage_detach(result_id: int, request: Request):
+    item = _triage_item(result_id)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict) or payload.get("confirm") != "DETACH":
+        raise HTTPException(status_code=400, detail="Explicit DETACH confirmation is required.")
+    try:
+        cleanup_id = triage_detach(item)
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "ok": True,
+        "cleanup_id": cleanup_id,
+        "message": "Exact Bindery association detached. The physical file was left in place.",
+    }
+
+
+@app.post("/api/triage/{result_id}/quarantine")
+async def api_triage_quarantine(result_id: int, request: Request):
+    item = _triage_item(result_id)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict) or payload.get("confirm") != "QUARANTINE":
+        raise HTTPException(status_code=400, detail="Explicit QUARANTINE confirmation is required.")
+    try:
+        cleanup_id, destination = triage_quarantine(item)
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "ok": True,
+        "cleanup_id": cleanup_id,
+        "destination": destination,
+        "message": f"Item detached from Bindery and moved to {destination}",
+    }
 
 
 @app.get("/api/results/{result_id}/missing-detach-preview")
@@ -463,7 +645,6 @@ async def api_detach_all_missing(request: Request):
     if not rows:
         return {"ok": True, "detached": 0, "cleanup_ids": [], "scan_id": None}
 
-    # Full preflight before the first mutation.
     previews = [(row, missing_detach_preview(row)) for row in rows]
     unsafe = [(row, preview) for row, preview in previews if not preview.get("safe")]
     if unsafe:
