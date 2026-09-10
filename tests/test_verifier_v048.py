@@ -140,3 +140,16 @@ def test_expected_title_author_too_far_apart_blocks_metadata_repair():
     assert verdict == "INSUFFICIENT_EVIDENCE"
     assert confidence == 70
     assert "not tightly enough" in evidence["explanation"]
+
+
+def test_short_expected_title_inside_longer_embedded_title_is_not_independent_evidence():
+    result = sample_result(title="Return", author="James Patterson")
+    text = "The Return BookShots Flames by Erin Knightley. Return James Patterson. " + ("story " * 1000)
+    verdict, confidence, evidence = classify(
+        result,
+        {"title": "The Return (BookShots Flames)", "author": "Erin Knightley"},
+        text,
+    )
+    assert verdict == "INSUFFICIENT_EVIDENCE"
+    assert confidence == 70
+    assert "shorter phrase" in evidence["explanation"]
