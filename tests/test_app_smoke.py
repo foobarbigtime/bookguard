@@ -1,10 +1,10 @@
-from app.main import app
+import app.main as main
 from app.config import Settings
 
 
 def test_app_imports():
-    assert app.title == "BookGuard"
-    assert app.version == "0.4.3"
+    assert main.app.title == "BookGuard"
+    assert main.app.version == "0.4.4"
 
 
 def test_settings_clamp_and_lists():
@@ -36,3 +36,50 @@ def test_invalid_repair_mode_is_ignored():
     original = cfg.metadata_repair_mode
     cfg.apply({"metadata_repair_mode": "dangerous"})
     assert cfg.metadata_repair_mode == original
+
+
+def test_repairs_page_excludes_full_preview_noop(monkeypatch):
+    row = {
+        "id": 1,
+        "risk_score": 5,
+        "classification": "PASS",
+        "reason_code": "MATCH",
+        "author": "Stephen King",
+        "title": "Full Dark, No Stars",
+        "format": "audiobook",
+        "reasons": ["Match"],
+        "stored_path": "/data/media/audiobooks/Stephen King/Full Dark, No Stars",
+        "local_path": "/audiobooks/Stephen King/Full Dark, No Stars",
+        "metadata": {
+            "detected_title": "Full Dark, No Stars",
+            "detected_author": "Stephen King",
+            "detected_genre": "Audiobook",
+        },
+    }
+
+    monkeypatch.setattr(main.settings, "metadata_repair_mode", "preview")
+    monkeypatch.setattr(main, "latest_results", lambda limit=10000: [row])
+    monkeypatch.setattr(
+        main,
+        "repair_candidate_summary",
+        lambda result: {
+            "eligible": True,
+            "safe": True,
+            "kind": "AUDIO_TAGS",
+            "reason": "Potential scan-level repair.",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "build_repair_preview",
+        lambda result: {
+            "eligible": False,
+            "safe": False,
+            "kind": "AUDIO_TAGS",
+            "reason": "0 of 1 audio file(s) would change.",
+            "before": {},
+            "after": {},
+        },
+    )
+
+    assert main._latest_repair_candidates() == []
