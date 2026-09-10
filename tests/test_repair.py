@@ -4,7 +4,12 @@ import zipfile
 from app.config import Settings, settings
 from app.db import init_local_db, metadata_repair_by_id
 from app.metadata import ebook_metadata
-from app.repair import apply_metadata_repair, build_repair_preview, undo_metadata_repair
+from app.repair import (
+    apply_metadata_repair,
+    build_repair_preview,
+    repair_candidate_summary,
+    undo_metadata_repair,
+)
 
 
 def _reset_settings():
@@ -90,3 +95,57 @@ def test_swapped_epub_safe_repair_and_undo(tmp_path):
     assert restored["title"] == "Patchett, Ann"
     assert restored["author"] == "Bel Canto"
     assert metadata_repair_by_id(repair_id)["status"] == "undone"
+
+
+def test_loose_title_overlap_is_not_safe_to_repair(tmp_path):
+    epub = tmp_path / "karens-baby.epub"
+    _make_epub(epub, "Karen's Doll Hospital", "Ann M. Martin")
+    settings.metadata_repair_mode = "preview"
+
+    result = {
+        "id": 201,
+        "scan_id": "scan-test",
+        "file_id": 202,
+        "book_id": 303,
+        "author": "Ann M. Martin",
+        "title": "Karen's Baby (Baby-Sitters Little Sister: Super Special #5)",
+        "format": "ebook",
+        "stored_path": "/data/media/books/Ann M. Martin/Karen's Baby/book.epub",
+        "local_path": str(epub),
+        "classification": "PASS",
+        "risk_score": 5,
+        "reason_code": "MATCH",
+        "reasons": ["Loose scan match"],
+        "metadata": {"title": "Karen's Doll Hospital", "author": "Ann M. Martin", "source": "epub"},
+    }
+
+    summary = repair_candidate_summary(result)
+    assert summary["eligible"] is False
+    assert summary["safe"] is False
+
+
+def test_article_only_title_difference_can_still_be_repaired(tmp_path):
+    epub = tmp_path / "treehouse.epub"
+    _make_epub(epub, "The 52-Storey Treehouse", "Andy Griffiths")
+    settings.metadata_repair_mode = "preview"
+
+    result = {
+        "id": 301,
+        "scan_id": "scan-test",
+        "file_id": 302,
+        "book_id": 303,
+        "author": "Andy Griffiths",
+        "title": "52-Storey Treehouse",
+        "format": "ebook",
+        "stored_path": "/data/media/books/Andy Griffiths/52-Storey Treehouse/book.epub",
+        "local_path": str(epub),
+        "classification": "PASS",
+        "risk_score": 5,
+        "reason_code": "MATCH",
+        "reasons": ["Strict title identity"],
+        "metadata": {"title": "The 52-Storey Treehouse", "author": "Andy Griffiths", "source": "epub"},
+    }
+
+    summary = repair_candidate_summary(result)
+    assert summary["eligible"] is True
+    assert summary["safe"] is True
