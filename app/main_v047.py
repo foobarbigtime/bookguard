@@ -4,7 +4,7 @@ from fastapi import HTTPException, Request
 
 from .config import settings
 from .main import app
-from .db import latest_scan, result_by_id
+from .db import latest_results, latest_scan, result_by_id
 from .repair import RepairError
 from .verifier import (
     apply_verified_metadata_repair,
@@ -45,6 +45,24 @@ def api_verification_status():
         "job": verification_job_status(),
         "summary": verification_summary(),
     }
+
+
+@app.get("/api/verification/cached")
+def api_verification_cached(classification: str = "REVIEW", reason_code: str | None = None):
+    classification = str(classification or "REVIEW").upper()
+    if classification not in {"REVIEW", "REJECT"}:
+        raise HTTPException(status_code=400, detail="Use REVIEW or REJECT.")
+    rows = latest_results(
+        classification=classification,
+        reason_code=(str(reason_code).strip() if reason_code else None),
+        limit=10000,
+    )
+    items = {}
+    for row in rows:
+        verification = verification_for_result(row)
+        if verification:
+            items[str(row["id"])] = verification
+    return {"classification": classification, "items": items}
 
 
 @app.post("/api/verification/start")
