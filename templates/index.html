@@ -134,24 +134,26 @@
         <table class="results-table">
           <thead>
             <tr>
-              <th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th>
+              <th>Status</th><th>Expected</th><th>Detected</th><th>Why</th><th>Path</th>
               {% if allow_actions or repair_mode != 'off' or classification == 'MISSING' %}<th>Actions</th>{% endif %}
             </tr>
           </thead>
           <tbody id="resultsBody">
             {% for row in results %}
             <tr>
-              <td><strong>{{ row.risk_score }}</strong></td>
-              <td><span class="pill {{ row.classification|lower }}">{{ row.classification }}</span></td>
-              <td><span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_', ' ') }}</span></td>
+              <td class="status-cell">
+                <strong>Risk {{ row.risk_score }}</strong>
+                <span class="pill {{ row.classification|lower }}">{{ row.classification }}</span>
+                <span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_', ' ') }}</span>
+                <small>{{ row.format }}</small>
+              </td>
               <td class="book-cell"><strong>{{ row.title }}</strong><small>{{ row.author }}</small></td>
               <td class="book-cell detected-cell">
                 <strong>{{ row.detected_title or "—" }}</strong>
                 <small>{{ row.detected_author or "No detected author" }}</small>
                 {% if row.detected_genre %}<small class="genre">{{ row.detected_genre }}</small>{% endif %}
               </td>
-              <td>{{ row.format }}</td>
-              <td>{{ row.reasons|join(" ") }}</td>
+              <td class="why-cell">{{ row.reasons|join(" ") }}</td>
               <td class="path">{{ row.stored_path }}</td>
               {% if allow_actions or repair_mode != 'off' or row.classification == 'MISSING' %}
               <td class="actions">
@@ -271,13 +273,10 @@ function resultRow(row) {
     actions = `<td class="actions">${parts.join(" ")}</td>`;
   }
   return `<tr>
-    <td><strong>${escapeHtml(row.risk_score)}</strong></td>
-    <td><span class="pill ${escapeHtml(row.classification.toLowerCase())}">${escapeHtml(row.classification)}</span></td>
-    <td><span class="reason-badge reason-${escapeHtml(code.toLowerCase())}">${escapeHtml(reasonLabel(code))}</span></td>
+    <td class="status-cell"><strong>Risk ${escapeHtml(row.risk_score)}</strong><span class="pill ${escapeHtml(row.classification.toLowerCase())}">${escapeHtml(row.classification)}</span><span class="reason-badge reason-${escapeHtml(code.toLowerCase())}">${escapeHtml(reasonLabel(code))}</span><small>${escapeHtml(row.format)}</small></td>
     <td class="book-cell"><strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.author)}</small></td>
     <td class="book-cell detected-cell"><strong>${escapeHtml(detectedTitle)}</strong><small>${escapeHtml(detectedAuthor)}</small>${genre}</td>
-    <td>${escapeHtml(row.format)}</td>
-    <td>${escapeHtml(reasons)}</td>
+    <td class="why-cell">${escapeHtml(reasons)}</td>
     <td class="path">${escapeHtml(row.stored_path)}</td>
     ${actions}
   </tr>`;
@@ -306,7 +305,7 @@ function renderLiveResults(rows) {
   const hasMissing = rows.some(row => row.classification === "MISSING");
   const actionHeader = (allowActions || repairMode !== "off" || hasMissing) ? "<th>Actions</th>" : "";
   container.innerHTML = `<div class="table-wrap"><table class="results-table">
-    <thead><tr><th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th>${actionHeader}</tr></thead>
+    <thead><tr><th>Status</th><th>Expected</th><th>Detected</th><th>Why</th><th>Path</th>${actionHeader}</tr></thead>
     <tbody id="resultsBody">${rows.map(resultRow).join("")}</tbody>
   </table></div>`;
 }
