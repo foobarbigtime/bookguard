@@ -6,12 +6,13 @@ from app.config import Settings
 
 def test_app_imports():
     assert main.app.title == "BookGuard"
-    assert main.app.version == "0.4.5"
+    assert main.app.version == "0.4.6"
 
 
-def test_index_template_parses():
+def test_templates_parse():
     env = Environment(loader=FileSystemLoader("templates"))
     env.get_template("index.html")
+    env.get_template("triage.html")
 
 
 def test_settings_clamp_and_lists():
