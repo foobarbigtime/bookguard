@@ -73,17 +73,21 @@ button:disabled { opacity: .5; cursor: default; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .table-wrap { overflow: auto; border-top: 1px solid var(--border); }
 table { width: 100%; border-collapse: collapse; min-width: 900px; }
-.results-table { min-width: 1120px; }
-.triage-table { min-width: 1240px !important; }
+.results-table { min-width: 1060px; }
+.triage-table { min-width: 1160px !important; }
 th, td { padding: .62rem .65rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 th { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; background: #111820; position: sticky; top: 0; }
 td { font-size: .86rem; }
-.path { max-width: 230px; word-break: break-word; color: var(--muted); font-size: .78rem; }
-.book-cell { min-width: 150px; max-width: 230px; }
+.path { width: 20%; min-width: 190px; max-width: 300px; overflow-wrap: anywhere; color: var(--muted); font-size: .78rem; }
+.book-cell { min-width: 160px; max-width: 240px; }
 .book-cell strong { display: block; font-weight: 650; }
 .book-cell small { margin-top: .25rem; }
 .detected-cell { background: rgba(40,103,178,.035); }
 .detected-cell .genre { margin-top: .25rem; font-size: .72rem; color: #8eb9df; }
+.status-cell { min-width: 120px; width: 120px; }
+.status-cell .pill, .status-cell .reason-badge { display: inline-block; margin: 0 .25rem .28rem 0; }
+.status-cell small { margin-top: .15rem; }
+.why-cell { min-width: 190px; width: 22%; }
 .pill { display: inline-block; border-radius: 999px; padding: .2rem .5rem; font-size: .72rem; font-weight: 700; }
 .pill.pass { background: rgba(56,178,111,.16); color: #83d5a5; }
 .pill.review { background: rgba(214,163,59,.16); color: #edc66e; }
@@ -95,7 +99,7 @@ td { font-size: .86rem; }
 .reason-badge.reason-strong_mismatch, .reason-badge.reason-music_mismatch, .reason-badge.reason-missing { background: rgba(224,93,93,.15); color: #f18b8b; }
 .actions { white-space: normal; min-width: 135px; }
 .actions button { margin: .12rem .18rem .12rem 0; padding: .48rem .62rem; font-size: .8rem; }
-.triage-actions { min-width: 220px !important; }
+.triage-actions { min-width: 190px !important; }
 .muted { color: var(--muted); }
 .empty { padding: 2rem; color: var(--muted); text-align: center; }
 
