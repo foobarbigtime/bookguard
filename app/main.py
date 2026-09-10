@@ -33,7 +33,7 @@ from .repair import (
 from .scanner import start_scan
 
 
-app = FastAPI(title="BookGuard", version="0.4.1")
+app = FastAPI(title="BookGuard", version="0.4.2")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
