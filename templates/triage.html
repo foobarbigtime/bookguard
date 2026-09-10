@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard Triage</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .triage-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:1rem; margin-bottom:1rem; }
+    .triage-summary a { text-decoration:none; }
+    .triage-card { border:1px solid var(--border); background:var(--panel); border-radius:.8rem; padding:1rem; }
+    .triage-card.active { border-color:#65788d; }
+    .triage-card strong { display:block; font-size:1.35rem; margin:.2rem 0; }
+    .triage-card .split { display:flex; gap:1rem; margin-top:.55rem; color:var(--muted); font-size:.82rem; }
+    .triage-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem; padding:1rem; border-bottom:1px solid var(--border); }
+    .triage-toolbar .spacer { flex:1; }
+    .triage-table { min-width:1500px; }
+    .triage-resolution { font-weight:700; }
+    .triage-resolution.keep { color:#83d5a5; }
+    .triage-resolution.detached, .triage-resolution.quarantined { color:#9fc8ec; }
+    .triage-actions { display:flex; flex-wrap:wrap; gap:.35rem; min-width:300px; }
+    .keep-button { background:rgba(56,178,111,.16); border-color:rgba(56,178,111,.55); color:#a6e3bc; }
+    .detach-button { background:rgba(40,103,178,.12); border-color:rgba(57,120,195,.5); color:#bad8f6; }
+    .filter-row { border:1px solid var(--border); background:var(--panel); border-radius:.8rem; margin-bottom:1rem; overflow:hidden; }
+    .filter-row .reason-chips { border-top:1px solid var(--border); }
+    .resolved-row { opacity:.7; }
+    .checkbox-cell { width:44px; }
+    .triage-note { margin-bottom:1rem; }
+    @media (max-width:700px) { .triage-toolbar { align-items:flex-start; } }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div><h1>BookGuard</h1><p>REVIEW and REJECT triage</p></div>
+    <span class="version">v{{ version }}</span>
+  </div>
+  <nav class="topnav">
+    <a class="nav-link" href="/">Dashboard</a>
+    <a class="nav-link active" href="/triage">Triage</a>
+    <a class="nav-link" href="/repairs">Repairs</a>
+    <a class="nav-link" href="/settings">Settings</a>
+  </nav>
+</header>
+
+<main>
+  <section class="triage-summary">
+    {% for kind in ["REVIEW", "REJECT"] %}
+      <a class="triage-card {% if classification == kind %}active{% endif %}" href="/triage?classification={{ kind }}">
+        <span class="label">{{ kind }}</span>
+        <strong>{{ summary[kind].open }} open</strong>
+        <div class="split">
+          <span>{{ summary[kind].total }} total</span>
+          <span>{{ summary[kind].resolved }} resolved</span>
+        </div>
+      </a>
+    {% endfor %}
+    <div class="triage-card">
+      <span class="label">Bindery actions</span>
+      <strong>{{ "Enabled" if allow_actions else "Audit only" }}</strong>
+      <small>
+        {% if allow_actions %}
+          Detach and quarantine are available after per-item safety checks.
+        {% else %}
+          Keep/review decisions work now. Enable Bindery actions in Settings for detach or quarantine.
+        {% endif %}
+      </small>
+    </div>
+  </section>
+
+  <div class="notice info triage-note">
+    <strong>How triage works:</strong>
+    “Reviewed / keep” is a BookGuard-only decision and never changes Bindery or a media file. It remains resolved across future scans only while the classification, reason, expected identity, path and detected metadata remain unchanged. If any of those change, the item automatically reopens.
+  </div>
+
+  <section class="filter-row">
+    <div class="triage-toolbar">
+      <strong>{{ classification }}</strong>
+      <a class="button-link" href="/triage?classification={{ classification }}&show_resolved={{ 0 if show_resolved else 1 }}{% if reason_code %}&reason_code={{ reason_code }}{% endif %}">
+        {{ "Hide resolved" if show_resolved else "Show resolved" }}
+      </a>
+      {% if reason_code %}<a class="button-link" href="/triage?classification={{ classification }}{% if show_resolved %}&show_resolved=1{% endif %}">Clear reason filter</a>{% endif %}
+      <span class="spacer"></span>
+      <label class="check-field"><input id="selectAll" type="checkbox"><span>Select visible</span></label>
+      <button id="keepSelectedButton" class="keep-button" onclick="keepSelected()">Reviewed / keep selected</button>
+    </div>
+    <div class="reason-chips">
+      {% for code, count in reasons.items() %}
+        <a class="reason-chip reason-{{ code|lower }} {% if reason_code == code %}active{% endif %}"
+           href="/triage?classification={{ classification }}&reason_code={{ code }}{% if show_resolved %}&show_resolved=1{% endif %}">
+          <span>{{ code|replace('_',' ') }}</span><strong>{{ count }}</strong>
+        </a>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="table-card">
+    <div class="section-title row-between">
+      <div>
+        <h2>{{ classification }} workflow{% if reason_code %} · {{ reason_code|replace('_',' ') }}{% endif %}</h2>
+        <p>{{ rows|length }} item{{ '' if rows|length == 1 else 's' }} shown. Destructive actions are intentionally per-item; bulk marking as reviewed is local-only.</p>
+      </div>
+    </div>
+
+    {% if rows %}
+    <div class="table-wrap">
+      <table class="results-table triage-table">
+        <thead>
+          <tr>
+            <th class="checkbox-cell"></th>
+            <th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th><th>Workflow</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in rows %}
+          <tr class="{% if row.triage.resolved %}resolved-row{% endif %}">
+            <td class="checkbox-cell">
+              {% if not row.triage.resolved %}<input class="triage-select" type="checkbox" value="{{ row.id }}">{% endif %}
+            </td>
+            <td><strong>{{ row.risk_score }}</strong></td>
+            <td><span class="pill {{ row.classification|lower }}">{{ row.classification }}</span></td>
+            <td><span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_',' ') }}</span></td>
+            <td class="book-cell"><strong>{{ row.title }}</strong><small>{{ row.author }}</small></td>
+            <td class="book-cell detected-cell">
+              <strong>{{ row.detected_title or '—' }}</strong>
+              <small>{{ row.detected_author or 'No detected author' }}</small>
+              {% if row.detected_genre %}<small class="genre">{{ row.detected_genre }}</small>{% endif %}
+            </td>
+            <td>{{ row.format }}</td>
+            <td>{{ row.reasons|join(' ') }}</td>
+            <td class="path">{{ row.stored_path }}</td>
+            <td class="triage-actions">
+              {% if row.triage.resolved %}
+                <span class="triage-resolution {{ row.triage.resolution|lower }}">{{ row.triage.resolution|replace('_',' ') }}</span>
+                {% if row.triage.resolution == 'KEEP' %}
+                  <button onclick="reopenItem({{ row.id }})">Reopen</button>
+                {% endif %}
+              {% else %}
+                <button class="keep-button" onclick="keepItem({{ row.id }})">
+                  {{ 'False positive / keep' if row.classification == 'REJECT' else 'Reviewed / keep' }}
+                </button>
+                {% if allow_actions %}
+                  <button class="detach-button" onclick="triageAction({{ row.id }}, 'detach')">Detach association</button>
+                  <button class="danger" onclick="triageAction({{ row.id }}, 'quarantine')">Quarantine</button>
+                {% else %}
+                  <span class="muted">Enable actions for detach/quarantine</span>
+                {% endif %}
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="empty">No open {{ classification }} items match this view.</div>
+    {% endif %}
+  </section>
+
+  {% if cleanup_history %}
+  <section class="table-card" style="margin-top:1rem">
+    <div class="section-title"><h2>Triage action history</h2><p>Recent detach/quarantine operations performed through BookGuard.</p></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Status</th><th>Action</th><th>Book</th><th>Completed</th><th>Error</th></tr></thead>
+        <tbody>
+        {% for action in cleanup_history %}
+          {% if action.action_kind in ['TRIAGE_DETACH','TRIAGE_QUARANTINE'] %}
+          <tr>
+            <td>#{{ action.id }}</td>
+            <td>{{ action.status }}</td>
+            <td>{{ action.action_kind|replace('_',' ') }}</td>
+            <td class="book-cell"><strong>{{ action.title }}</strong><small>{{ action.author }}</small></td>
+            <td>{{ action.completed_at or '—' }}</td>
+            <td>{{ action.error or '—' }}</td>
+          </tr>
+          {% endif %}
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+</main>
+
+<script>
+const classification = {{ classification|tojson }};
+
+function checkedIds() {
+  return Array.from(document.querySelectorAll('.triage-select:checked')).map(el => Number(el.value));
+}
+
+const selectAll = document.getElementById('selectAll');
+if (selectAll) {
+  selectAll.addEventListener('change', () => {
+    document.querySelectorAll('.triage-select').forEach(el => { el.checked = selectAll.checked; });
+  });
+}
+
+async function keepItem(id) {
+  const wording = classification === 'REJECT'
+    ? 'Mark this REJECT as a reviewed false positive and keep it? This changes only BookGuard triage state.'
+    : 'Mark this REVIEW as reviewed and keep it? This changes only BookGuard triage state.';
+  if (!confirm(wording)) return;
+  const response = await fetch(`/api/triage/${id}/keep`, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({confirm:'KEEP'})
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { alert(body.detail || 'Unable to save triage decision.'); return; }
+  window.location.reload();
+}
+
+async function keepSelected() {
+  const ids = checkedIds();
+  if (!ids.length) { alert('Select at least one open item first.'); return; }
+  if (!confirm(`Mark ${ids.length} selected item(s) as reviewed / keep?\n\nThis is BookGuard-only and does not change Bindery or media files.`)) return;
+  const response = await fetch('/api/triage/keep-selected', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({confirm:'KEEP', ids})
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { alert(body.detail || 'Bulk triage update failed.'); return; }
+  alert(`Marked ${body.saved} item(s) reviewed / keep.`);
+  window.location.reload();
+}
+
+async function reopenItem(id) {
+  if (!confirm('Reopen this BookGuard triage decision? No Bindery or media data will be changed.')) return;
+  const response = await fetch(`/api/triage/${id}/reopen`, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({confirm:'REOPEN'})
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { alert(body.detail || 'Unable to reopen triage item.'); return; }
+  window.location.reload();
+}
+
+async function triageAction(id, action) {
+  const previewResponse = await fetch(`/api/triage/${id}/action-preview?action=${encodeURIComponent(action)}`, {cache:'no-store'});
+  const preview = await previewResponse.json().catch(() => ({}));
+  if (!previewResponse.ok) { alert(preview.detail || 'Unable to validate action.'); return; }
+  if (!preview.safe) { alert(preview.reason || 'Safety check failed.'); return; }
+
+  let warning;
+  let confirmWord;
+  if (action === 'detach') {
+    confirmWord = 'DETACH';
+    warning = `Detach this exact Bindery association?\n\n${preview.stored_path}\n\nThe physical file will remain where it is. BookGuard will recheck the association immediately before the detach.`;
+  } else {
+    confirmWord = 'QUARANTINE';
+    warning = `Quarantine this item?\n\n${preview.local_path}\n\nBookGuard will detach the exact Bindery association and move the physical file/folder to quarantine. It will refuse before detaching if the media mount is read-only.`;
+  }
+  if (!confirm(warning)) return;
+
+  const response = await fetch(`/api/triage/${id}/${action}`, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({confirm:confirmWord})
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { alert(body.detail || 'Triage action failed.'); return; }
+  alert(body.message || 'Action completed.');
+  window.location.reload();
+}
+</script>
+</body>
+</html>
