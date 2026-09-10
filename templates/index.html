@@ -170,7 +170,7 @@
                   {% if allow_actions and row.classification != "PASS" %}
                     <button onclick="runAction({{ row.id }}, 'detach')">Detach association</button>
                     <button class="danger" onclick="runAction({{ row.id }}, 'quarantine')">Quarantine item</button>
-                  {% elif not row.repair.eligible and row.classification == "PASS" %}<span class="muted">Protected</span>{% endif %}
+                  {% elif not row.repair.eligible and row.classification == "PASS" %}<span class="muted">No action needed</span>{% endif %}
                 {% endif %}
               </td>
               {% endif %}
@@ -268,7 +268,7 @@ function resultRow(row) {
         parts.push(`<button onclick="runAction(${row.id}, 'detach')">Detach association</button>`);
         parts.push(`<button class="danger" onclick="runAction(${row.id}, 'quarantine')">Quarantine item</button>`);
       }
-      if (!parts.length && row.classification === "PASS") parts.push('<span class="muted">Protected</span>');
+      if (!parts.length && row.classification === "PASS") parts.push('<span class="muted">No action needed</span>');
     }
     actions = `<td class="actions">${parts.join(" ")}</td>`;
   }
