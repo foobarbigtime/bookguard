@@ -19,8 +19,8 @@ from .db import (
 from .matcher import (
     author_match_strict,
     author_mentioned_in_text,
+    meaningful_words,
     normalize,
-    title_match,
 )
 from .metadata import AUDIO_EXTENSIONS, ebook_metadata
 
@@ -45,6 +45,19 @@ def _first(value) -> str:
 
 def _same_text(left: str | None, right: str | None) -> bool:
     return normalize(left) == normalize(right)
+
+
+def _repair_title_equivalent(expected: str | None, observed: str | None) -> bool:
+    """Much stricter than scan matching: safe repair requires the same title identity."""
+    e = normalize(expected)
+    o = normalize(observed)
+    if not e or not o:
+        return False
+    if e == o:
+        return True
+    ew = meaningful_words(expected)
+    ow = meaningful_words(observed)
+    return bool(ew) and ew == ow
 
 
 def _resolve_ebook_target(local_path: str) -> str:
@@ -83,7 +96,7 @@ def _audio_summary_safe(result: dict) -> bool:
     metadata = result.get("metadata") or {}
     detected_title = str(metadata.get("detected_title") or "")
     detected_author = str(metadata.get("detected_author") or "")
-    if not title_match(result["title"], detected_title):
+    if not _repair_title_equivalent(result["title"], detected_title):
         return False
     if author_match_strict(result["author"], detected_author):
         return True
@@ -155,7 +168,7 @@ def repair_candidate_summary(result: dict) -> dict:
         }
 
     if result.get("classification") == "PASS" and settings.repair_normalize_pass:
-        safe_identity = title_match(result["title"], current_title) and author_match_strict(
+        safe_identity = _repair_title_equivalent(result["title"], current_title) and author_match_strict(
             result["author"], current_author
         )
         needs_change = safe_identity and (
