@@ -19,7 +19,7 @@ from .verifier_v048_final import (
 )
 
 
-app.version = "0.4.8"
+app.version = "0.4.9"
 
 
 @app.on_event("startup")

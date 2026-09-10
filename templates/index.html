@@ -17,9 +17,10 @@
     </div>
     <nav class="topnav">
       <a class="nav-link active" href="/">Dashboard</a>
+      <a class="nav-link" href="/triage">Triage</a>
       <a class="nav-link" href="/repairs">Repairs</a>
       <a class="nav-link" href="/settings">Settings</a>
-      <button id="scanButton" class="primary">Run scan</button>
+      <button id="scanButton" class="primary">Scan library</button>
     </nav>
   </header>
 
@@ -133,24 +134,26 @@
         <table class="results-table">
           <thead>
             <tr>
-              <th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th>
+              <th>Status</th><th>Expected</th><th>Detected</th><th>Why</th><th>Path</th>
               {% if allow_actions or repair_mode != 'off' or classification == 'MISSING' %}<th>Actions</th>{% endif %}
             </tr>
           </thead>
           <tbody id="resultsBody">
             {% for row in results %}
             <tr>
-              <td><strong>{{ row.risk_score }}</strong></td>
-              <td><span class="pill {{ row.classification|lower }}">{{ row.classification }}</span></td>
-              <td><span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_', ' ') }}</span></td>
+              <td class="status-cell">
+                <strong>Risk {{ row.risk_score }}</strong>
+                <span class="pill {{ row.classification|lower }}">{{ row.classification }}</span>
+                <span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_', ' ') }}</span>
+                <small>{{ row.format }}</small>
+              </td>
               <td class="book-cell"><strong>{{ row.title }}</strong><small>{{ row.author }}</small></td>
               <td class="book-cell detected-cell">
                 <strong>{{ row.detected_title or "—" }}</strong>
                 <small>{{ row.detected_author or "No detected author" }}</small>
                 {% if row.detected_genre %}<small class="genre">{{ row.detected_genre }}</small>{% endif %}
               </td>
-              <td>{{ row.format }}</td>
-              <td>{{ row.reasons|join(" ") }}</td>
+              <td class="why-cell">{{ row.reasons|join(" ") }}</td>
               <td class="path">{{ row.stored_path }}</td>
               {% if allow_actions or repair_mode != 'off' or row.classification == 'MISSING' %}
               <td class="actions">
@@ -162,12 +165,12 @@
                   {% endif %}
                 {% else %}
                   {% if row.repair.eligible and repair_mode != 'off' %}
-                    <button class="repair-button" onclick="runRepair({{ row.id }})">{{ 'Repair' if repair_mode == 'safe' else 'Preview repair' }}</button>
+                    <button class="repair-button" onclick="runRepair({{ row.id }})">{{ 'Apply repair' if repair_mode == 'safe' else 'Preview repair' }}</button>
                   {% endif %}
                   {% if allow_actions and row.classification != "PASS" %}
-                    <button onclick="runAction({{ row.id }}, 'detach')">Detach</button>
-                    <button class="danger" onclick="runAction({{ row.id }}, 'quarantine')">Quarantine</button>
-                  {% elif not row.repair.eligible and row.classification == "PASS" %}<span class="muted">Protected</span>{% endif %}
+                    <button onclick="runAction({{ row.id }}, 'detach')">Detach association</button>
+                    <button class="danger" onclick="runAction({{ row.id }}, 'quarantine')">Quarantine item</button>
+                  {% elif not row.repair.eligible and row.classification == "PASS" %}<span class="muted">No action needed</span>{% endif %}
                 {% endif %}
               </td>
               {% endif %}
@@ -259,24 +262,21 @@ function resultRow(row) {
       }
     } else {
       if (repairMode !== "off" && row.repair && row.repair.eligible) {
-        parts.push(`<button class="repair-button" onclick="runRepair(${row.id})">${repairMode === "safe" ? "Repair" : "Preview repair"}</button>`);
+        parts.push(`<button class="repair-button" onclick="runRepair(${row.id})">${repairMode === "safe" ? "Apply repair" : "Preview repair"}</button>`);
       }
       if (allowActions && row.classification !== "PASS") {
-        parts.push(`<button onclick="runAction(${row.id}, 'detach')">Detach</button>`);
-        parts.push(`<button class="danger" onclick="runAction(${row.id}, 'quarantine')">Quarantine</button>`);
+        parts.push(`<button onclick="runAction(${row.id}, 'detach')">Detach association</button>`);
+        parts.push(`<button class="danger" onclick="runAction(${row.id}, 'quarantine')">Quarantine item</button>`);
       }
-      if (!parts.length && row.classification === "PASS") parts.push('<span class="muted">Protected</span>');
+      if (!parts.length && row.classification === "PASS") parts.push('<span class="muted">No action needed</span>');
     }
     actions = `<td class="actions">${parts.join(" ")}</td>`;
   }
   return `<tr>
-    <td><strong>${escapeHtml(row.risk_score)}</strong></td>
-    <td><span class="pill ${escapeHtml(row.classification.toLowerCase())}">${escapeHtml(row.classification)}</span></td>
-    <td><span class="reason-badge reason-${escapeHtml(code.toLowerCase())}">${escapeHtml(reasonLabel(code))}</span></td>
+    <td class="status-cell"><strong>Risk ${escapeHtml(row.risk_score)}</strong><span class="pill ${escapeHtml(row.classification.toLowerCase())}">${escapeHtml(row.classification)}</span><span class="reason-badge reason-${escapeHtml(code.toLowerCase())}">${escapeHtml(reasonLabel(code))}</span><small>${escapeHtml(row.format)}</small></td>
     <td class="book-cell"><strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.author)}</small></td>
     <td class="book-cell detected-cell"><strong>${escapeHtml(detectedTitle)}</strong><small>${escapeHtml(detectedAuthor)}</small>${genre}</td>
-    <td>${escapeHtml(row.format)}</td>
-    <td>${escapeHtml(reasons)}</td>
+    <td class="why-cell">${escapeHtml(reasons)}</td>
     <td class="path">${escapeHtml(row.stored_path)}</td>
     ${actions}
   </tr>`;
@@ -305,7 +305,7 @@ function renderLiveResults(rows) {
   const hasMissing = rows.some(row => row.classification === "MISSING");
   const actionHeader = (allowActions || repairMode !== "off" || hasMissing) ? "<th>Actions</th>" : "";
   container.innerHTML = `<div class="table-wrap"><table class="results-table">
-    <thead><tr><th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th>${actionHeader}</tr></thead>
+    <thead><tr><th>Status</th><th>Expected</th><th>Detected</th><th>Why</th><th>Path</th>${actionHeader}</tr></thead>
     <tbody id="resultsBody">${rows.map(resultRow).join("")}</tbody>
   </table></div>`;
 }
@@ -318,7 +318,7 @@ async function startScan() {
     const body = await response.json().catch(() => ({}));
     alert(body.detail || "Unable to start scan.");
     scanButton.disabled = false;
-    scanButton.textContent = "Run scan";
+    scanButton.textContent = "Scan library";
     return;
   }
   pollStatus(true);
@@ -357,7 +357,7 @@ async function pollStatus(reloadWhenDone=false) {
     setTimeout(() => pollStatus(true), body.poll_ms || defaultPollMs);
   } else {
     scanButton.disabled = false;
-    scanButton.textContent = "Run scan";
+    scanButton.textContent = "Scan library";
     if (reloadWhenDone) window.location.reload();
   }
 }

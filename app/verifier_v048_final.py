@@ -59,6 +59,41 @@ def _classify_identity(
     return verdict, confidence, evidence
 
 
+def verification_summary() -> dict:
+    """Return one current summary verdict per result from the latest scan.
+
+    Older verifier generations remain in the audit cache, but they must not be
+    added together in the UI summary. The most recently updated verification for
+    each result is the current operational state for that item.
+    """
+    refined.init_verification_db()
+    scan = legacy.latest_scan()
+    if not scan:
+        return {}
+    scan_id = scan.get("id")
+    if not scan_id:
+        return {}
+    with legacy.local_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT cv.verdict, COUNT(*) AS n
+            FROM content_verifications AS cv
+            WHERE cv.scan_id = ?
+              AND cv.id = (
+                  SELECT cv2.id
+                  FROM content_verifications AS cv2
+                  WHERE cv2.scan_id = cv.scan_id
+                    AND cv2.result_id = cv.result_id
+                  ORDER BY cv2.updated_at DESC, cv2.id DESC
+                  LIMIT 1
+              )
+            GROUP BY cv.verdict
+            """,
+            (scan_id,),
+        ).fetchall()
+    return {str(row["verdict"]): int(row["n"]) for row in rows}
+
+
 # Make the extraction path and legacy background/repair machinery use the final
 # classifier and cache generation.
 refined.base._classify_identity = _classify_identity
@@ -67,7 +102,6 @@ legacy.verify_result = refined.base.verify_result
 verify_result = refined.base.verify_result
 init_verification_db = refined.init_verification_db
 verification_for_result = refined.verification_for_result
-verification_summary = refined.verification_summary
 verification_job_status = refined.verification_job_status
 start_verification_job = refined.start_verification_job
 test_tika = refined.test_tika

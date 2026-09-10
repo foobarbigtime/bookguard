@@ -80,7 +80,7 @@
               <td>{{ row.repair_kind|replace('_',' ') }}</td>
               <td>{{ row.format }}</td>
               <td class="path">{{ row.stored_path }}</td>
-              <td>{{ row.created_at }}</td>
+              <td title="{{ row.created_at }}">{{ row.created_at[:16]|replace('T', ' ') }}</td>
               <td>{{ row.error or '—' }}</td>
               <td class="actions">
                 {% if row.status == 'applied' and repair_mode == 'safe' %}

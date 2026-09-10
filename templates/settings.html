@@ -9,7 +9,7 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <div><h1>BookGuard</h1><p>Configuration</p></div>
+      <div><h1>BookGuard</h1><p>Setup &amp; safety</p></div>
       <span class="version">v{{ version }}</span>
     </div>
     <nav class="topnav">
@@ -26,8 +26,8 @@
     {% endif %}
 
     <div class="settings-header">
-      <div><h2>Settings</h2><p>Changes are stored in <code>{{ config_dir }}/bookguard.db</code> and override environment defaults.</p></div>
-      <div class="settings-actions"><button id="resetButton">Reset to environment defaults</button><button id="saveButton" class="primary">Save settings</button></div>
+      <div><h2>Settings</h2><p>Connection and library paths are the important setup items. Most matching and repair options can stay at their defaults.</p></div>
+      <div class="settings-actions"><button id="resetButton">Reset to defaults</button><button id="saveButton" class="primary">Save settings</button></div>
     </div>
 
     <form id="settingsForm" autocomplete="off">
@@ -91,11 +91,11 @@
           <label class="field span-2"><span>Tika URL</span><input name="verification_tika_url" type="text" value="{{ settings.verification_tika_url }}" placeholder="http://tika:9998"><small>Optional. Leave blank to run BookGuard with native verification only.</small></label>
           <div class="field span-2"><button id="testTikaButton" type="button">Test Tika connection</button><small id="tikaStatus" class="muted"></small></div>
         </div>
-        <div class="notice info">v0.4.7 verifies EPUB content natively and can inspect PDF/TXT/RTF text. Tika is only a fallback for formats or files where native extraction is insufficient. Audiobook content verification and Gotenberg visual rendering remain separate future helpers.</div>
+        <div class="notice info">v0.4.8 uses native, position-aware ebook verification first. Tika is an optional fallback when native extraction cannot obtain useful text. Audiobook content verification remains a future feature.</div>
       </section>
 
       <section class="settings-section metadata-repair-section">
-        <div class="settings-section-title"><h3>Metadata repair</h3><p>SongKong-style book metadata cleanup with preview, conservative safe writes, verification, history, and undo.</p></div>
+        <div class="settings-section-title"><h3>Metadata repair</h3><p>Conservative metadata cleanup with preview, guarded writes, verification, history, and undo.</p></div>
         <div class="form-grid">
           <label class="field span-2">
             <span>Repair mode</span>
@@ -117,7 +117,7 @@
           </div>
           <label class="field span-2"><span>Audiobook genre value</span><input name="repair_audio_genre_value" type="text" value="{{ settings.repair_audio_genre_value }}"><small>Only used when “Set Genre during repair” is enabled.</small></label>
         </div>
-        <div class="notice info">Content-verified EPUB metadata errors can now be repaired from Triage. The repair engine re-runs content verification immediately before writing and still requires Safe mode plus a writable ebook mount.</div>
+        <div class="notice info">Content-verified EPUB metadata errors can be reviewed from Triage. Before a write, BookGuard verifies the ebook again and still requires Safe mode plus a writable ebook mount.</div>
         <div class="notice warning">The supplied Compose file keeps media mounts read-only. Safe mode alone cannot alter files until you deliberately make the relevant Docker media mount writable.</div>
       </section>
 
