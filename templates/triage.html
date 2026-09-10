@@ -14,11 +14,11 @@
     .triage-card .split { display:flex; gap:1rem; margin-top:.45rem; color:var(--muted); font-size:.8rem; }
     .triage-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; padding:.8rem .9rem; border-bottom:1px solid var(--border); }
     .triage-toolbar .spacer { flex:1; }
-    .triage-table { min-width:1240px; }
+    .triage-table { min-width:1160px; }
     .triage-resolution { font-weight:700; }
     .triage-resolution.keep { color:#83d5a5; }
     .triage-resolution.detached, .triage-resolution.quarantined { color:#9fc8ec; }
-    .triage-actions { display:flex; flex-wrap:wrap; gap:.3rem; min-width:220px; }
+    .triage-actions { display:flex; flex-wrap:wrap; gap:.3rem; min-width:190px; }
     .triage-actions button { padding:.46rem .58rem; font-size:.78rem; }
     .keep-button { background:rgba(56,178,111,.16); border-color:rgba(56,178,111,.55); color:#a6e3bc; }
     .detach-button { background:rgba(40,103,178,.12); border-color:rgba(57,120,195,.5); color:#bad8f6; }
@@ -39,6 +39,7 @@
     .verification-links { display:flex; flex-wrap:wrap; gap:.3rem; margin-top:.3rem; }
     .verification-links button { font-size:.74rem; padding:.24rem .4rem; }
     .job-status { color:var(--muted); font-size:.8rem; min-width:150px; }
+    .risk-score { display:block; margin-bottom:.3rem; }
     @media (max-width:850px) { .triage-toolbar { align-items:flex-start; } }
   </style>
 </head>
@@ -123,7 +124,7 @@
         <thead>
           <tr>
             <th class="checkbox-cell"></th>
-            <th>Risk</th><th>State</th><th>Reason</th><th>Verification</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th><th>Actions</th>
+            <th>Status</th><th>Verification</th><th>Expected</th><th>Detected</th><th>Why</th><th>Path</th><th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -132,9 +133,12 @@
             <td class="checkbox-cell">
               {% if not row.triage.resolved %}<input class="triage-select" type="checkbox" value="{{ row.id }}">{% endif %}
             </td>
-            <td><strong>{{ row.risk_score }}</strong></td>
-            <td><span class="pill {{ row.classification|lower }}">{{ row.classification }}</span></td>
-            <td><span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_',' ') }}</span></td>
+            <td class="status-cell">
+              <strong class="risk-score">Risk {{ row.risk_score }}</strong>
+              <span class="pill {{ row.classification|lower }}">{{ row.classification }}</span>
+              <span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_',' ') }}</span>
+              <small>{{ row.format }}</small>
+            </td>
             <td id="verification-cell-{{ row.id }}" class="verification-cell" data-verification-id="{{ row.id }}"><span class="muted">Not verified</span></td>
             <td class="book-cell"><strong>{{ row.title }}</strong><small>{{ row.author }}</small></td>
             <td class="book-cell detected-cell">
@@ -142,8 +146,7 @@
               <small>{{ row.detected_author or 'No detected author' }}</small>
               {% if row.detected_genre %}<small class="genre">{{ row.detected_genre }}</small>{% endif %}
             </td>
-            <td>{{ row.format }}</td>
-            <td>{{ row.reasons|join(' ') }}</td>
+            <td class="why-cell">{{ row.reasons|join(' ') }}</td>
             <td class="path">{{ row.stored_path }}</td>
             <td class="triage-actions">
               <button class="verify-button" onclick="verifyItem({{ row.id }})">Verify</button>
@@ -159,8 +162,6 @@
                 {% if allow_actions %}
                   <button class="detach-button" onclick="triageAction({{ row.id }}, 'detach')">Detach association</button>
                   <button class="danger" onclick="triageAction({{ row.id }}, 'quarantine')">Quarantine item</button>
-                {% else %}
-                  <span class="muted">Actions disabled</span>
                 {% endif %}
               {% endif %}
             </td>
