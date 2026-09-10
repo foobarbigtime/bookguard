@@ -1,18 +1,21 @@
 from jinja2 import Environment, FileSystemLoader
 
 import app.main as main
+import app.main_v047 as main_v047
 from app.config import Settings
 
 
 def test_app_imports():
     assert main.app.title == "BookGuard"
-    assert main.app.version == "0.4.6"
+    assert main_v047.app.title == "BookGuard"
+    assert main_v047.app.version == "0.4.7"
 
 
 def test_templates_parse():
     env = Environment(loader=FileSystemLoader("templates"))
     env.get_template("index.html")
     env.get_template("triage.html")
+    env.get_template("settings.html")
 
 
 def test_settings_clamp_and_lists():
@@ -27,6 +30,11 @@ def test_settings_clamp_and_lists():
         "metadata_repair_mode": "safe",
         "repair_audio_genre": True,
         "repair_audio_genre_value": "Audiobook",
+        "verification_enabled": True,
+        "verification_use_tika": True,
+        "verification_tika_url": "http://tika:9998/",
+        "verification_max_text_chars": 1,
+        "verification_pdf_pages": 999,
     })
     assert cfg.sample_files == 50
     assert cfg.dashboard_poll_ms == 500
@@ -37,6 +45,11 @@ def test_settings_clamp_and_lists():
     assert cfg.metadata_repair_mode == "safe"
     assert cfg.repair_audio_genre is True
     assert cfg.repair_audio_genre_value == "Audiobook"
+    assert cfg.verification_enabled is True
+    assert cfg.verification_use_tika is True
+    assert cfg.verification_tika_url == "http://tika:9998"
+    assert cfg.verification_max_text_chars == 50000
+    assert cfg.verification_pdf_pages == 100
 
 
 def test_invalid_repair_mode_is_ignored():
