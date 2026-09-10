@@ -114,6 +114,17 @@ class Settings:
         default_factory=lambda: _lines_env("BOOKGUARD_AUTHOR_ALIASES", DEFAULT_AUTHOR_ALIASES)
     )
 
+    # Content verification. Native verification is core; Tika is an optional fallback.
+    verification_enabled: bool = _bool("BOOKGUARD_VERIFICATION_ENABLED", True)
+    verification_max_text_chars: int = _clamp(
+        _int("BOOKGUARD_VERIFICATION_MAX_TEXT_CHARS", 1500000), 50000, 5000000
+    )
+    verification_pdf_pages: int = _clamp(
+        _int("BOOKGUARD_VERIFICATION_PDF_PAGES", 24), 1, 100
+    )
+    verification_use_tika: bool = _bool("BOOKGUARD_VERIFICATION_USE_TIKA", True)
+    verification_tika_url: str = os.getenv("BOOKGUARD_TIKA_URL", "").rstrip("/")
+
     # Metadata repair. Preview is intentionally the default; it never writes files.
     metadata_repair_mode: str = field(
         default_factory=lambda: _repair_mode(os.getenv("BOOKGUARD_METADATA_REPAIR_MODE", "preview"))
@@ -135,11 +146,12 @@ class Settings:
         string_fields = {
             "bindery_db", "bindery_url", "bindery_api_key", "audiobook_root",
             "audiobook_bindery_prefix", "ebook_root", "ebook_bindery_prefix",
-            "quarantine_root", "repair_audio_genre_value",
+            "quarantine_root", "repair_audio_genre_value", "verification_tika_url",
         }
         bool_fields = {
             "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
             "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
+            "verification_enabled", "verification_use_tika",
             "repair_audiobooks", "repair_ebooks", "repair_normalize_pass",
             "repair_audio_album", "repair_audio_album_artist", "repair_audio_genre",
         }
@@ -149,6 +161,8 @@ class Settings:
             "title_min_shared_words": (1, 5),
             "strong_mismatch_min_samples": (1, 10),
             "strong_mismatch_consensus_percent": (50, 100),
+            "verification_max_text_chars": (50000, 5000000),
+            "verification_pdf_pages": (1, 100),
             "dashboard_poll_ms": (500, 10000),
             "live_results_limit": (5, 100),
             "dashboard_result_limit": (50, 5000),
@@ -157,7 +171,10 @@ class Settings:
         for key in string_fields:
             if key in values and values[key] is not None:
                 value = str(values[key]).strip()
-                if key in {"bindery_url", "audiobook_bindery_prefix", "ebook_bindery_prefix"}:
+                if key in {
+                    "bindery_url", "audiobook_bindery_prefix", "ebook_bindery_prefix",
+                    "verification_tika_url",
+                }:
                     value = value.rstrip("/")
                 setattr(self, key, value)
 
@@ -212,6 +229,11 @@ class Settings:
             "strong_mismatch_consensus_percent": self.strong_mismatch_consensus_percent,
             "music_genres": list(self.music_genres),
             "author_aliases": list(self.author_aliases),
+            "verification_enabled": self.verification_enabled,
+            "verification_max_text_chars": self.verification_max_text_chars,
+            "verification_pdf_pages": self.verification_pdf_pages,
+            "verification_use_tika": self.verification_use_tika,
+            "verification_tika_url": self.verification_tika_url,
             "metadata_repair_mode": self.metadata_repair_mode,
             "repair_audiobooks": self.repair_audiobooks,
             "repair_ebooks": self.repair_ebooks,
