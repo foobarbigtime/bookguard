@@ -14,18 +14,30 @@
     .triage-card .split { display:flex; gap:1rem; margin-top:.55rem; color:var(--muted); font-size:.82rem; }
     .triage-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem; padding:1rem; border-bottom:1px solid var(--border); }
     .triage-toolbar .spacer { flex:1; }
-    .triage-table { min-width:1500px; }
+    .triage-table { min-width:1740px; }
     .triage-resolution { font-weight:700; }
     .triage-resolution.keep { color:#83d5a5; }
     .triage-resolution.detached, .triage-resolution.quarantined { color:#9fc8ec; }
-    .triage-actions { display:flex; flex-wrap:wrap; gap:.35rem; min-width:300px; }
+    .triage-actions { display:flex; flex-wrap:wrap; gap:.35rem; min-width:320px; }
     .keep-button { background:rgba(56,178,111,.16); border-color:rgba(56,178,111,.55); color:#a6e3bc; }
     .detach-button { background:rgba(40,103,178,.12); border-color:rgba(57,120,195,.5); color:#bad8f6; }
+    .verify-button { background:rgba(144,102,214,.14); border-color:rgba(144,102,214,.55); color:#d5c0f2; }
+    .repair-verified-button { margin-top:.35rem; background:rgba(56,178,111,.16); border-color:rgba(56,178,111,.55); color:#a6e3bc; }
     .filter-row { border:1px solid var(--border); background:var(--panel); border-radius:.8rem; margin-bottom:1rem; overflow:hidden; }
     .filter-row .reason-chips { border-top:1px solid var(--border); }
     .resolved-row { opacity:.7; }
     .checkbox-cell { width:44px; }
     .triage-note { margin-bottom:1rem; }
+    .verification-cell { min-width:220px; max-width:290px; }
+    .verification-badge { display:inline-block; padding:.24rem .45rem; border-radius:.45rem; font-size:.78rem; font-weight:800; letter-spacing:.02em; }
+    .verification-correct { background:rgba(56,178,111,.15); color:#a6e3bc; }
+    .verification-metadata { background:rgba(227,173,55,.16); color:#f0ce7b; }
+    .verification-wrong { background:rgba(215,74,74,.16); color:#f2a2a2; }
+    .verification-unknown { background:rgba(130,140,155,.16); color:#c4ccd6; }
+    .verification-cell small { display:block; margin-top:.35rem; }
+    .verification-links { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.35rem; }
+    .verification-links button { font-size:.76rem; padding:.25rem .42rem; }
+    .job-status { color:var(--muted); font-size:.82rem; min-width:170px; }
     @media (max-width:700px) { .triage-toolbar { align-items:flex-start; } }
   </style>
 </head>
@@ -69,8 +81,8 @@
   </section>
 
   <div class="notice info triage-note">
-    <strong>How triage works:</strong>
-    “Reviewed / keep” is a BookGuard-only decision and never changes Bindery or a media file. It remains resolved across future scans only while the classification, reason, expected identity, path and detected metadata remain unchanged. If any of those change, the item automatically reopens.
+    <strong>Content verification:</strong>
+    BookGuard can now inspect the actual ebook content instead of trusting embedded tags alone. It separates VERIFIED CORRECT, METADATA ERROR, WRONG CONTENT and INSUFFICIENT EVIDENCE. A metadata repair is offered only when internal content independently supports the expected title and author.
   </div>
 
   <section class="filter-row">
@@ -80,6 +92,8 @@
         {{ "Hide resolved" if show_resolved else "Show resolved" }}
       </a>
       {% if reason_code %}<a class="button-link" href="/triage?classification={{ classification }}{% if show_resolved %}&show_resolved=1{% endif %}">Clear reason filter</a>{% endif %}
+      <button id="verifyOpenButton" class="verify-button" onclick="startVerification()">Verify open {{ classification }}</button>
+      <span id="verificationJobStatus" class="job-status"></span>
       <span class="spacer"></span>
       <label class="check-field"><input id="selectAll" type="checkbox"><span>Select visible</span></label>
       <button id="keepSelectedButton" class="keep-button" onclick="keepSelected()">Reviewed / keep selected</button>
@@ -98,7 +112,7 @@
     <div class="section-title row-between">
       <div>
         <h2>{{ classification }} workflow{% if reason_code %} · {{ reason_code|replace('_',' ') }}{% endif %}</h2>
-        <p>{{ rows|length }} item{{ '' if rows|length == 1 else 's' }} shown. Destructive actions are intentionally per-item; bulk marking as reviewed is local-only.</p>
+        <p>{{ rows|length }} item{{ '' if rows|length == 1 else 's' }} shown. Verification is read-only; destructive actions remain intentionally per-item.</p>
       </div>
     </div>
 
@@ -108,7 +122,7 @@
         <thead>
           <tr>
             <th class="checkbox-cell"></th>
-            <th>Risk</th><th>State</th><th>Reason</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th><th>Workflow</th>
+            <th>Risk</th><th>State</th><th>Reason</th><th>Verification</th><th>Expected</th><th>Detected</th><th>Format</th><th>Why</th><th>Path</th><th>Workflow</th>
           </tr>
         </thead>
         <tbody>
@@ -120,6 +134,7 @@
             <td><strong>{{ row.risk_score }}</strong></td>
             <td><span class="pill {{ row.classification|lower }}">{{ row.classification }}</span></td>
             <td><span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_',' ') }}</span></td>
+            <td id="verification-cell-{{ row.id }}" class="verification-cell" data-verification-id="{{ row.id }}"><span class="muted">Not verified</span></td>
             <td class="book-cell"><strong>{{ row.title }}</strong><small>{{ row.author }}</small></td>
             <td class="book-cell detected-cell">
               <strong>{{ row.detected_title or '—' }}</strong>
@@ -130,6 +145,7 @@
             <td>{{ row.reasons|join(' ') }}</td>
             <td class="path">{{ row.stored_path }}</td>
             <td class="triage-actions">
+              <button class="verify-button" onclick="verifyItem({{ row.id }})">Verify content</button>
               {% if row.triage.resolved %}
                 <span class="triage-resolution {{ row.triage.resolution|lower }}">{{ row.triage.resolution|replace('_',' ') }}</span>
                 {% if row.triage.resolution == 'KEEP' %}
@@ -185,6 +201,17 @@
 
 <script>
 const classification = {{ classification|tojson }};
+const reasonCode = {{ reason_code|tojson }};
+const verificationCache = {};
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
 
 function checkedIds() {
   return Array.from(document.querySelectorAll('.triage-select:checked')).map(el => Number(el.value));
@@ -195,6 +222,145 @@ if (selectAll) {
   selectAll.addEventListener('change', () => {
     document.querySelectorAll('.triage-select').forEach(el => { el.checked = selectAll.checked; });
   });
+}
+
+function verificationClass(verdict) {
+  if (verdict === 'VERIFIED_CORRECT') return 'verification-correct';
+  if (verdict === 'METADATA_ERROR') return 'verification-metadata';
+  if (verdict === 'WRONG_CONTENT') return 'verification-wrong';
+  return 'verification-unknown';
+}
+
+function verificationLabel(verdict) {
+  return String(verdict || 'INSUFFICIENT_EVIDENCE').replaceAll('_', ' ');
+}
+
+function renderVerification(id, verification) {
+  const cell = document.getElementById(`verification-cell-${id}`);
+  if (!cell) return;
+  if (!verification) {
+    cell.innerHTML = '<span class="muted">Not verified</span>';
+    return;
+  }
+  verificationCache[id] = verification;
+  const explanation = verification.evidence?.explanation || '';
+  let controls = `<button onclick="showVerification(${id})">Details</button>`;
+  if (verification.verdict === 'METADATA_ERROR') {
+    controls += ` <button class="repair-verified-button" onclick="repairVerified(${id})">Repair verified metadata</button>`;
+  }
+  cell.innerHTML = `
+    <span class="verification-badge ${verificationClass(verification.verdict)}">${escapeHtml(verificationLabel(verification.verdict))}</span>
+    <small>${escapeHtml(verification.confidence)}% confidence · ${escapeHtml(verification.source || 'native')}</small>
+    <small>${escapeHtml(explanation)}</small>
+    <div class="verification-links">${controls}</div>`;
+}
+
+function verificationDetailText(v) {
+  const e = v.evidence || {};
+  const expected = e.expected || {};
+  const embedded = e.embedded || {};
+  const content = e.content || {};
+  const ids = (embedded.identifiers || []).join(' | ') || '—';
+  const yn = value => value ? 'FOUND' : 'not found';
+  return `Verdict: ${verificationLabel(v.verdict)}\nConfidence: ${v.confidence}%\nSource: ${v.source || '—'}\n\nExpected\nTitle: ${expected.title || '—'}\nAuthor: ${expected.author || '—'}\n\nEmbedded\nTitle: ${embedded.title || '—'}\nAuthor: ${embedded.author || '—'}\nIDs: ${ids}\n\nInternal content\nExpected title: ${yn(content.expected_title_found)}\nExpected author: ${yn(content.expected_author_found)}\nEmbedded title: ${yn(content.embedded_title_found)}\nEmbedded author: ${yn(content.embedded_author_found)}\nText examined: ${content.text_characters_examined || 0} characters\n\n${e.explanation || ''}`;
+}
+
+function showVerification(id) {
+  const v = verificationCache[id];
+  if (!v) { alert('Run content verification first.'); return; }
+  alert(verificationDetailText(v));
+}
+
+async function loadCachedVerifications() {
+  const params = new URLSearchParams({classification});
+  if (reasonCode) params.set('reason_code', reasonCode);
+  const response = await fetch(`/api/verification/cached?${params.toString()}`, {cache:'no-store'});
+  if (!response.ok) return;
+  const body = await response.json();
+  const items = body.items || {};
+  for (const [id, verification] of Object.entries(items)) {
+    renderVerification(Number(id), verification);
+  }
+}
+
+async function verifyItem(id) {
+  const cell = document.getElementById(`verification-cell-${id}`);
+  if (cell) cell.innerHTML = '<span class="muted">Verifying…</span>';
+  const response = await fetch(`/api/verification/${id}/run`, {method:'POST'});
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if (cell) cell.innerHTML = '<span class="muted">Verification failed</span>';
+    alert(body.detail || 'Content verification failed.');
+    return;
+  }
+  renderVerification(id, body.verification);
+}
+
+async function startVerification() {
+  const button = document.getElementById('verifyOpenButton');
+  button.disabled = true;
+  button.textContent = 'Starting verification…';
+  const response = await fetch('/api/verification/start', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({classification, reason_code:reasonCode || null}),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    button.disabled = false;
+    button.textContent = `Verify open ${classification}`;
+    alert(body.detail || 'Unable to start verification.');
+    return;
+  }
+  pollVerificationJob();
+}
+
+async function pollVerificationJob() {
+  const button = document.getElementById('verifyOpenButton');
+  const status = document.getElementById('verificationJobStatus');
+  const response = await fetch('/api/verification/status', {cache:'no-store'});
+  if (!response.ok) return;
+  const body = await response.json();
+  const job = body.job || {};
+  if (job.status === 'running') {
+    button.disabled = true;
+    button.textContent = 'Verifying…';
+    status.textContent = `${job.processed || 0} / ${job.total || 0} · ${job.current || ''}`;
+    setTimeout(pollVerificationJob, 1200);
+    return;
+  }
+  button.disabled = false;
+  button.textContent = `Verify open ${classification}`;
+  if (job.status === 'failed') {
+    status.textContent = 'Verification failed';
+    alert(job.error || 'Verification job failed.');
+    return;
+  }
+  if (job.status === 'complete') {
+    const counts = job.counts || {};
+    status.textContent = `Complete: ${job.processed || 0} verified`;
+    await loadCachedVerifications();
+    alert(`Content verification complete.\n\nVerified correct: ${counts.VERIFIED_CORRECT || 0}\nMetadata errors: ${counts.METADATA_ERROR || 0}\nWrong content: ${counts.WRONG_CONTENT || 0}\nInsufficient evidence: ${counts.INSUFFICIENT_EVIDENCE || 0}`);
+  }
+}
+
+async function repairVerified(id) {
+  const previewResponse = await fetch(`/api/verification/${id}/repair-preview`, {cache:'no-store'});
+  const preview = await previewResponse.json().catch(() => ({}));
+  if (!previewResponse.ok) { alert(preview.detail || 'Unable to build verified repair preview.'); return; }
+  if (!preview.eligible || !preview.safe) { alert(preview.reason || 'This verified result is not repairable.'); return; }
+
+  const text = `${preview.reason}\n\nBefore\nTitle: ${preview.before.title || '—'}\nAuthor: ${preview.before.author || '—'}\n\nAfter\nTitle: ${preview.after.title || '—'}\nAuthor: ${preview.after.author || '—'}\n\nVerification confidence: ${preview.verification_confidence || '—'}%`;
+  if (preview.mode !== 'safe') {
+    alert(`${text}\n\nPreview only. Switch Metadata repair mode to Safe and deliberately make the ebook mount writable before applying this repair.`);
+    return;
+  }
+  if (!confirm(`${text}\n\nApply this content-verified metadata repair?`)) return;
+  const response = await fetch(`/api/verification/${id}/repair`, {method:'POST'});
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { alert(body.detail || 'Verified metadata repair failed.'); return; }
+  alert(`Verified metadata repair completed and checked. Repair history ID: ${body.repair_id}`);
+  await verifyItem(id);
 }
 
 async function keepItem(id) {
@@ -258,6 +424,9 @@ async function triageAction(id, action) {
   alert(body.message || 'Action completed.');
   window.location.reload();
 }
+
+loadCachedVerifications();
+pollVerificationJob();
 </script>
 </body>
 </html>
