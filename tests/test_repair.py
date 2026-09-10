@@ -56,6 +56,25 @@ def _result(path: Path) -> dict:
     }
 
 
+def _pass_result(path: Path, expected_title: str, expected_author: str, detected_title: str, detected_author: str) -> dict:
+    return {
+        "id": 102,
+        "scan_id": "scan-test",
+        "file_id": 203,
+        "book_id": 304,
+        "author": expected_author,
+        "title": expected_title,
+        "format": "ebook",
+        "stored_path": f"/data/media/books/{expected_author}/{expected_title}/{expected_title}.epub",
+        "local_path": str(path),
+        "classification": "PASS",
+        "risk_score": 5,
+        "reason_code": "MATCH",
+        "reasons": ["Match"],
+        "metadata": {"title": detected_title, "author": detected_author, "source": "epub"},
+    }
+
+
 def test_swapped_epub_preview_does_not_write(tmp_path):
     epub = tmp_path / "book.epub"
     _make_epub(epub, "Patchett, Ann", "Bel Canto")
@@ -101,51 +120,54 @@ def test_loose_title_overlap_is_not_safe_to_repair(tmp_path):
     epub = tmp_path / "karens-baby.epub"
     _make_epub(epub, "Karen's Doll Hospital", "Ann M. Martin")
     settings.metadata_repair_mode = "preview"
-
-    result = {
-        "id": 201,
-        "scan_id": "scan-test",
-        "file_id": 202,
-        "book_id": 303,
-        "author": "Ann M. Martin",
-        "title": "Karen's Baby (Baby-Sitters Little Sister: Super Special #5)",
-        "format": "ebook",
-        "stored_path": "/data/media/books/Ann M. Martin/Karen's Baby/book.epub",
-        "local_path": str(epub),
-        "classification": "PASS",
-        "risk_score": 5,
-        "reason_code": "MATCH",
-        "reasons": ["Loose scan match"],
-        "metadata": {"title": "Karen's Doll Hospital", "author": "Ann M. Martin", "source": "epub"},
-    }
-
+    result = _pass_result(
+        epub,
+        "Karen's Baby (Baby-Sitters Little Sister: Super Special #5)",
+        "Ann M. Martin",
+        "Karen's Doll Hospital",
+        "Ann M. Martin",
+    )
     summary = repair_candidate_summary(result)
     assert summary["eligible"] is False
     assert summary["safe"] is False
 
 
-def test_article_only_title_difference_can_still_be_repaired(tmp_path):
+def test_article_title_variant_is_not_rewritten_automatically(tmp_path):
     epub = tmp_path / "treehouse.epub"
     _make_epub(epub, "The 52-Storey Treehouse", "Andy Griffiths")
     settings.metadata_repair_mode = "preview"
+    result = _pass_result(epub, "52-Storey Treehouse", "Andy Griffiths", "The 52-Storey Treehouse", "Andy Griffiths")
+    summary = repair_candidate_summary(result)
+    assert summary["eligible"] is False
 
-    result = {
-        "id": 301,
-        "scan_id": "scan-test",
-        "file_id": 302,
-        "book_id": 303,
-        "author": "Andy Griffiths",
-        "title": "52-Storey Treehouse",
-        "format": "ebook",
-        "stored_path": "/data/media/books/Andy Griffiths/52-Storey Treehouse/book.epub",
-        "local_path": str(epub),
-        "classification": "PASS",
-        "risk_score": 5,
-        "reason_code": "MATCH",
-        "reasons": ["Strict title identity"],
-        "metadata": {"title": "The 52-Storey Treehouse", "author": "Andy Griffiths", "source": "epub"},
-    }
 
+def test_duplicate_word_title_is_not_collapsed(tmp_path):
+    epub = tmp_path / "hush.epub"
+    _make_epub(epub, "Hush", "James Patterson")
+    settings.metadata_repair_mode = "preview"
+    result = _pass_result(epub, "Hush Hush", "James Patterson", "Hush", "James Patterson")
+    summary = repair_candidate_summary(result)
+    assert summary["eligible"] is False
+
+
+def test_pen_name_credit_is_preserved(tmp_path):
+    epub = tmp_path / "career.epub"
+    _make_epub(epub, "Career of Evil", "Robert Galbraith")
+    settings.metadata_repair_mode = "preview"
+    result = _pass_result(epub, "Career of Evil", "J.K. Rowling", "Career of Evil", "Robert Galbraith")
+    summary = repair_candidate_summary(result)
+    assert summary["eligible"] is False
+
+
+def test_reversed_literal_author_name_can_be_normalized(tmp_path):
+    epub = tmp_path / "captain.epub"
+    title = "Captain Underpants and the Attack of the Talking Toilets"
+    _make_epub(epub, title, "Pilkey, Dav")
+    settings.metadata_repair_mode = "preview"
+    result = _pass_result(epub, title, "Dav Pilkey", title, "Pilkey, Dav")
     summary = repair_candidate_summary(result)
     assert summary["eligible"] is True
-    assert summary["safe"] is True
+    preview = build_repair_preview(result)
+    assert preview["before"]["author"] == "Pilkey, Dav"
+    assert preview["after"]["author"] == "Dav Pilkey"
+    assert preview["before"]["title"] == preview["after"]["title"]
