@@ -33,7 +33,7 @@ from .repair import (
 from .scanner import start_scan
 
 
-app = FastAPI(title="BookGuard", version="0.4.0")
+app = FastAPI(title="BookGuard", version="0.4.1")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -120,6 +120,26 @@ def _enrich_results(rows: list[dict]) -> list[dict]:
     return [{**row, **_compact_result(row)} for row in rows]
 
 
+def _latest_repair_candidates(limit: int = 500) -> list[dict]:
+    """Return safe repair proposals from the latest scan, independent of dashboard risk ordering."""
+    if settings.metadata_repair_mode == "off":
+        return []
+    rows = latest_results(limit=10000)
+    candidates: list[dict] = []
+    for row in rows:
+        enriched = {**row, **_compact_result(row)}
+        if enriched["repair"].get("eligible") and enriched["repair"].get("safe"):
+            candidates.append(enriched)
+    candidates.sort(
+        key=lambda row: (
+            0 if row.get("reason_code") == "SWAPPED_METADATA" else 1,
+            str(row.get("author") or "").casefold(),
+            str(row.get("title") or "").casefold(),
+        )
+    )
+    return candidates[:limit]
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(
     request: Request,
@@ -175,10 +195,13 @@ def settings_page(request: Request):
 
 @app.get("/repairs", response_class=HTMLResponse)
 def repairs_page(request: Request):
+    candidates = _latest_repair_candidates()
     return templates.TemplateResponse(
         request=request,
         name="repairs.html",
         context={
+            "candidates": candidates,
+            "candidate_count": len(candidates),
             "repairs": recent_metadata_repairs(200),
             "repair_mode": settings.metadata_repair_mode,
             "version": app.version,
