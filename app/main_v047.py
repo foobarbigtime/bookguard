@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request
 
+from .config import settings
 from .main import app
 from .db import latest_scan, result_by_id
 from .repair import RepairError
@@ -100,7 +101,7 @@ def api_verified_repair_preview(result_id: int):
         raise HTTPException(status_code=409, detail=str(exc))
     return {
         "result_id": result_id,
-        "mode": app.version and __import__("app.config", fromlist=["settings"]).settings.metadata_repair_mode,
+        "mode": settings.metadata_repair_mode,
         **preview,
     }
 
