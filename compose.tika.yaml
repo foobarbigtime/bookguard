@@ -1,0 +1,13 @@
+services:
+  bookguard:
+    environment:
+      BOOKGUARD_VERIFICATION_USE_TIKA: ${BOOKGUARD_VERIFICATION_USE_TIKA:-true}
+      BOOKGUARD_TIKA_URL: ${BOOKGUARD_TIKA_URL:-http://Apache-Tika-Server:9998}
+    networks:
+      - default
+      - shared_app_backend
+
+networks:
+  shared_app_backend:
+    external: true
+    name: shared_app_backend
