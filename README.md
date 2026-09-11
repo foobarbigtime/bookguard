@@ -32,9 +32,38 @@ BookGuard is designed around **audit first, repair second, destructive actions l
 
 BookGuard **never automatically deletes media**.
 
+## What v0.5 is adding
+
+The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequence of independently guarded slices:
+
+- Read-only Bindery status, replacement search, and candidate evaluation.
+- Immediate re-verification before a WRONG_CONTENT mutation.
+- Quarantine-first removal, exact native deregistration, rollback attempts, provenance-aware blocklisting, and replacement search.
+- A fail-closed external-import readiness gate with a dedicated staging mount outside the library and quarantine roots.
+- Read-only staged ebook inventory and staged-byte verification against one explicit Bindery book.
+- SHA-256 and file-stat stability checks across verification.
+- A staged file is marked `safeToAdmit` only for a stable `VERIFIED_CORRECT` result at 99% confidence.
+
+Automatic queue grabbing and library admission remain disabled. A read-only `safeToAdmit` result is not a durable authorization token; the future admission operation must repeat verification at its own mutation boundary.
+
+Read-only staging endpoints:
+
+```text
+GET  /api/automatic/staging/files
+POST /api/automatic/books/{book_id}/staged-verification
+```
+
+The verification request uses a path relative to `/staging`:
+
+```json
+{"relativePath":"Bel Canto - Ann Patchett.epub"}
+```
+
+Absolute paths, traversal outside the staging root, symlinked files, empty files, unsupported formats, and files over the configured size limit are rejected.
+
 ## Safety model
 
-Two independent safety systems exist.
+Three independent safety systems exist.
 
 ### Bindery actions
 
@@ -60,6 +89,17 @@ The supplied Compose file deliberately mounts ebooks and audiobooks read-only:
 ```
 
 So even if Safe mode is selected accidentally, Docker still blocks writes. Remove `:ro` only when you deliberately want metadata repair to modify that library.
+
+### Automatic reacquisition
+
+```env
+BOOKGUARD_STAGING_ROOT=/staging
+BOOKGUARD_BINDERY_DROP_FOLDER=/data/bookguard-staging
+BOOKGUARD_AUTOMATIC_REACQUISITION=false
+BOOKGUARD_MAX_STAGED_EBOOK_BYTES=536870912
+```
+
+Automatic reacquisition fails closed unless every readiness check passes. Keep it disabled until Bindery is deliberately configured for external import and BookGuard's controlled-admission slice is complete.
 
 ## Metadata repair philosophy
 
@@ -110,6 +150,15 @@ The supplied Compose file uses:
 /mnt/user/data/media/books
 /mnt/cache/appdata/bookguard
 /mnt/user/data/bookguard-quarantine
+/mnt/user/data/bookguard-staging
+```
+
+For the proven shared staging topology:
+
+```text
+Host:       /mnt/user/data/bookguard-staging
+BookGuard:  /staging
+Bindery:    /data/bookguard-staging
 ```
 
 ## Settings
@@ -158,4 +207,4 @@ PYTHONPATH=. pytest -q
 uvicorn app.main:app --reload --port 8788
 ```
 
-The test suite includes an end-to-end synthetic EPUB test covering preview, safe repair, verification, repair-history persistence, and Undo.
+The test suite includes end-to-end synthetic EPUB tests covering preview, safe repair, verification, repair-history persistence, Undo, and staged-byte safety gates.
