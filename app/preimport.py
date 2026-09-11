@@ -29,6 +29,35 @@ def _setting_text(value: Any) -> str:
     return str(value).strip()
 
 
+# Built-in defaults for known Bindery import settings.
+# When a setting has never been explicitly stored, Bindery returns HTTP 404.
+# For these known settings, we can safely assume the default.
+_BUILTIN_DEFAULTS = {
+    "import.mode": "auto",
+    "import.drop_folder": "",
+    "import.drop_layout": "flat",
+    "import.drop_link_mode": "copy",
+}
+
+
+def _get_setting_with_defaults(client: BinderyClient, key: str) -> Any:
+    """Get a Bindery setting, falling back to built-in defaults for known settings.
+
+    Bindery returns HTTP 404 when a setting has never been explicitly stored.
+    For known settings, we have safe defaults. For unknown settings, we raise.
+    """
+    try:
+        return client.get_setting(key)
+    except BinderyClientError as exc:
+        error_text = str(exc)
+        # Check if this is a "setting not found" error (HTTP 404)
+        if "HTTP 404" in error_text and "setting not found" in error_text:
+            if key in _BUILTIN_DEFAULTS:
+                return _BUILTIN_DEFAULTS[key]
+        # Re-raise if this is a different error or an unknown setting
+        raise
+
+
 def preimport_readiness(client: BinderyClient | None = None) -> dict[str, Any]:
     """Report whether automatic reacquisition can be made content-safe.
 
@@ -46,10 +75,10 @@ def preimport_readiness(client: BinderyClient | None = None) -> dict[str, Any]:
     enabled = _bool_env("BOOKGUARD_AUTOMATIC_REACQUISITION", False)
 
     try:
-        import_mode = _setting_text(client.get_setting("import.mode")).lower()
-        drop_folder = _setting_text(client.get_setting("import.drop_folder"))
-        drop_layout = _setting_text(client.get_setting("import.drop_layout")).lower() or "flat"
-        link_mode = _setting_text(client.get_setting("import.drop_link_mode")).lower() or "copy"
+        import_mode = _setting_text(_get_setting_with_defaults(client, "import.mode")).lower()
+        drop_folder = _setting_text(_get_setting_with_defaults(client, "import.drop_folder"))
+        drop_layout = _setting_text(_get_setting_with_defaults(client, "import.drop_layout")).lower() or "flat"
+        link_mode = _setting_text(_get_setting_with_defaults(client, "import.drop_link_mode")).lower() or "copy"
     except BinderyClientError as exc:
         raise PreImportSafetyError(str(exc)) from exc
 
