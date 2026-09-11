@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
+from .automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
 from .bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
+from .db import result_by_id
 from .main_v048 import app
 
 
@@ -67,3 +69,45 @@ def api_automatic_replacement_preview(book_id: int):
             else "No replacement candidate passed BookGuard's automatic safety gate."
         ),
     }
+
+
+def _automatic_result(result_id: int) -> dict:
+    item = result_by_id(result_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Result not found.")
+    return item
+
+
+@app.get("/api/automatic/results/{result_id}/wrong-content-preview")
+def api_automatic_wrong_content_preview(result_id: int):
+    """Read-only preflight for the WRONG_CONTENT remediation path."""
+    item = _automatic_result(result_id)
+    try:
+        return {"resultId": result_id, **wrong_content_preview(item)}
+    except AutomaticMaintenanceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/automatic/results/{result_id}/remediate-wrong-content")
+async def api_automatic_remediate_wrong_content(result_id: int, request: Request):
+    """Quarantine + native detach + blocklist + safe replacement search.
+
+    This endpoint deliberately does not auto-grab a replacement in the first
+    v0.5.0 slice. Release metadata cannot prove the downloaded bytes are the
+    expected book, so grabbing remains a later stage once pre-import content
+    verification is available.
+    """
+    item = _automatic_result(result_id)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict) or payload.get("confirm") != "REMEDIATE_WRONG_CONTENT":
+        raise HTTPException(
+            status_code=400,
+            detail="Explicit REMEDIATE_WRONG_CONTENT confirmation is required.",
+        )
+    try:
+        return remediate_wrong_content(item)
+    except AutomaticMaintenanceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
