@@ -18,6 +18,9 @@ services:
       EBOOK_BINDERY_PREFIX: ${EBOOK_BINDERY_PREFIX:-/data/media/books}
       CONFIG_DIR: /config
       QUARANTINE_ROOT: ${QUARANTINE_ROOT:-/quarantine}
+      BOOKGUARD_STAGING_ROOT: ${BOOKGUARD_STAGING_ROOT:-/staging}
+      BOOKGUARD_BINDERY_DROP_FOLDER: ${BOOKGUARD_BINDERY_DROP_FOLDER:-}
+      BOOKGUARD_AUTOMATIC_REACQUISITION: ${BOOKGUARD_AUTOMATIC_REACQUISITION:-false}
       BOOKGUARD_ALLOW_ACTIONS: ${BOOKGUARD_ALLOW_ACTIONS:-false}
       BOOKGUARD_SAMPLE_FILES: ${BOOKGUARD_SAMPLE_FILES:-3}
       BOOKGUARD_SCAN_ON_START: ${BOOKGUARD_SCAN_ON_START:-false}
@@ -49,3 +52,6 @@ services:
       - /mnt/user/data/media/audiobooks:/audiobooks:ro
       - /mnt/user/data/media/books:/books:ro
       - /mnt/user/data/bookguard-quarantine:/quarantine
+      # Pre-import staging for safe reacquisition. Bindery must be configured
+      # with import.mode=external and its drop folder mapped to this same host path.
+      - /mnt/user/data/bookguard-staging:/staging
