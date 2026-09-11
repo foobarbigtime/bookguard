@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import app.preimport as preimport
+from app.bindery_client import BinderyClientError
 
 
 class FakeClient:
@@ -11,16 +12,27 @@ class FakeClient:
         return {"key": key, "value": self.settings_map.get(key, "")}
 
 
-def test_preimport_readiness_requires_external_mode_and_confirmed_mapping(tmp_path, monkeypatch):
+class MissingSettingClient:
+    def get_setting(self, key):
+        raise BinderyClientError(
+            f'Bindery GET /setting/{key} returned HTTP 404: {{"error":"setting not found"}}'
+        )
+
+
+def _configure_paths(tmp_path, monkeypatch):
     staging = tmp_path / "staging"
     staging.mkdir()
-
     monkeypatch.setenv("BOOKGUARD_STAGING_ROOT", str(staging))
-    monkeypatch.setenv("BOOKGUARD_BINDERY_DROP_FOLDER", "/handoff")
-    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_REACQUISITION", "true")
     monkeypatch.setattr(preimport.settings, "ebook_root", str(tmp_path / "books"))
     monkeypatch.setattr(preimport.settings, "audiobook_root", str(tmp_path / "audiobooks"))
     monkeypatch.setattr(preimport.settings, "quarantine_root", str(tmp_path / "quarantine"))
+    return staging
+
+
+def test_preimport_readiness_requires_external_mode_and_confirmed_mapping(tmp_path, monkeypatch):
+    _configure_paths(tmp_path, monkeypatch)
+    monkeypatch.setenv("BOOKGUARD_BINDERY_DROP_FOLDER", "/handoff")
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_REACQUISITION", "true")
 
     client = FakeClient({
         "import.mode": "external",
@@ -36,15 +48,9 @@ def test_preimport_readiness_requires_external_mode_and_confirmed_mapping(tmp_pa
 
 
 def test_preimport_readiness_fails_closed_for_normal_bindery_import(tmp_path, monkeypatch):
-    staging = tmp_path / "staging"
-    staging.mkdir()
-
-    monkeypatch.setenv("BOOKGUARD_STAGING_ROOT", str(staging))
+    _configure_paths(tmp_path, monkeypatch)
     monkeypatch.setenv("BOOKGUARD_BINDERY_DROP_FOLDER", "/handoff")
     monkeypatch.setenv("BOOKGUARD_AUTOMATIC_REACQUISITION", "true")
-    monkeypatch.setattr(preimport.settings, "ebook_root", str(tmp_path / "books"))
-    monkeypatch.setattr(preimport.settings, "audiobook_root", str(tmp_path / "audiobooks"))
-    monkeypatch.setattr(preimport.settings, "quarantine_root", str(tmp_path / "quarantine"))
 
     client = FakeClient({
         "import.mode": "copy",
@@ -58,15 +64,9 @@ def test_preimport_readiness_fails_closed_for_normal_bindery_import(tmp_path, mo
 
 
 def test_preimport_readiness_requires_explicit_drop_mapping_confirmation(tmp_path, monkeypatch):
-    staging = tmp_path / "staging"
-    staging.mkdir()
-
-    monkeypatch.setenv("BOOKGUARD_STAGING_ROOT", str(staging))
+    _configure_paths(tmp_path, monkeypatch)
     monkeypatch.delenv("BOOKGUARD_BINDERY_DROP_FOLDER", raising=False)
     monkeypatch.setenv("BOOKGUARD_AUTOMATIC_REACQUISITION", "true")
-    monkeypatch.setattr(preimport.settings, "ebook_root", str(tmp_path / "books"))
-    monkeypatch.setattr(preimport.settings, "audiobook_root", str(tmp_path / "audiobooks"))
-    monkeypatch.setattr(preimport.settings, "quarantine_root", str(tmp_path / "quarantine"))
 
     client = FakeClient({
         "import.mode": "external",
@@ -76,3 +76,17 @@ def test_preimport_readiness_requires_explicit_drop_mapping_confirmation(tmp_pat
     result = preimport.preimport_readiness(client)
     assert result["ready"] is False
     assert "dropFolderMappingConfirmed" in result["blockers"]
+
+
+def test_missing_bindery_settings_use_builtin_defaults_instead_of_error(tmp_path, monkeypatch):
+    _configure_paths(tmp_path, monkeypatch)
+    monkeypatch.setenv("BOOKGUARD_BINDERY_DROP_FOLDER", "/data/bookguard-staging")
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_REACQUISITION", "false")
+
+    result = preimport.preimport_readiness(MissingSettingClient())
+
+    assert result["ready"] is False
+    assert result["bindery"]["importMode"] == "auto"
+    assert result["bindery"]["dropFolder"] == ""
+    assert result["bindery"]["dropLayout"] == "flat"
+    assert result["bindery"]["dropLinkMode"] == "copy"
