@@ -6,6 +6,7 @@ from .automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong
 from .bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from .db import result_by_id
 from .main_v048 import app
+from .preimport import PreImportSafetyError, preimport_readiness
 
 
 app.version = "0.5.0"
@@ -19,6 +20,19 @@ def api_automatic_bindery_status():
     except BinderyClientError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return {"ok": True, "bindery": status}
+
+
+@app.get("/api/automatic/preimport-readiness")
+def api_automatic_preimport_readiness():
+    """Read-only gate for the external-import staging topology.
+
+    Automatic grabbing remains blocked unless Bindery is handing completed
+    downloads to a BookGuard-visible staging folder outside the managed library.
+    """
+    try:
+        return preimport_readiness()
+    except PreImportSafetyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.get("/api/automatic/books/{book_id}/replacement-preview")
@@ -92,10 +106,10 @@ def api_automatic_wrong_content_preview(result_id: int):
 async def api_automatic_remediate_wrong_content(result_id: int, request: Request):
     """Quarantine + native detach + blocklist + safe replacement search.
 
-    This endpoint deliberately does not auto-grab a replacement in the first
-    v0.5.0 slice. Release metadata cannot prove the downloaded bytes are the
-    expected book, so grabbing remains a later stage once pre-import content
-    verification is available.
+    This endpoint deliberately does not auto-grab a replacement yet. v0.5.0
+    requires the external-import staging gate to pass before a future automatic
+    grab can be enabled, so downloaded bytes can be verified before admission to
+    the managed library.
     """
     item = _automatic_result(result_id)
     try:
