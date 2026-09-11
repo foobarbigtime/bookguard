@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -126,6 +127,12 @@ class BinderyClient:
 
     def system_status(self) -> dict[str, Any]:
         return self._request("GET", "/system/status")
+
+    def get_setting(self, key: str) -> Any:
+        payload = self._request("GET", f"/setting/{quote(str(key), safe='')}")
+        if isinstance(payload, dict) and "value" in payload:
+            return payload.get("value")
+        return payload
 
     def get_book(self, book_id: int) -> dict[str, Any]:
         return self._request("GET", f"/book/{int(book_id)}")
