@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, Request
+from pydantic import BaseModel, Field
 
 from .automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
 from .bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from .db import result_by_id
 from .main_v048 import app
 from .preimport import PreImportSafetyError, preimport_readiness
+from .staging import StagingSafetyError, list_staged_ebooks, verify_staged_ebook
 
 
 app.version = "0.5.0"
+
+
+class StagedVerificationRequest(BaseModel):
+    relativePath: str = Field(min_length=1, max_length=4096)
 
 
 @app.get("/api/automatic/bindery-status")
@@ -33,6 +39,26 @@ def api_automatic_preimport_readiness():
         return preimport_readiness()
     except PreImportSafetyError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.get("/api/automatic/staging/files")
+def api_automatic_staging_files(limit: int = 500):
+    """List verification-supported staged ebooks without reading their contents."""
+    try:
+        return list_staged_ebooks(limit)
+    except StagingSafetyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/automatic/books/{book_id}/staged-verification")
+def api_automatic_staged_verification(book_id: int, payload: StagedVerificationRequest):
+    """Verify staged bytes against one explicit Bindery book without admitting them."""
+    try:
+        return verify_staged_ebook(book_id, payload.relativePath)
+    except BinderyClientError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except StagingSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @app.get("/api/automatic/books/{book_id}/replacement-preview")
