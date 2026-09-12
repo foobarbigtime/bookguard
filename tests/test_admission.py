@@ -157,6 +157,20 @@ def test_verified_snapshot_is_published_without_deleting_staging(admission_setup
     assert record["verification"]["safeToAdmit"] is True
 
 
+def test_historical_pass_result_can_be_restored(admission_setup):
+    setup = admission_setup
+    setup["result"]["classification"] = "PASS"
+
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        FakeClient(),
+    )
+
+    assert response["status"] == "scan_requested"
+    assert (setup["admission_root"] / setup["relative"]).is_file()
+
+
 def test_wrong_snapshot_is_not_published(admission_setup):
     setup = admission_setup
     _write_epub(
