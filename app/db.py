@@ -184,6 +184,23 @@ def init_local_db() -> None:
                 completed_at TEXT,
                 error TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS ebook_admissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id INTEGER NOT NULL,
+                scan_id TEXT NOT NULL,
+                book_id INTEGER NOT NULL,
+                staged_relative_path TEXT NOT NULL,
+                staged_sha256 TEXT,
+                stored_path TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                status TEXT NOT NULL,
+                publication_method TEXT,
+                verification_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                error TEXT
+            );
             """
         )
 
@@ -193,6 +210,15 @@ def init_local_db() -> None:
         if "reason_code" not in columns:
             conn.execute(
                 "ALTER TABLE scan_results ADD COLUMN reason_code TEXT NOT NULL DEFAULT 'UNKNOWN'"
+            )
+
+        admission_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(ebook_admissions)").fetchall()
+        }
+        if "publication_method" not in admission_columns:
+            conn.execute(
+                "ALTER TABLE ebook_admissions ADD COLUMN publication_method TEXT"
             )
 
         conn.executescript(
@@ -211,6 +237,10 @@ def init_local_db() -> None:
                 ON cleanup_actions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_cleanup_actions_result
                 ON cleanup_actions(result_id);
+            CREATE INDEX IF NOT EXISTS idx_ebook_admissions_created
+                ON ebook_admissions(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ebook_admissions_result
+                ON ebook_admissions(result_id);
             """
         )
         conn.commit()
@@ -422,6 +452,92 @@ def result_by_id(result_id: int) -> dict | None:
     if not row:
         return None
     return _decode_results([row])[0]
+
+
+def create_ebook_admission(result: dict, staged_relative_path: str) -> int:
+    now = utc_now()
+    with local_conn() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO ebook_admissions(
+                result_id, scan_id, book_id, staged_relative_path,
+                stored_path, local_path, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'preparing', ?, ?)
+            """,
+            (
+                result["id"],
+                result["scan_id"],
+                result["book_id"],
+                staged_relative_path,
+                result["stored_path"],
+                result["local_path"],
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def update_ebook_admission(
+    admission_id: int,
+    status: str,
+    *,
+    staged_sha256: str | None = None,
+    publication_method: str | None = None,
+    verification: dict | None = None,
+    error: str | None = None,
+) -> None:
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ebook_admissions
+            SET status=?, staged_sha256=COALESCE(?, staged_sha256),
+                publication_method=COALESCE(?, publication_method),
+                verification_json=COALESCE(?, verification_json),
+                updated_at=?, error=?
+            WHERE id=?
+            """,
+            (
+                status,
+                staged_sha256,
+                publication_method,
+                json.dumps(verification, ensure_ascii=False) if verification is not None else None,
+                utc_now(),
+                error,
+                admission_id,
+            ),
+        )
+        conn.commit()
+
+
+def ebook_admission_by_id(admission_id: int) -> dict | None:
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM ebook_admissions WHERE id=?",
+            (admission_id,),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    raw = item.pop("verification_json")
+    item["verification"] = json.loads(raw) if raw else None
+    return item
+
+
+def recent_ebook_admissions(limit: int = 100) -> list[dict]:
+    with local_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ebook_admissions ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit), 500)),),
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        raw = item.pop("verification_json")
+        item["verification"] = json.loads(raw) if raw else None
+        items.append(item)
+    return items
 
 
 def create_cleanup_action(result: dict, action_kind: str) -> int:

@@ -83,6 +83,7 @@ def test_verified_correct_staged_epub_is_eligible_but_not_admitted(tmp_path, mon
     assert result["safeToAdmit"] is True
     assert result["readOnly"] is True
     assert result["sha256"]
+    assert "separate readiness checks" in result["message"]
 
 
 def test_wrong_staged_epub_is_never_eligible(tmp_path, monkeypatch):

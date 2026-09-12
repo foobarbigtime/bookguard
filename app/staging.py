@@ -36,7 +36,7 @@ def _max_staged_ebook_bytes() -> int:
         raise StagingSafetyError(str(exc)) from exc
 
 
-def _resolve_staged_file(relative_path: str) -> tuple[Path, Path]:
+def resolve_staged_file(relative_path: str) -> tuple[Path, Path]:
     root = _staging_root()
     supplied = str(relative_path or "").strip()
     if not supplied:
@@ -71,7 +71,7 @@ def _resolve_staged_file(relative_path: str) -> tuple[Path, Path]:
     return root, resolved
 
 
-def _book_identity(book: dict[str, Any]) -> tuple[str, str]:
+def book_identity(book: dict[str, Any]) -> tuple[str, str]:
     author_obj = book.get("author") if isinstance(book.get("author"), dict) else {}
     title = str(book.get("title") or "").strip()
     author = str(
@@ -83,6 +83,74 @@ def _book_identity(book: dict[str, Any]) -> tuple[str, str]:
     if not title or not author:
         raise StagingSafetyError("Bindery did not provide both an expected title and author.")
     return title, author
+
+
+def verify_ebook_file(
+    book_id: int,
+    path: Path,
+    *,
+    display_path: str,
+    book: dict[str, Any],
+) -> dict[str, Any]:
+    """Verify one already-resolved regular ebook file against a Bindery book."""
+    expected_title, expected_author = book_identity(book)
+    before_stat = path.stat()
+    before_hash = sha256_file(path)
+    extracted = extract_ebook_identity(str(path))
+
+    identity = {
+        "book_id": int(book_id),
+        "title": expected_title,
+        "author": expected_author,
+    }
+    verdict, confidence, evidence = classify_identity(
+        identity,
+        extracted.metadata,
+        extracted.text,
+        extracted.identifiers,
+        extracted.notes,
+        extracted.front_text,
+    )
+
+    after_stat = path.stat()
+    after_hash = sha256_file(path)
+    stable = (
+        before_hash == after_hash
+        and before_stat.st_size == after_stat.st_size
+        and before_stat.st_mtime_ns == after_stat.st_mtime_ns
+        and before_stat.st_ctime_ns == after_stat.st_ctime_ns
+        and before_stat.st_dev == after_stat.st_dev
+        and before_stat.st_ino == after_stat.st_ino
+    )
+    safe_to_admit = (
+        stable
+        and verdict == "VERIFIED_CORRECT"
+        and int(confidence) >= MIN_ADMISSION_CONFIDENCE
+    )
+
+    blockers: list[str] = []
+    if not stable:
+        blockers.append("stagedFileChangedDuringVerification")
+    if verdict != "VERIFIED_CORRECT":
+        blockers.append(f"verdict:{verdict}")
+    if int(confidence) < MIN_ADMISSION_CONFIDENCE:
+        blockers.append(f"confidenceBelow:{MIN_ADMISSION_CONFIDENCE}")
+
+    return {
+        "bookId": int(book_id),
+        "relativePath": display_path,
+        "size": after_stat.st_size,
+        "sha256": after_hash,
+        "stableDuringVerification": stable,
+        "expectedTitle": expected_title,
+        "expectedAuthor": expected_author,
+        "verdict": verdict,
+        "confidence": int(confidence),
+        "source": extracted.source,
+        "evidence": evidence,
+        "safeToAdmit": safe_to_admit,
+        "admissionBlockers": blockers,
+    }
 
 
 def list_staged_ebooks(limit: int = 500) -> dict[str, Any]:
@@ -132,71 +200,25 @@ def verify_staged_ebook(
     """Verify staged ebook bytes against one explicit Bindery book.
 
     This function never imports, moves, deletes, or modifies the staged file.
-    A future admission operation must repeat verification at its own mutation
+    An admission operation must repeat verification at its own mutation
     boundary; this read-only result is not a durable authorization token.
     """
-    root, path = _resolve_staged_file(relative_path)
+    root, path = resolve_staged_file(relative_path)
     client = client or BinderyClient()
     book = client.get_book(int(book_id))
-    expected_title, expected_author = _book_identity(book)
-
-    before_stat = path.stat()
-    before_hash = sha256_file(path)
-    extracted = extract_ebook_identity(str(path))
-
-    identity = {
-        "book_id": int(book_id),
-        "title": expected_title,
-        "author": expected_author,
-    }
-    verdict, confidence, evidence = classify_identity(
-        identity,
-        extracted.metadata,
-        extracted.text,
-        extracted.identifiers,
-        extracted.notes,
-        extracted.front_text,
+    result = verify_ebook_file(
+        book_id,
+        path,
+        display_path=path.relative_to(root).as_posix(),
+        book=book,
     )
-
-    after_stat = path.stat()
-    after_hash = sha256_file(path)
-    stable = (
-        before_hash == after_hash
-        and before_stat.st_size == after_stat.st_size
-        and before_stat.st_mtime_ns == after_stat.st_mtime_ns
-    )
-    safe_to_admit = (
-        stable
-        and verdict == "VERIFIED_CORRECT"
-        and int(confidence) >= MIN_ADMISSION_CONFIDENCE
-    )
-
-    blockers: list[str] = []
-    if not stable:
-        blockers.append("stagedFileChangedDuringVerification")
-    if verdict != "VERIFIED_CORRECT":
-        blockers.append(f"verdict:{verdict}")
-    if int(confidence) < MIN_ADMISSION_CONFIDENCE:
-        blockers.append(f"confidenceBelow:{MIN_ADMISSION_CONFIDENCE}")
-
     return {
-        "bookId": int(book_id),
-        "relativePath": path.relative_to(root).as_posix(),
-        "size": after_stat.st_size,
-        "sha256": after_hash,
-        "stableDuringVerification": stable,
-        "expectedTitle": expected_title,
-        "expectedAuthor": expected_author,
-        "verdict": verdict,
-        "confidence": int(confidence),
-        "source": extracted.source,
-        "evidence": evidence,
-        "safeToAdmit": safe_to_admit,
-        "admissionBlockers": blockers,
+        **result,
         "readOnly": True,
         "message": (
-            "Staged bytes independently verify the intended book. Admission remains disabled in this slice."
-            if safe_to_admit
+            "Staged bytes independently verify the intended book. Admission still requires "
+            "separate readiness checks and explicit confirmation."
+            if result["safeToAdmit"]
             else "Staged bytes did not meet the automatic admission safety threshold."
         ),
     }

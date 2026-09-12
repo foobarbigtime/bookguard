@@ -1,4 +1,4 @@
-from app.bindery_client import evaluate_replacement_candidate
+from app.bindery_client import BinderyClient, evaluate_replacement_candidate
 
 
 def test_duplicate_wrong_release_from_second_indexer_is_rejected():
@@ -52,3 +52,18 @@ def test_bindery_rejection_is_preserved():
 
     assert decision.safe is False
     assert decision.reason == "release is blocklisted"
+
+
+def test_library_scan_uses_bindery_reconciliation_endpoint(monkeypatch):
+    client = BinderyClient(base_url="http://bindery", api_key="test")
+    calls = []
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path: calls.append((method, path)) or {"message": "started"},
+    )
+
+    result = client.scan_library()
+
+    assert result == {"message": "started"}
+    assert calls == [("POST", "/library/scan")]
