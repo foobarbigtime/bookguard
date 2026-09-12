@@ -469,6 +469,7 @@ def reconcile_ebook_acquisition(
             return {
                 "ok": False,
                 "acquisition": record,
+                "stagedFiles": inventory["items"],
                 "message": "Manual staging review is required; no file was admitted or removed.",
             }
 
