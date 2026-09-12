@@ -307,6 +307,27 @@ git pull
 docker compose up -d --build
 ```
 
+## Isolated smoke test
+
+Before a release or live acceptance test, run:
+
+```bash
+./scripts/smoke-test.sh
+```
+
+The command builds the current source and validates both the normal Compose
+topology and the opt-in admission overlay. It then exercises the complete ebook
+workflow—acquisition, external-handoff enforcement, staged-byte verification,
+atomic admission, registration, and finalization—against a fake Bindery client
+and temporary files.
+
+The workflow container uses `--network none`, a read-only root filesystem, and
+an isolated temporary filesystem. It does not mount `/config`, `/books`,
+`/staging`, the Bindery database, the download client, or any other live host
+path. The temporary library and audit database are removed when the command
+finishes. A successful run therefore replaces most of the long manual CLI
+checks; a live test is still appropriate once per release milestone.
+
 After scanner/matcher upgrades, run a **new scan**. Historical scan rows are kept and are not silently reclassified.
 
 ## Matching philosophy
@@ -330,7 +351,9 @@ PYTHONPATH=. pytest -q
 uvicorn app.main:app --reload --port 8788
 ```
 
-The test suite includes end-to-end synthetic EPUB tests covering preview, safe repair, verification, repair-history persistence, Undo, and staged-byte safety gates.
+The test suite includes end-to-end synthetic EPUB tests covering preview, safe
+repair, verification, repair-history persistence, Undo, staged-byte safety
+gates, and the isolated acquisition-to-finalization lifecycle.
 
 ### Project structure
 
@@ -352,6 +375,8 @@ app/acquisition.py          One-at-a-time Bindery queue-to-staging workflow
 app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery
 app/file_safety.py          Shared filesystem hashing/safety helpers
+tools/smoke_test.py         Isolated workflow and Compose safety harness
+scripts/smoke-test.sh       One-command containerized smoke-test runner
 ```
 
 Versioned entry-point and verifier wrappers are intentionally avoided. New
