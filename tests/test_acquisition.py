@@ -281,7 +281,7 @@ def test_reconcile_refuses_ambiguous_staging(acquisition_setup):
 
     assert result["ok"] is False
     assert result["acquisition"]["status"] == "review_required"
-    assert len(result["evaluatedStagedFiles"]) == 2
+    assert len(result["stagedFiles"]) == 2
 
 
 def test_reconcile_records_failed_bindery_download(acquisition_setup):
