@@ -388,8 +388,6 @@ def admit_staged_ebook(
             )
         if str(result.get("format") or "") != "ebook":
             raise AdmissionSafetyError("Direct admission currently supports ebooks only.")
-        if str(result.get("classification") or "") not in {"REVIEW", "REJECT", "MISSING"}:
-            raise AdmissionSafetyError("PASS results are not eligible for replacement admission.")
 
         staging_root, staged_path = resolve_staged_file(relative_path)
         destination, expected_stored_path = _destination_for_result(result, staged_path)
