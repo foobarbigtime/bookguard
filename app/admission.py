@@ -281,8 +281,55 @@ def _copy_stable_snapshot(
         os.close(source_fd)
 
 
-def _publish_no_replace(temp_path: Path, destination: Path) -> None:
-    """Atomically rename a private snapshot without replacing any path."""
+def _rename_no_replace(
+    source_directory_fd: int,
+    source_name: str,
+    destination_directory_fd: int,
+    destination_name: str,
+    destination: Path,
+) -> bool:
+    """Rename without replacement, or report that the filesystem lacks support."""
+    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if renameat2 is None:
+        return False
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        source_directory_fd,
+        os.fsencode(source_name),
+        destination_directory_fd,
+        os.fsencode(destination_name),
+        1,  # RENAME_NOREPLACE
+    )
+    if result == 0:
+        return True
+
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        raise FileExistsError(
+            error_number,
+            os.strerror(error_number),
+            destination,
+        )
+    unsupported_errors = {
+        errno.EINVAL,
+        errno.ENOSYS,
+        errno.EOPNOTSUPP,
+        errno.ENOTSUP,
+    }
+    if error_number in unsupported_errors:
+        return False
+    raise OSError(error_number, os.strerror(error_number), destination)
+
+
+def _publish_no_replace(temp_path: Path, destination: Path) -> str:
+    """Atomically publish a private snapshot without replacing any path."""
     source_directory_fd = os.open(
         temp_path.parent,
         os.O_RDONLY
@@ -295,41 +342,35 @@ def _publish_no_replace(temp_path: Path, destination: Path) -> None:
         | getattr(os, "O_DIRECTORY", 0)
         | getattr(os, "O_NOFOLLOW", 0),
     )
-    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
-    if renameat2 is None:
-        os.close(source_directory_fd)
-        os.close(destination_directory_fd)
-        raise AdmissionSafetyError("This host lacks atomic no-replace rename support.")
-    renameat2.argtypes = [
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    ]
-    renameat2.restype = ctypes.c_int
     try:
-        result = renameat2(
+        renamed = _rename_no_replace(
             source_directory_fd,
-            os.fsencode(temp_path.name),
+            temp_path.name,
             destination_directory_fd,
-            os.fsencode(destination.name),
-            1,  # RENAME_NOREPLACE
+            destination.name,
+            destination,
         )
-        if result != 0:
-            error_number = ctypes.get_errno()
-            if error_number == errno.EEXIST:
-                raise FileExistsError(
-                    error_number,
-                    os.strerror(error_number),
-                    destination,
-                )
-            raise OSError(error_number, os.strerror(error_number), destination)
+        if renamed:
+            publication_method = "renameat2"
+        else:
+            os.link(
+                temp_path.name,
+                destination.name,
+                src_dir_fd=source_directory_fd,
+                dst_dir_fd=destination_directory_fd,
+                follow_symlinks=False,
+            )
+            publication_method = "private-snapshot-link"
+
         os.fsync(destination_directory_fd)
+        if not renamed:
+            os.unlink(temp_path.name, dir_fd=source_directory_fd)
+            os.fsync(source_directory_fd)
     finally:
         os.close(source_directory_fd)
         os.close(destination_directory_fd)
     _cleanup_private_snapshot(temp_path)
+    return publication_method
 
 
 def _cleanup_private_snapshot(temp_path: Path | None) -> None:
@@ -450,7 +491,7 @@ def admit_staged_ebook(
             verification=verification,
         )
         _seal_snapshot(temp_path, snapshot_hash)
-        _publish_no_replace(temp_path, destination)
+        publication_method = _publish_no_replace(temp_path, destination)
         temp_path = None
         update_ebook_admission(admission_id, "published")
 
@@ -481,6 +522,7 @@ def admit_staged_ebook(
             "sha256": snapshot_hash,
             "libraryPath": str(destination),
             "binderyPath": expected_stored_path,
+            "publicationMethod": publication_method,
             "status": response_status,
             "binderyScan": scan_state,
             "warning": scan_warning,

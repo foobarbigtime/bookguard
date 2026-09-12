@@ -161,10 +161,14 @@ book identity, or an already-registered ebook.
 At the mutation boundary BookGuard opens the staged file without following
 symlinks, copies it to a private file on the destination filesystem, verifies
 the copied bytes again at 99% confidence, flushes them, and atomically publishes
-without overwrite. The library file is never hardlinked to staging. Admission
-state is recorded in `/config/bookguard.db` before copying. After publication,
-BookGuard asks Bindery to scan its library and retains the staged source even
-after registration is confirmed; cleanup remains an explicit operator choice.
+without overwrite. BookGuard prefers Linux `renameat2(RENAME_NOREPLACE)` and,
+on filesystems such as Unraid `shfs`, falls back to atomically linking the private
+verified snapshot into place before immediately removing its private name. The
+library file is never hardlinked to staging and remains independent from it.
+Admission state is recorded in `/config/bookguard.db` before copying. After
+publication, BookGuard asks Bindery to scan its library and retains the staged
+source even after registration is confirmed; cleanup remains an explicit
+operator choice.
 
 ## Metadata repair philosophy
 

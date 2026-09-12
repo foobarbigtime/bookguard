@@ -141,6 +141,7 @@ def test_verified_snapshot_is_published_without_deleting_staging(admission_setup
 
     destination = setup["admission_root"] / setup["relative"]
     assert response["status"] == "scan_requested"
+    assert response["publicationMethod"] == "renameat2"
     assert response["stagingRetained"] is True
     assert client.scan_requests == 1
     assert setup["staged"].is_file()
@@ -322,3 +323,21 @@ def test_atomic_publish_refuses_to_replace_existing_file(tmp_path):
 
     assert destination.read_bytes() == b"existing"
     assert temporary.read_bytes() == b"new"
+
+
+def test_atomic_publish_falls_back_to_private_snapshot_link(tmp_path, monkeypatch):
+    private = tmp_path / ".bookguard-admission-test"
+    private.mkdir(mode=0o700)
+    temporary = private / "snapshot.epub"
+    destination = tmp_path / "book.epub"
+    temporary.write_bytes(b"verified snapshot")
+
+    monkeypatch.setattr(admission, "_rename_no_replace", lambda *args: False)
+
+    method = admission._publish_no_replace(temporary, destination)
+
+    assert method == "private-snapshot-link"
+    assert destination.read_bytes() == b"verified snapshot"
+    assert destination.stat().st_nlink == 1
+    assert not temporary.exists()
+    assert not private.exists()
