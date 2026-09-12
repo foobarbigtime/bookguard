@@ -160,6 +160,10 @@ class BinderyClient:
         """Ask Bindery to reconcile files already placed in its library roots."""
         return self._request("POST", "/library/scan")
 
+    def list_queue(self) -> dict[str, Any] | list[dict[str, Any]]:
+        """Return Bindery's complete queue response for guarded correlation."""
+        return self._request("GET", "/queue")
+
     def list_history(self, book_id: int, event_type: str | None = None, limit: int = 100) -> dict[str, Any]:
         params: dict[str, Any] = {"bookId": int(book_id), "limit": int(limit)}
         if event_type:
