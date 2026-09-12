@@ -60,6 +60,7 @@ services:
       - /mnt/user/data/media/audiobooks:/audiobooks:ro
       - /mnt/user/data/media/books:/books:ro
       - /mnt/user/data/bookguard-quarantine:/quarantine
-      # Pre-import staging for safe reacquisition. Bindery must be configured
-      # with import.mode=external and its drop folder mapped to this same host path.
+      # Pre-import staging for guarded, explicitly confirmed reacquisition.
+      # Bindery must use external import with auto-grab disabled and map its
+      # drop folder to this same host path.
       - /mnt/user/data/bookguard-staging:/staging
