@@ -67,3 +67,19 @@ def test_library_scan_uses_bindery_reconciliation_endpoint(monkeypatch):
 
     assert result == {"message": "started"}
     assert calls == [("POST", "/library/scan")]
+
+
+def test_queue_listing_uses_complete_queue_endpoint(monkeypatch):
+    client = BinderyClient(base_url="http://bindery", api_key="test")
+    calls = []
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path: calls.append((method, path))
+        or {"items": [], "partial": False},
+    )
+
+    result = client.list_queue()
+
+    assert result == {"items": [], "partial": False}
+    assert calls == [("GET", "/queue")]
