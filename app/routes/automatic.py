@@ -8,6 +8,7 @@ from ..acquisition import (
     acquisition_history,
     acquisition_readiness,
     admit_ebook_acquisition,
+    finalize_ebook_acquisition,
     reconcile_ebook_acquisition,
     start_ebook_acquisition,
 )
@@ -145,6 +146,19 @@ def api_automatic_admit_acquisition(
     require_confirmation(payload, "ADMIT_EBOOK_ACQUISITION")
     try:
         return admit_ebook_acquisition(acquisition_id)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/acquisitions/{acquisition_id}/finalize")
+def api_automatic_finalize_acquisition(
+    acquisition_id: int,
+    payload: ConfirmationRequest,
+):
+    """Finalize a registered admission without deleting download-client data."""
+    require_confirmation(payload, "FINALIZE_EBOOK_ACQUISITION")
+    try:
+        return finalize_ebook_acquisition(acquisition_id)
     except AcquisitionSafetyError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 

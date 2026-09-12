@@ -164,6 +164,23 @@ class BinderyClient:
         """Return Bindery's complete queue response for guarded correlation."""
         return self._request("GET", "/queue")
 
+    def remove_queue_item(
+        self,
+        queue_id: int,
+        *,
+        remove_from_client: bool = False,
+        delete_files: bool = False,
+    ) -> None:
+        """Remove one Bindery queue record without broad cleanup side effects."""
+        self._request(
+            "DELETE",
+            f"/queue/{int(queue_id)}",
+            params={
+                "removeFromClient": str(bool(remove_from_client)).lower(),
+                "deleteFiles": str(bool(delete_files)).lower(),
+            },
+        )
+
     def list_history(self, book_id: int, event_type: str | None = None, limit: int = 100) -> dict[str, Any]:
         params: dict[str, Any] = {"bookId": int(book_id), "limit": int(limit)}
         if event_type:

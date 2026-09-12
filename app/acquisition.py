@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import threading
 from typing import Any
@@ -14,6 +15,7 @@ from .config import ConfigurationError, load_automation_settings, settings
 from .db import (
     active_ebook_acquisitions,
     create_ebook_acquisition,
+    ebook_admission_by_id,
     ebook_acquisition_by_id,
     latest_scan,
     recent_ebook_acquisitions,
@@ -27,6 +29,7 @@ from .staging import (
     book_identity,
     list_staged_ebooks,
     resolve_staged_file,
+    staged_path_is_absent,
     verify_staged_ebook,
 )
 
@@ -59,6 +62,17 @@ _RECONCILABLE_STATUSES = {
     "awaiting_staging",
     "staging_observed",
     "verified",
+}
+_FINALIZABLE_STATUSES = {
+    "admitted",
+    "finalizing",
+    "cleanup_required",
+    "finalized",
+}
+_FINALIZABLE_QUEUE_STATUSES = {
+    "importexternal",
+    "imported",
+    "removed",
 }
 
 
@@ -114,6 +128,14 @@ def _queue_summary(item: dict[str, Any]) -> dict[str, Any]:
         "status": item.get("status"),
         "protocol": item.get("protocol"),
     }
+
+
+def _acquisition_status_for_queue(queue_status: str) -> str:
+    if queue_status in _AWAITING_STAGING_QUEUE_STATUSES:
+        return "awaiting_staging"
+    if queue_status == "downloading":
+        return "downloading"
+    return "queued"
 
 
 def _bindery_setting_text(
@@ -268,7 +290,36 @@ def _search_candidate(
         raise AcquisitionSafetyError(
             f"The selected release failed BookGuard's safety gate: {decision.reason}."
         )
+    _reject_previously_imported_candidate(client, book_id, candidate)
     return candidate
+
+
+def _reject_previously_imported_candidate(
+    client: BinderyClient,
+    book_id: int,
+    candidate: dict[str, Any],
+) -> None:
+    """Reject an exact release title already paired as grabbed and imported."""
+    try:
+        payload = client.list_history(book_id, limit=200)
+    except BinderyClientError as exc:
+        raise AcquisitionSafetyError(str(exc)) from exc
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        raise AcquisitionSafetyError("Bindery history returned an invalid item list.")
+
+    title = str(candidate.get("title") or "").strip().casefold()
+    matching_events = {
+        str(item.get("eventType") or "").strip().casefold()
+        for item in items
+        if isinstance(item, dict)
+        and str(item.get("sourceTitle") or "").strip().casefold() == title
+    }
+    if {"grabbed", "bookimported"}.issubset(matching_events):
+        raise AcquisitionSafetyError(
+            "The selected release already appears as grabbed and imported in "
+            "Bindery history."
+        )
 
 
 def _response_queue_id(response: Any) -> int | None:
@@ -461,6 +512,56 @@ def reconcile_ebook_acquisition(
             raise AcquisitionSafetyError("The acquisition's scan result no longer exists.")
         _result_and_book(result, client)
 
+        queue_items, queue_partial = _queue_payload(client)
+        if queue_partial:
+            raise AcquisitionSafetyError(
+                "Bindery returned a partial queue response; reconciliation stopped."
+            )
+        matches = _matching_queue_items(acquisition, queue_items)
+        if len(matches) > 1:
+            record = _mark_review_required(
+                acquisition_id,
+                "Multiple Bindery queue records matched this acquisition.",
+            )
+            return {"ok": False, "acquisition": record}
+
+        queue_item = matches[0] if matches else None
+        queue_status = _queue_status(queue_item) if queue_item else "absent"
+        queue_id = _response_queue_id(queue_item) if queue_item else None
+        if queue_status in _FAILED_QUEUE_STATUSES:
+            update_ebook_acquisition(
+                acquisition_id,
+                "failed",
+                queue_id=queue_id,
+                queue_status=queue_status,
+                error=str(queue_item.get("errorMessage") or "Bindery download failed."),
+            )
+            return {
+                "ok": True,
+                "acquisition": ebook_acquisition_by_id(acquisition_id),
+                "message": "Bindery reported that the acquisition failed.",
+            }
+
+        if (
+            inventory["items"]
+            and queue_item is not None
+            and queue_status not in _AWAITING_STAGING_QUEUE_STATUSES
+        ):
+            update_ebook_acquisition(
+                acquisition_id,
+                _acquisition_status_for_queue(queue_status),
+                queue_id=queue_id,
+                queue_status=queue_status or "unknown",
+            )
+            return {
+                "ok": True,
+                "acquisition": ebook_acquisition_by_id(acquisition_id),
+                "message": (
+                    "A staged path is visible, but Bindery has not completed its "
+                    "external handoff; verification remains blocked."
+                ),
+            }
+
         if len(inventory["items"]) > 1:
             record = _mark_review_required(
                 acquisition_id,
@@ -491,6 +592,8 @@ def reconcile_ebook_acquisition(
                 update_ebook_acquisition(
                     acquisition_id,
                     "staging_observed",
+                    queue_id=queue_id,
+                    queue_status=queue_status,
                     observed_relative_path=observed[0],
                     observed_size=observed[1],
                     observed_modified_ns=observed[2],
@@ -534,6 +637,8 @@ def reconcile_ebook_acquisition(
             update_ebook_acquisition(
                 acquisition_id,
                 "verified",
+                queue_id=queue_id,
+                queue_status=queue_status,
                 staged_relative_path=str(verification["relativePath"]),
                 staged_sha256=str(verification["sha256"]),
                 verification=verification,
@@ -559,51 +664,24 @@ def reconcile_ebook_acquisition(
                 "message": "Manual staging review is required; no file was admitted or removed.",
             }
 
-        queue_items, queue_partial = _queue_payload(client)
-        if queue_partial:
-            raise AcquisitionSafetyError(
-                "Bindery returned a partial queue response; reconciliation stopped."
-            )
-        matches = _matching_queue_items(acquisition, queue_items)
-        if len(matches) > 1:
-            record = _mark_review_required(
-                acquisition_id,
-                "Multiple Bindery queue records matched this acquisition.",
-            )
-            return {"ok": False, "acquisition": record}
         if not matches:
-            update_ebook_acquisition(acquisition_id, "awaiting_staging")
+            update_ebook_acquisition(
+                acquisition_id,
+                "awaiting_staging",
+                queue_status="absent",
+            )
             return {
                 "ok": True,
                 "acquisition": ebook_acquisition_by_id(acquisition_id),
                 "message": "The queue record is absent; waiting for the external staged file.",
             }
 
-        queue_item = matches[0]
-        queue_status = _queue_status(queue_item)
-        queue_id = _response_queue_id(queue_item)
-        if queue_status in _FAILED_QUEUE_STATUSES:
-            update_ebook_acquisition(
-                acquisition_id,
-                "failed",
-                queue_id=queue_id,
-                queue_status=queue_status,
-                error=str(queue_item.get("errorMessage") or "Bindery download failed."),
-            )
-        else:
-            next_status = (
-                "awaiting_staging"
-                if queue_status in _AWAITING_STAGING_QUEUE_STATUSES
-                else "downloading"
-                if queue_status == "downloading"
-                else "queued"
-            )
-            update_ebook_acquisition(
-                acquisition_id,
-                next_status,
-                queue_id=queue_id,
-                queue_status=queue_status or "unknown",
-            )
+        update_ebook_acquisition(
+            acquisition_id,
+            _acquisition_status_for_queue(queue_status),
+            queue_id=queue_id,
+            queue_status=queue_status or "unknown",
+        )
         return {
             "ok": True,
             "acquisition": ebook_acquisition_by_id(acquisition_id),
@@ -666,6 +744,214 @@ def admit_ebook_acquisition(
             "message": (
                 "The verified acquisition was submitted to guarded admission. "
                 "The staged source remains retained."
+            ),
+        }
+
+
+def finalize_ebook_acquisition(
+    acquisition_id: int,
+    client: BinderyClient | None = None,
+) -> dict[str, Any]:
+    """Remove a registered external handoff record and its verified staged copy."""
+    client = client or BinderyClient()
+    with _acquisition_lock:
+        acquisition = ebook_acquisition_by_id(acquisition_id)
+        if not acquisition:
+            raise AcquisitionSafetyError("Acquisition record not found.")
+        status = str(acquisition.get("status") or "")
+        if status not in _FINALIZABLE_STATUSES:
+            raise AcquisitionSafetyError(
+                f"Acquisition status '{status}' is not eligible for finalization."
+            )
+        if status == "finalized":
+            return {
+                "ok": True,
+                "acquisition": acquisition,
+                "message": "The acquisition is already finalized.",
+            }
+        if not settings.allow_actions:
+            raise AcquisitionSafetyError("Automatic actions are disabled.")
+        configured = _automation_settings()
+        if not configured.automatic_reacquisition:
+            raise AcquisitionSafetyError("Automatic reacquisition is disabled.")
+
+        admission_id = acquisition.get("admission_id")
+        admission = ebook_admission_by_id(int(admission_id)) if admission_id else None
+        if not admission or str(admission.get("status") or "") != "registered":
+            raise AcquisitionSafetyError(
+                "The linked admission is not registered by Bindery."
+            )
+        expected_hash = str(acquisition.get("staged_sha256") or "")
+        relative_path = str(acquisition.get("staged_relative_path") or "")
+        if (
+            not expected_hash
+            or expected_hash != str(admission.get("staged_sha256") or "")
+            or relative_path != str(admission.get("staged_relative_path") or "")
+            or int(admission.get("book_id") or 0) != int(acquisition["book_id"])
+            or int(admission.get("result_id") or 0) != int(acquisition["result_id"])
+        ):
+            raise AcquisitionSafetyError(
+                "The acquisition and registered admission records do not match."
+            )
+
+        result = result_by_id(int(acquisition["result_id"]))
+        if (
+            not result
+            or str(result.get("stored_path") or "")
+            != str(admission.get("stored_path") or "")
+            or str(result.get("local_path") or "")
+            != str(admission.get("local_path") or "")
+        ):
+            raise AcquisitionSafetyError(
+                "The registered admission no longer matches its scan result."
+            )
+        library_path = Path(str(admission["local_path"]))
+        if not library_path.is_file() or library_path.is_symlink():
+            raise AcquisitionSafetyError(
+                "The admitted library file is missing or symlinked."
+            )
+        if sha256_file(library_path) != expected_hash:
+            raise AcquisitionSafetyError(
+                "The admitted library file no longer matches the verified snapshot."
+            )
+        try:
+            book = client.get_book(int(acquisition["book_id"]))
+        except BinderyClientError as exc:
+            raise AcquisitionSafetyError(str(exc)) from exc
+        registered_path = os.path.normpath(str(admission["stored_path"]))
+        registered = any(
+            isinstance(item, dict)
+            and str(item.get("format") or "").casefold() == "ebook"
+            and os.path.normpath(str(item.get("path") or "")) == registered_path
+            for item in (book.get("bookFiles") or [])
+        )
+        if not registered:
+            raise AcquisitionSafetyError(
+                "Bindery no longer registers the admitted ebook path."
+            )
+
+        queue_items, queue_partial = _queue_payload(client)
+        if queue_partial:
+            raise AcquisitionSafetyError(
+                "Bindery returned a partial queue response; finalization stopped."
+            )
+        queue_id = acquisition.get("queue_id")
+        if queue_id is None:
+            raise AcquisitionSafetyError("The acquisition has no recorded queue ID.")
+        queue_matches = [
+            item
+            for item in queue_items
+            if str(item.get("id") or "") == str(queue_id)
+        ]
+        if len(queue_matches) > 1:
+            raise AcquisitionSafetyError(
+                "Multiple Bindery queue records share the acquisition queue ID."
+            )
+        queue_item = queue_matches[0] if queue_matches else None
+        queue_status = _queue_status(queue_item) if queue_item else "absent"
+        if queue_item and queue_status not in _FINALIZABLE_QUEUE_STATUSES:
+            raise AcquisitionSafetyError(
+                f"Bindery queue status '{queue_status}' is not safe to finalize."
+            )
+
+        try:
+            staging_root, staged_path = resolve_staged_file(relative_path)
+        except StagingSafetyError as exc:
+            safely_absent = False
+            if queue_item is None and status in {"finalizing", "cleanup_required"}:
+                try:
+                    safely_absent = staged_path_is_absent(relative_path)
+                except StagingSafetyError as recovery_exc:
+                    raise AcquisitionSafetyError(str(recovery_exc)) from recovery_exc
+            if safely_absent:
+                update_ebook_acquisition(
+                    acquisition_id,
+                    "finalized",
+                    queue_status="absent",
+                )
+                return {
+                    "ok": True,
+                    "acquisition": ebook_acquisition_by_id(acquisition_id),
+                    "queueRecordRemoved": True,
+                    "stagedFileRemoved": True,
+                    "message": "A previously interrupted finalization is complete.",
+                }
+            raise AcquisitionSafetyError(str(exc)) from exc
+
+        before = staged_path.stat()
+        if sha256_file(staged_path) != expected_hash:
+            raise AcquisitionSafetyError(
+                "The verified staged file changed before finalization."
+            )
+
+        update_ebook_acquisition(
+            acquisition_id,
+            "finalizing",
+            queue_status=queue_status,
+        )
+        try:
+            if queue_item:
+                client.remove_queue_item(
+                    int(queue_id),
+                    remove_from_client=False,
+                    delete_files=False,
+                )
+                remaining, remaining_partial = _queue_payload(client)
+                if remaining_partial or any(
+                    str(item.get("id") or "") == str(queue_id)
+                    for item in remaining
+                ):
+                    raise AcquisitionSafetyError(
+                        "Bindery did not remove the finalized queue record."
+                    )
+
+            after = staged_path.stat()
+            unchanged = (
+                before.st_dev == after.st_dev
+                and before.st_ino == after.st_ino
+                and before.st_size == after.st_size
+                and before.st_mtime_ns == after.st_mtime_ns
+                and before.st_ctime_ns == after.st_ctime_ns
+            )
+            if not unchanged or sha256_file(staged_path) != expected_hash:
+                raise AcquisitionSafetyError(
+                    "The staged file changed while finalization was running."
+                )
+            staged_path.unlink()
+            directory_fd = os.open(
+                staging_root,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+
+            update_ebook_acquisition(
+                acquisition_id,
+                "finalized",
+                queue_status="removed" if queue_item else "absent",
+            )
+        except Exception as exc:
+            update_ebook_acquisition(
+                acquisition_id,
+                "cleanup_required",
+                error=str(exc),
+            )
+            if isinstance(exc, AcquisitionSafetyError):
+                raise
+            raise AcquisitionSafetyError(str(exc)) from exc
+
+        return {
+            "ok": True,
+            "acquisition": ebook_acquisition_by_id(acquisition_id),
+            "queueRecordRemoved": True,
+            "removedFromDownloadClient": False,
+            "downloadedDataDeleted": False,
+            "stagedFileRemoved": True,
+            "message": (
+                "Registered admission finalized; the terminal queue record and "
+                "verified staged copy were removed."
             ),
         }
 

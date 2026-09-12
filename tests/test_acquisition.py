@@ -15,8 +15,11 @@ from app.db import (
 class FakeClient:
     def __init__(self):
         self.queue = {"items": [], "partial": False}
+        self.history = {"items": []}
         self.auto_grab = "false"
         self.grabs = []
+        self.removed_queue_items = []
+        self.registered = False
         self.candidate = {
             "guid": "safe-guid",
             "title": "Ann Patchett - Bel Canto retail epub",
@@ -42,20 +45,47 @@ class FakeClient:
         return self.queue
 
     def get_book(self, book_id):
+        path = (
+            "/data/media/books/Ann Patchett/Bel Canto (2001)/"
+            "Bel Canto - Ann Patchett.epub"
+        )
         return {
             "id": book_id,
             "title": "Bel Canto",
             "author": {"name": "Ann Patchett"},
-            "ebookFilePath": "",
-            "bookFiles": [],
+            "ebookFilePath": path if self.registered else "",
+            "bookFiles": (
+                [{"format": "ebook", "path": path}]
+                if self.registered
+                else []
+            ),
         }
 
     def search_book(self, book_id):
         return {"results": [self.candidate]}
 
+    def list_history(self, book_id, event_type=None, limit=100):
+        return self.history
+
     def grab(self, book_id, candidate):
         self.grabs.append((book_id, candidate["guid"]))
         return {"queueItem": {"id": 77}}
+
+    def remove_queue_item(
+        self,
+        queue_id,
+        *,
+        remove_from_client=False,
+        delete_files=False,
+    ):
+        self.removed_queue_items.append(
+            (queue_id, remove_from_client, delete_files)
+        )
+        self.queue["items"] = [
+            item
+            for item in self.queue["items"]
+            if int(item.get("id") or 0) != int(queue_id)
+        ]
 
 
 def _write_epub(path: Path, title: str, author: str) -> None:
@@ -236,6 +266,32 @@ def test_start_rejects_release_that_fails_identity_gate(acquisition_setup):
     assert recent_ebook_acquisitions() == []
 
 
+def test_start_rejects_exact_release_already_imported(acquisition_setup):
+    setup = acquisition_setup
+    setup["client"].history = {
+        "items": [
+            {
+                "eventType": "grabbed",
+                "sourceTitle": setup["client"].candidate["title"],
+            },
+            {
+                "eventType": "bookImported",
+                "sourceTitle": setup["client"].candidate["title"],
+            },
+        ]
+    }
+
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="history"):
+        acquisition.start_ebook_acquisition(
+            setup["result"],
+            "safe-guid",
+            setup["client"],
+        )
+
+    assert setup["client"].grabs == []
+    assert recent_ebook_acquisitions() == []
+
+
 def test_reconcile_verifies_exactly_one_staged_ebook(acquisition_setup):
     setup = acquisition_setup
     started = acquisition.start_ebook_acquisition(
@@ -245,6 +301,10 @@ def test_reconcile_verifies_exactly_one_staged_ebook(acquisition_setup):
     )
     staged = setup["staging"] / "Bel Canto - Ann Patchett.epub"
     _write_epub(staged, "Bel Canto", "Ann Patchett")
+    setup["client"].queue = {
+        "items": [{"id": 77, "bookId": 42, "status": "importExternal"}],
+        "partial": False,
+    }
 
     observed = acquisition.reconcile_ebook_acquisition(
         started["acquisition"]["id"],
@@ -258,6 +318,7 @@ def test_reconcile_verifies_exactly_one_staged_ebook(acquisition_setup):
     assert observed["acquisition"]["status"] == "staging_observed"
     record = result["acquisition"]
     assert record["status"] == "verified"
+    assert record["queue_status"] == "importexternal"
     assert record["staged_relative_path"] == staged.name
     assert record["staged_sha256"] == hashlib.sha256(staged.read_bytes()).hexdigest()
     assert record["verification"]["safeToAdmit"] is True
@@ -308,6 +369,31 @@ def test_reconcile_records_failed_bindery_download(acquisition_setup):
 
     assert result["acquisition"]["status"] == "failed"
     assert "download client" in result["acquisition"]["error"]
+
+
+def test_reconcile_does_not_verify_before_external_handoff(acquisition_setup):
+    setup = acquisition_setup
+    started = acquisition.start_ebook_acquisition(
+        setup["result"],
+        "safe-guid",
+        setup["client"],
+    )
+    staged = setup["staging"] / "Bel Canto - Ann Patchett.epub"
+    _write_epub(staged, "Bel Canto", "Ann Patchett")
+    setup["client"].queue = {
+        "items": [{"id": 77, "bookId": 42, "status": "downloading"}],
+        "partial": False,
+    }
+
+    response = acquisition.reconcile_ebook_acquisition(
+        started["acquisition"]["id"],
+        setup["client"],
+    )
+
+    assert response["acquisition"]["status"] == "downloading"
+    assert response["acquisition"]["queue_status"] == "downloading"
+    assert response["acquisition"]["staged_sha256"] is None
+    assert staged.is_file()
 
 
 def test_verified_acquisition_hands_off_to_guarded_admission(
@@ -379,3 +465,202 @@ def test_changed_staged_bytes_are_blocked_before_admission(acquisition_setup):
     record = ebook_acquisition_by_id(started["acquisition"]["id"])
     assert record["status"] == "verified"
     assert record["admission_id"] is None
+
+
+def test_finalize_registered_acquisition_removes_only_queue_and_staging(
+    acquisition_setup,
+    monkeypatch,
+):
+    setup = acquisition_setup
+    started = acquisition.start_ebook_acquisition(
+        setup["result"],
+        "safe-guid",
+        setup["client"],
+    )
+    staged = setup["staging"] / "Bel Canto - Ann Patchett.epub"
+    _write_epub(staged, "Bel Canto", "Ann Patchett")
+    setup["client"].queue = {
+        "items": [{"id": 77, "bookId": 42, "status": "importExternal"}],
+        "partial": False,
+    }
+    acquisition.reconcile_ebook_acquisition(
+        started["acquisition"]["id"],
+        setup["client"],
+    )
+    acquisition.reconcile_ebook_acquisition(
+        started["acquisition"]["id"],
+        setup["client"],
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "admit_staged_ebook",
+        lambda result, relative_path, client: {
+            "admissionId": 91,
+            "status": "scan_requested",
+        },
+    )
+    acquisition.admit_ebook_acquisition(
+        started["acquisition"]["id"],
+        setup["client"],
+    )
+    record = acquisition.ebook_acquisition_by_id(
+        started["acquisition"]["id"]
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "ebook_admission_by_id",
+        lambda admission_id: {
+            "id": admission_id,
+            "result_id": 17,
+            "book_id": 42,
+            "status": "registered",
+            "staged_relative_path": staged.name,
+            "staged_sha256": record["staged_sha256"],
+            "stored_path": setup["result"]["stored_path"],
+            "local_path": setup["result"]["local_path"],
+        },
+    )
+    Path(setup["result"]["local_path"]).write_bytes(staged.read_bytes())
+    setup["client"].registered = True
+
+    response = acquisition.finalize_ebook_acquisition(
+        started["acquisition"]["id"],
+        setup["client"],
+    )
+
+    assert response["acquisition"]["status"] == "finalized"
+    assert response["queueRecordRemoved"] is True
+    assert response["removedFromDownloadClient"] is False
+    assert response["downloadedDataDeleted"] is False
+    assert response["stagedFileRemoved"] is True
+    assert not staged.exists()
+    assert setup["client"].removed_queue_items == [(77, False, False)]
+
+
+def test_finalize_refuses_unregistered_admission(acquisition_setup, monkeypatch):
+    setup = acquisition_setup
+    started = acquisition.start_ebook_acquisition(
+        setup["result"],
+        "safe-guid",
+        setup["client"],
+    )
+    acquisition.update_ebook_acquisition(
+        started["acquisition"]["id"],
+        "admitted",
+        admission_id=91,
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "ebook_admission_by_id",
+        lambda admission_id: {"id": admission_id, "status": "scan_requested"},
+    )
+
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="not registered"):
+        acquisition.finalize_ebook_acquisition(
+            started["acquisition"]["id"],
+            setup["client"],
+        )
+
+
+def test_finalize_refuses_nonterminal_queue_and_retains_staging(
+    acquisition_setup,
+    monkeypatch,
+):
+    setup = acquisition_setup
+    started = acquisition.start_ebook_acquisition(
+        setup["result"],
+        "safe-guid",
+        setup["client"],
+    )
+    staged = setup["staging"] / "Bel Canto - Ann Patchett.epub"
+    _write_epub(staged, "Bel Canto", "Ann Patchett")
+    staged_hash = hashlib.sha256(staged.read_bytes()).hexdigest()
+    acquisition.update_ebook_acquisition(
+        started["acquisition"]["id"],
+        "admitted",
+        queue_id=77,
+        queue_status="downloading",
+        staged_relative_path=staged.name,
+        staged_sha256=staged_hash,
+        admission_id=91,
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "ebook_admission_by_id",
+        lambda admission_id: {
+            "id": admission_id,
+            "result_id": 17,
+            "book_id": 42,
+            "status": "registered",
+            "staged_relative_path": staged.name,
+            "staged_sha256": staged_hash,
+            "stored_path": setup["result"]["stored_path"],
+            "local_path": setup["result"]["local_path"],
+        },
+    )
+    Path(setup["result"]["local_path"]).write_bytes(staged.read_bytes())
+    setup["client"].registered = True
+    setup["client"].queue = {
+        "items": [{"id": 77, "bookId": 42, "status": "downloading"}],
+        "partial": False,
+    }
+
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="not safe"):
+        acquisition.finalize_ebook_acquisition(
+            started["acquisition"]["id"],
+            setup["client"],
+        )
+
+    assert staged.is_file()
+    assert setup["client"].removed_queue_items == []
+
+
+def test_interrupted_finalize_refuses_symlinked_staging_path(
+    acquisition_setup,
+    monkeypatch,
+):
+    setup = acquisition_setup
+    started = acquisition.start_ebook_acquisition(
+        setup["result"],
+        "safe-guid",
+        setup["client"],
+    )
+    outside = setup["staging"].parent / "outside.epub"
+    outside.write_bytes(b"must remain")
+    staged = setup["staging"] / "Bel Canto - Ann Patchett.epub"
+    staged.symlink_to(outside)
+    staged_hash = hashlib.sha256(outside.read_bytes()).hexdigest()
+    acquisition.update_ebook_acquisition(
+        started["acquisition"]["id"],
+        "cleanup_required",
+        queue_id=77,
+        queue_status="removed",
+        staged_relative_path=staged.name,
+        staged_sha256=staged_hash,
+        admission_id=91,
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "ebook_admission_by_id",
+        lambda admission_id: {
+            "id": admission_id,
+            "result_id": 17,
+            "book_id": 42,
+            "status": "registered",
+            "staged_relative_path": staged.name,
+            "staged_sha256": staged_hash,
+            "stored_path": setup["result"]["stored_path"],
+            "local_path": setup["result"]["local_path"],
+        },
+    )
+    Path(setup["result"]["local_path"]).write_bytes(outside.read_bytes())
+    setup["client"].registered = True
+
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="Symlinked"):
+        acquisition.finalize_ebook_acquisition(
+            started["acquisition"]["id"],
+            setup["client"],
+        )
+
+    assert staged.is_symlink()
+    assert outside.read_bytes() == b"must remain"

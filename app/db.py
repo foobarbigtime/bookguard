@@ -698,6 +698,9 @@ def active_ebook_acquisitions() -> list[dict]:
         "awaiting_staging",
         "staging_observed",
         "verified",
+        "admitted",
+        "finalizing",
+        "cleanup_required",
     )
     placeholders = ",".join("?" for _ in active_statuses)
     with local_conn() as conn:

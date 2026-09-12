@@ -83,3 +83,30 @@ def test_queue_listing_uses_complete_queue_endpoint(monkeypatch):
 
     assert result == {"items": [], "partial": False}
     assert calls == [("GET", "/queue")]
+
+
+def test_queue_removal_disables_client_and_file_deletion(monkeypatch):
+    client = BinderyClient(base_url="http://bindery", api_key="test")
+    calls = []
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kwargs: calls.append(
+            (method, path, kwargs)
+        ),
+    )
+
+    client.remove_queue_item(77)
+
+    assert calls == [
+        (
+            "DELETE",
+            "/queue/77",
+            {
+                "params": {
+                    "removeFromClient": "false",
+                    "deleteFiles": "false",
+                }
+            },
+        )
+    ]
