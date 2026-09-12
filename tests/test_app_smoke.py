@@ -6,12 +6,54 @@ from app.config import Settings
 from app.services import dashboard
 
 
+EXPECTED_ROUTES = {
+    ("GET", "/"),
+    ("GET", "/triage"),
+    ("GET", "/settings"),
+    ("GET", "/repairs"),
+    ("GET", "/health"),
+    ("POST", "/api/scan"),
+    ("GET", "/api/status"),
+    ("GET", "/api/settings"),
+    ("POST", "/api/settings"),
+    ("POST", "/api/settings/reset"),
+    ("GET", "/api/results/{result_id}/repair-preview"),
+    ("POST", "/api/results/{result_id}/repair"),
+    ("POST", "/api/repairs/{repair_id}/undo"),
+    ("POST", "/api/triage/{result_id}/keep"),
+    ("POST", "/api/triage/keep-selected"),
+    ("POST", "/api/triage/{result_id}/reopen"),
+    ("GET", "/api/triage/{result_id}/action-preview"),
+    ("POST", "/api/triage/{result_id}/detach"),
+    ("POST", "/api/triage/{result_id}/quarantine"),
+    ("GET", "/api/results/{result_id}/missing-detach-preview"),
+    ("GET", "/api/missing/preview"),
+    ("POST", "/api/results/{result_id}/detach-missing"),
+    ("POST", "/api/missing/detach-all"),
+    ("GET", "/api/verification/status"),
+    ("GET", "/api/verification/cached"),
+    ("POST", "/api/verification/start"),
+    ("GET", "/api/verification/tika-test"),
+    ("GET", "/api/verification/{result_id}"),
+    ("POST", "/api/verification/{result_id}/run"),
+    ("GET", "/api/verification/{result_id}/repair-preview"),
+    ("POST", "/api/verification/{result_id}/repair"),
+    ("GET", "/api/automatic/bindery-status"),
+    ("GET", "/api/automatic/preimport-readiness"),
+    ("GET", "/api/automatic/staging/files"),
+    ("POST", "/api/automatic/books/{book_id}/staged-verification"),
+    ("GET", "/api/automatic/books/{book_id}/replacement-preview"),
+    ("GET", "/api/automatic/results/{result_id}/wrong-content-preview"),
+    ("POST", "/api/automatic/results/{result_id}/remediate-wrong-content"),
+}
+
+
 def test_app_imports():
     assert main.app.title == "BookGuard"
     assert main.app.version == "0.5.0"
 
 
-def test_routes_are_unique_and_guarded():
+def test_route_contract_is_exact():
     routes = {
         (method, route.path)
         for route in main.app.routes
@@ -25,15 +67,7 @@ def test_routes_are_unique_and_guarded():
     )
 
     assert len(routes) == route_count
-    assert ("GET", "/health") in routes
-    assert ("GET", "/api/automatic/staging/files") in routes
-    assert ("POST", "/api/automatic/books/{book_id}/staged-verification") in routes
-    assert ("POST", "/api/triage/{result_id}/detach") in routes
-    assert ("POST", "/api/triage/{result_id}/quarantine") in routes
-
-    # These legacy endpoints mutated Bindery/media without body confirmation.
-    assert ("POST", "/api/results/{result_id}/detach") not in routes
-    assert ("POST", "/api/results/{result_id}/quarantine") not in routes
+    assert routes == EXPECTED_ROUTES
 
 
 def test_templates_parse():
@@ -41,6 +75,7 @@ def test_templates_parse():
     env.get_template("index.html")
     env.get_template("triage.html")
     env.get_template("settings.html")
+    env.get_template("repairs.html")
 
 
 def test_settings_clamp_and_lists():

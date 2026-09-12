@@ -1,19 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-import html
 import re
-import zipfile
-import xml.etree.ElementTree as ET
 
-from .config import settings
-from .metadata import ebook_metadata
 from .matcher import author_match_strict, author_mentioned_in_text, meaningful_words, normalize
+from .verification_constants import FRONT_TEXT_CHARS
 
-FRONT_TEXT_CHARS = 160_000
 PROXIMITY_CHARS = 3_000
-MIN_USEFUL_TEXT = 500
-
 METADATA_ERROR_MAX_PROXIMITY = 500
 METADATA_ERROR_MAX_TITLE_POSITION = 20_000
 CONFLICTING_TITLE_PRIMARY_POSITION = 500
@@ -25,135 +17,6 @@ COLLECTION_TITLE_PATTERNS = (
     r"\bcollection\b",
     r"\banthology\b",
 )
-
-
-def _strip_html_bytes(raw: bytes) -> str:
-    text = raw.decode("utf-8", errors="replace")
-    text = re.sub(r"<script\b.*?</script>", " ", text, flags=re.I | re.S)
-    text = re.sub(r"<style\b.*?</style>", " ", text, flags=re.I | re.S)
-    text = re.sub(r"<[^>]+>", " ", text)
-    return re.sub(r"\s+", " ", html.unescape(text)).strip()
-
-
-def _epub_identity(path: str) -> tuple[dict, str, list[str], str]:
-    metadata = {"title": "", "author": "", "source": "epub"}
-    identifiers: list[str] = []
-    max_chars = settings.verification_max_text_chars
-    text_parts: list[str] = []
-    front_parts: list[str] = []
-
-    with zipfile.ZipFile(path) as zf:
-        container = ET.fromstring(zf.read("META-INF/container.xml"))
-        rootfile = ""
-        for elem in container.iter():
-            if elem.tag.endswith("rootfile"):
-                rootfile = elem.attrib.get("full-path", "")
-                if rootfile:
-                    break
-        if not rootfile:
-            raise ValueError("EPUB package file not found")
-
-        package = ET.fromstring(zf.read(rootfile))
-        creators: list[str] = []
-        manifest: dict[str, str] = {}
-        spine_ids: list[str] = []
-        package_dir = str(Path(rootfile).parent)
-
-        for elem in package.iter():
-            local = elem.tag.rsplit("}", 1)[-1].lower()
-            value = (elem.text or "").strip()
-            if local == "title" and value and not metadata["title"]:
-                metadata["title"] = value
-            elif local == "creator" and value:
-                creators.append(value)
-            elif local == "identifier" and value:
-                identifiers.append(value)
-            elif local == "item":
-                item_id = elem.attrib.get("id", "")
-                href = elem.attrib.get("href", "")
-                media_type = elem.attrib.get("media-type", "")
-                if item_id and href and media_type in {"application/xhtml+xml", "text/html"}:
-                    manifest[item_id] = href
-            elif local == "itemref":
-                idref = elem.attrib.get("idref", "")
-                if idref:
-                    spine_ids.append(idref)
-
-        metadata["author"] = "; ".join(creators)
-
-        ordered_names: list[str] = []
-        for idref in spine_ids:
-            href = manifest.get(idref)
-            if not href:
-                continue
-            name = str(Path(package_dir) / href) if package_dir not in {"", "."} else href
-            ordered_names.append(name.replace("\\", "/"))
-
-        # Broken EPUBs sometimes have no usable spine. Fall back to archive order.
-        if not ordered_names:
-            ordered_names = [
-                name for name in zf.namelist()
-                if name.lower().endswith((".xhtml", ".html", ".htm"))
-            ]
-
-        total = 0
-        front_total = 0
-        for name in ordered_names:
-            if total >= max_chars:
-                break
-            try:
-                part = _strip_html_bytes(zf.read(name))
-            except Exception:
-                continue
-            if not part:
-                continue
-            text_parts.append(part)
-            total += len(part)
-            if front_total < FRONT_TEXT_CHARS:
-                remaining = FRONT_TEXT_CHARS - front_total
-                front_parts.append(part[:remaining])
-                front_total += min(len(part), remaining)
-
-    text = " ".join(text_parts)[:max_chars]
-    front = " ".join(front_parts)[:FRONT_TEXT_CHARS]
-    return metadata, text, identifiers[:25], front
-
-
-def _pdf_identity(path: str) -> tuple[dict, str, list[str], str]:
-    from pypdf import PdfReader
-
-    metadata = ebook_metadata(path)
-    reader = PdfReader(path)
-    parts: list[str] = []
-    front_parts: list[str] = []
-    max_chars = settings.verification_max_text_chars
-    page_limit = min(len(reader.pages), settings.verification_pdf_pages)
-    for index, page in enumerate(reader.pages[:page_limit]):
-        if sum(len(part) for part in parts) >= max_chars:
-            break
-        try:
-            part = page.extract_text() or ""
-        except Exception:
-            continue
-        parts.append(part)
-        if index < 6:
-            front_parts.append(part)
-    text = " ".join(parts)[:max_chars]
-    front = " ".join(front_parts)[:FRONT_TEXT_CHARS]
-    return metadata, text, [], front
-
-
-def _plain_identity(path: str) -> tuple[dict, str, list[str], str]:
-    metadata = ebook_metadata(path)
-    raw = Path(path).read_bytes()[: settings.verification_max_text_chars * 2]
-    text = raw.decode("utf-8", errors="replace")
-    if "\ufffd" in text[:4096]:
-        text = raw.decode("cp1252", errors="replace")
-    if Path(path).suffix.lower() == ".rtf":
-        text = re.sub(r"\\[a-z]+-?\d* ?", " ", text, flags=re.I)
-        text = text.replace("{", " ").replace("}", " ")
-    text = re.sub(r"\s+", " ", text)[: settings.verification_max_text_chars]
-    return metadata, text, [], text[:FRONT_TEXT_CHARS]
 
 
 def _phrase_pos(value: str, text: str) -> int:
@@ -237,7 +100,6 @@ def _classify_identity_base(
     metadata: dict,
     text: str,
     identifiers: list[str],
-    source: str,
     notes: list[str],
     front_text: str = "",
 ) -> tuple[str, int, dict]:
@@ -343,18 +205,17 @@ def _looks_collection_like(title: str) -> bool:
     )
 
 
-def _classify_identity(
+def classify_identity(
     result: dict,
     metadata: dict,
     text: str,
     identifiers: list[str],
-    source: str,
     notes: list[str],
     front_text: str = "",
 ) -> tuple[str, int, dict]:
     """Classify identity, then apply every automatic-repair safety refinement."""
     verdict, confidence, evidence = _classify_identity_base(
-        result, metadata, text, identifiers, source, notes, front_text
+        result, metadata, text, identifiers, notes, front_text
     )
     if verdict != "METADATA_ERROR":
         return verdict, confidence, evidence

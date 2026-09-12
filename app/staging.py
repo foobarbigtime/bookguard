@@ -4,11 +4,10 @@ from pathlib import Path
 from typing import Any
 
 from .bindery_client import BinderyClient
-from .config import ConfigurationError, load_automation_settings, settings
+from .config import ConfigurationError, load_automation_settings
+from .ebook_extraction import extract_ebook_identity
 from .file_safety import sha256_file
-from .metadata import ebook_metadata
-from .tika_client import extract_text as tika_text
-from . import verification_engine as engine
+from .verification_engine import classify_identity
 
 
 class StagingSafetyError(RuntimeError):
@@ -17,6 +16,8 @@ class StagingSafetyError(RuntimeError):
 
 SUPPORTED_STAGED_EBOOK_SUFFIXES = {".epub", ".pdf", ".rtf", ".txt"}
 MIN_ADMISSION_CONFIDENCE = 99
+
+
 def _staging_root() -> Path:
     try:
         configured = load_automation_settings()
@@ -141,54 +142,20 @@ def verify_staged_ebook(
 
     before_stat = path.stat()
     before_hash = sha256_file(path)
-    suffix = path.suffix.lower()
-    metadata = ebook_metadata(str(path))
-    text = ""
-    front_text = ""
-    identifiers: list[str] = []
-    source = "native"
-    notes: list[str] = []
-
-    try:
-        if suffix == ".epub":
-            metadata, text, identifiers, front_text = engine._epub_identity(str(path))
-            source = "native-epub"
-        elif suffix == ".pdf":
-            metadata, text, identifiers, front_text = engine._pdf_identity(str(path))
-            source = "native-pdf"
-        elif suffix in {".txt", ".rtf"}:
-            metadata, text, identifiers, front_text = engine._plain_identity(str(path))
-            source = f"native-{suffix.lstrip('.')}"
-    except Exception as exc:
-        notes.append(f"Native extraction error: {str(exc)[:300]}")
-
-    if (
-        len(text.strip()) < engine.MIN_USEFUL_TEXT
-        and settings.verification_use_tika
-        and settings.verification_tika_url
-    ):
-        fallback_text, tika_error = tika_text(str(path))
-        if fallback_text:
-            text = fallback_text
-            front_text = fallback_text[: engine.FRONT_TEXT_CHARS]
-            source = f"{source}+tika" if source != "native" else "tika"
-            notes.append("Tika fallback supplied content because native extraction was insufficient.")
-        elif tika_error:
-            notes.append(tika_error)
+    extracted = extract_ebook_identity(str(path))
 
     identity = {
         "book_id": int(book_id),
         "title": expected_title,
         "author": expected_author,
     }
-    verdict, confidence, evidence = engine._classify_identity(
+    verdict, confidence, evidence = classify_identity(
         identity,
-        metadata,
-        text,
-        identifiers,
-        source,
-        notes,
-        front_text,
+        extracted.metadata,
+        extracted.text,
+        extracted.identifiers,
+        extracted.notes,
+        extracted.front_text,
     )
 
     after_stat = path.stat()
@@ -222,7 +189,7 @@ def verify_staged_ebook(
         "expectedAuthor": expected_author,
         "verdict": verdict,
         "confidence": int(confidence),
-        "source": source,
+        "source": extracted.source,
         "evidence": evidence,
         "safeToAdmit": safe_to_admit,
         "admissionBlockers": blockers,

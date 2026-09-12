@@ -16,20 +16,18 @@ from .db import (
     latest_scan,
     local_conn,
 )
+from .ebook_extraction import extract_ebook_identity
 from .matcher import normalize
 from .metadata import ebook_metadata
-from .repair import RepairError, _apply_preview, _verify_preview
-from .triage import result_signature, triage_state
-from .tika_client import extract_text as _tika_text
-from .tika_client import test_connection as test_tika
-from .verification_engine import (
-    FRONT_TEXT_CHARS,
-    MIN_USEFUL_TEXT,
-    _classify_identity,
-    _epub_identity,
-    _pdf_identity,
-    _plain_identity,
+from .repair import (
+    RepairError,
+    apply_repair_changes,
+    require_current_scan_result,
+    verify_repair_changes,
 )
+from .triage import result_signature, triage_state
+from .tika_client import test_connection
+from .verification_engine import classify_identity
 
 
 VERIFIER_VERSION = "6"
@@ -59,6 +57,11 @@ _job_state: dict = {
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def test_tika() -> dict:
+    """Expose the Tika connectivity check through the verifier service API."""
+    return test_connection()
 
 
 def init_verification_db() -> None:
@@ -255,47 +258,18 @@ def verify_result(result: dict, force: bool = False) -> dict:
             result, target, fingerprint, "INSUFFICIENT_EVIDENCE", 0, "missing", evidence
         )
 
-    suffix = path.suffix.lower()
-    metadata: dict = ebook_metadata(str(path))
-    text = ""
-    front_text = ""
-    identifiers: list[str] = []
-    source = "native"
-    notes: list[str] = []
+    extracted = extract_ebook_identity(str(path))
 
-    try:
-        if suffix == ".epub":
-            metadata, text, identifiers, front_text = _epub_identity(str(path))
-            source = "native-epub"
-        elif suffix == ".pdf":
-            metadata, text, identifiers, front_text = _pdf_identity(str(path))
-            source = "native-pdf"
-        elif suffix in {".txt", ".rtf"}:
-            metadata, text, identifiers, front_text = _plain_identity(str(path))
-            source = f"native-{suffix.lstrip('.')}"
-    except Exception as exc:
-        notes.append(f"Native extraction error: {str(exc)[:300]}")
-
-    # Optional Tika fallback only when native extraction did not provide useful text.
-    if (
-        len(text.strip()) < MIN_USEFUL_TEXT
-        and settings.verification_use_tika
-        and settings.verification_tika_url
-    ):
-        tika_text, tika_error = _tika_text(str(path))
-        if tika_text:
-            text = tika_text
-            front_text = tika_text[:FRONT_TEXT_CHARS]
-            source = f"{source}+tika" if source != "native" else "tika"
-            notes.append("Tika fallback supplied content because native extraction was insufficient.")
-        elif tika_error:
-            notes.append(tika_error)
-
-    verdict, confidence, evidence = _classify_identity(
-        result, metadata, text, identifiers, source, notes, front_text
+    verdict, confidence, evidence = classify_identity(
+        result,
+        extracted.metadata,
+        extracted.text,
+        extracted.identifiers,
+        extracted.notes,
+        extracted.front_text,
     )
     return _save_verification(
-        result, str(path), fingerprint, verdict, confidence, source, evidence
+        result, str(path), fingerprint, verdict, confidence, extracted.source, evidence
     )
 
 
@@ -356,6 +330,7 @@ def verified_repair_preview(result: dict, verification: dict | None = None) -> d
 
 
 def apply_verified_metadata_repair(result: dict) -> dict:
+    require_current_scan_result(result)
     if settings.metadata_repair_mode != "safe":
         raise RepairError("Switch Metadata repair mode to Safe before writing verified metadata repairs.")
 
@@ -369,10 +344,11 @@ def apply_verified_metadata_repair(result: dict) -> dict:
     if not os.access(target, os.W_OK):
         raise RepairError("The ebook media mount is read-only or the EPUB is not writable.")
 
+    require_current_scan_result(result)
     repair_id = create_metadata_repair(result, "EPUB_METADATA", preview["before"], preview["after"])
     try:
-        _apply_preview(preview)
-        _verify_preview(preview)
+        apply_repair_changes(preview)
+        verify_repair_changes(preview)
     except Exception as exc:
         finish_metadata_repair(repair_id, "failed", str(exc)[:1000])
         raise RepairError(str(exc)) from exc

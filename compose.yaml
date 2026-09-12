@@ -4,11 +4,13 @@ services:
     container_name: bookguard
     restart: unless-stopped
     ports:
-      - "8788:8788"
+      - "${BOOKGUARD_BIND_ADDRESS:-127.0.0.1}:8788:8788"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       TZ: ${TZ:-America/Toronto}
+      BOOKGUARD_AUTH_USERNAME: ${BOOKGUARD_AUTH_USERNAME:-bookguard}
+      BOOKGUARD_AUTH_PASSWORD: ${BOOKGUARD_AUTH_PASSWORD:?Set BOOKGUARD_AUTH_PASSWORD in .env}
       BINDERY_DB: ${BINDERY_DB:-/bindery/bindery.db}
       BINDERY_URL: ${BINDERY_URL:-http://host.docker.internal:8787}
       BINDERY_API_KEY: ${BINDERY_API_KEY:-}

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from ..config import settings
-from ..db import latest_results, latest_scan, result_by_id
+from ..db import latest_results
 from ..repair import RepairError
 from ..verifier import (
     apply_verified_metadata_repair,
@@ -15,31 +15,16 @@ from ..verifier import (
     verified_repair_preview,
     verify_result,
 )
+from .dependencies import current_result
+from .models import ConfirmationRequest, require_confirmation
 
 
 router = APIRouter(prefix="/api/verification", tags=["verification"])
 
 
-def _current_result(result_id: int) -> dict:
-    item = result_by_id(result_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Result not found.")
-    scan = latest_scan()
-    if not scan or scan.get("status") != "complete":
-        raise HTTPException(status_code=409, detail="A completed latest scan is required.")
-    if item.get("scan_id") != scan.get("id"):
-        raise HTTPException(
-            status_code=409,
-            detail="This result is not from the latest completed scan. Refresh first.",
-        )
-    return item
-
-
-
 @router.get("/status")
 def api_verification_status():
     return {"job": verification_job_status(), "summary": verification_summary()}
-
 
 
 @router.get("/cached")
@@ -58,7 +43,6 @@ def api_verification_cached(classification: str = "REVIEW", reason_code: str | N
         if verification:
             items[str(row["id"])] = verification
     return {"classification": classification, "items": items}
-
 
 
 @router.post("/start")
@@ -80,26 +64,23 @@ async def api_verification_start(request: Request):
     return {"ok": True, "job_id": job_id}
 
 
-
 @router.get("/tika-test")
 def api_verification_tika_test():
     return test_tika()
 
 
-
 @router.get("/{result_id}")
 def api_verification_get(result_id: int):
-    item = _current_result(result_id)
+    item = current_result(result_id)
     verification = verification_for_result(item)
     if not verification:
         return {"result_id": result_id, "verified": False}
     return {"result_id": result_id, "verified": True, "verification": verification}
 
 
-
 @router.post("/{result_id}/run")
 def api_verification_run(result_id: int):
-    item = _current_result(result_id)
+    item = current_result(result_id)
     try:
         verification = verify_result(item, force=True)
     except Exception as exc:
@@ -107,10 +88,9 @@ def api_verification_run(result_id: int):
     return {"ok": True, "verification": verification}
 
 
-
 @router.get("/{result_id}/repair-preview")
 def api_verified_repair_preview(result_id: int):
-    item = _current_result(result_id)
+    item = current_result(result_id)
     verification = verification_for_result(item)
     try:
         preview = verified_repair_preview(item, verification)
@@ -119,10 +99,10 @@ def api_verified_repair_preview(result_id: int):
     return {"result_id": result_id, "mode": settings.metadata_repair_mode, **preview}
 
 
-
 @router.post("/{result_id}/repair")
-def api_verified_repair(result_id: int):
-    item = _current_result(result_id)
+def api_verified_repair(result_id: int, payload: ConfirmationRequest):
+    require_confirmation(payload, "REPAIR")
+    item = current_result(result_id)
     try:
         result = apply_verified_metadata_repair(item)
     except RepairError as exc:

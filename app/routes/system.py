@@ -14,10 +14,10 @@ from ..db import (
 )
 from ..scanner import start_scan
 from ..services.dashboard import compact_result, scan_timing
+from .models import ConfirmationRequest, require_confirmation
 
 
 router = APIRouter(tags=["system"])
-
 
 
 @router.get("/health")
@@ -26,7 +26,8 @@ def health():
 
 
 @router.post("/api/scan")
-def api_scan():
+def api_scan(payload: ConfirmationRequest):
+    require_confirmation(payload, "SCAN")
     try:
         scan_id = start_scan()
     except Exception as exc:
@@ -82,7 +83,8 @@ async def api_save_settings(request: Request):
 
 
 @router.post("/api/settings/reset")
-def api_reset_settings():
+def api_reset_settings(payload: ConfirmationRequest):
+    require_confirmation(payload, "RESET")
     scan = latest_scan()
     if scan and scan.get("status") == "running":
         raise HTTPException(status_code=409, detail="Wait for the current scan to finish before resetting settings.")

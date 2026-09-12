@@ -27,6 +27,26 @@ class ConfigurationError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class AuthSettings:
+    username: str
+    password: str
+
+
+def load_auth_settings() -> AuthSettings:
+    username = os.getenv("BOOKGUARD_AUTH_USERNAME", "bookguard").strip()
+    password = os.getenv("BOOKGUARD_AUTH_PASSWORD", "")
+    if not username:
+        raise ConfigurationError("BOOKGUARD_AUTH_USERNAME must not be empty.")
+    if ":" in username:
+        raise ConfigurationError("BOOKGUARD_AUTH_USERNAME must not contain a colon.")
+    if not password:
+        raise ConfigurationError(
+            "BOOKGUARD_AUTH_PASSWORD is required before BookGuard can serve protected routes."
+        )
+    return AuthSettings(username=username, password=password)
+
+
 def _bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:

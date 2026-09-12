@@ -30,7 +30,6 @@ router = APIRouter(tags=["pages"])
 templates = Jinja2Templates(directory="templates")
 
 
-
 @router.get("/", response_class=HTMLResponse)
 def dashboard(
     request: Request,
@@ -66,6 +65,7 @@ def dashboard(
             "version": __version__,
         },
     )
+
 
 @router.get("/triage", response_class=HTMLResponse)
 def triage_page(

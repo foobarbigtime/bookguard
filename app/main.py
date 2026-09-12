@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from .auth import BasicAuthMiddleware
 from .config import settings
 from .db import init_local_db, load_persisted_settings
 from .routes.automatic import router as automatic_router
@@ -31,6 +32,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="BookGuard", version=__version__, lifespan=lifespan)
+app.add_middleware(BasicAuthMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(pages_router)
 app.include_router(system_router)
@@ -38,4 +40,3 @@ app.include_router(repairs_router)
 app.include_router(triage_router)
 app.include_router(verification_router)
 app.include_router(automatic_router)
-

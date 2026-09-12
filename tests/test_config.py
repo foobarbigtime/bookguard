@@ -3,6 +3,7 @@ import pytest
 from app.config import (
     DEFAULT_MAX_STAGED_EBOOK_BYTES,
     ConfigurationError,
+    load_auth_settings,
     load_automation_settings,
 )
 
@@ -27,3 +28,18 @@ def test_invalid_staging_size_limit_fails_closed(monkeypatch, value):
 
     with pytest.raises(ConfigurationError):
         load_automation_settings()
+
+
+def test_auth_settings_require_a_password(monkeypatch):
+    monkeypatch.delenv("BOOKGUARD_AUTH_PASSWORD", raising=False)
+
+    with pytest.raises(ConfigurationError, match="AUTH_PASSWORD is required"):
+        load_auth_settings()
+
+
+def test_auth_username_cannot_contain_basic_auth_separator(monkeypatch):
+    monkeypatch.setenv("BOOKGUARD_AUTH_USERNAME", "bad:name")
+    monkeypatch.setenv("BOOKGUARD_AUTH_PASSWORD", "secret")
+
+    with pytest.raises(ConfigurationError, match="must not contain a colon"):
+        load_auth_settings()

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import app.preimport as preimport
 from app.bindery_client import BinderyClientError
 

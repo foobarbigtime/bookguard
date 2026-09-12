@@ -38,6 +38,7 @@ def scan_timing(scan: dict | None) -> dict:
         "eta_seconds": eta,
     }
 
+
 def _detected_fields(row: dict) -> tuple[str, str, str]:
     metadata = row.get("metadata") or {}
     if row.get("format") == "audiobook":

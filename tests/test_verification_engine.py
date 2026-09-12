@@ -1,7 +1,8 @@
 import app.verification_engine as verifier
+from app.verification_constants import FRONT_TEXT_CHARS
 
 
-# These tests pin the pure, position-aware identity classifier.
+# These tests pin the position-aware identity classifier and its safety rules.
 
 
 def sample_result(title="Cat of Death!", author="Aaron Blabey"):
@@ -23,14 +24,13 @@ def sample_result(title="Cat of Death!", author="Aaron Blabey"):
 
 
 def classify(result, metadata, text, front=None):
-    return verifier._classify_identity(
+    return verifier.classify_identity(
         result,
         metadata,
         text,
         [],
-        "test",
         [],
-        front if front is not None else text[: verifier.FRONT_TEXT_CHARS],
+        front if front is not None else text[:FRONT_TEXT_CHARS],
     )
 
 

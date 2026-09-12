@@ -63,7 +63,34 @@ Absolute paths, traversal outside the staging root, symlinked files, empty files
 
 ## Safety model
 
-Three independent safety systems exist.
+BookGuard uses layered access, repair, action, and reacquisition safeguards.
+
+### Application access
+
+BookGuard requires HTTP Basic authentication for every page and API route
+except `/health`:
+
+```env
+BOOKGUARD_AUTH_USERNAME=bookguard
+BOOKGUARD_AUTH_PASSWORD=replace-with-a-long-random-password
+```
+
+The container refuses to start without a password. The supplied Compose file
+also binds to localhost by default:
+
+```env
+BOOKGUARD_BIND_ADDRESS=127.0.0.1
+```
+
+For direct LAN access, set that value to the Unraid server's LAN address. Basic
+authentication controls access but does not encrypt traffic. Keep plain HTTP on
+a trusted LAN; use an HTTPS reverse proxy or VPN for remote access, and do not
+publish BookGuard directly to the internet.
+
+State-changing repair, undo, scan, reset, detach, quarantine, and remediation
+requests also require an explicit operation-specific confirmation in the JSON
+body. Authentication and confirmation serve different purposes and both are
+enforced by the server.
 
 ### Bindery actions
 
@@ -133,6 +160,7 @@ cd /mnt/cache/appdata
 git clone git@github.com:foobarbigtime/bookguard.git
 cd bookguard
 cp .env.example .env
+# Edit .env and set BOOKGUARD_AUTH_PASSWORD before starting.
 docker compose up -d --build
 ```
 
@@ -178,6 +206,16 @@ Repair history and Undo are available at `/repairs`.
 
 ## Updating
 
+Before deploying this security update, add the required access credentials to
+the existing `.env`. To retain direct LAN access, also set the bind address to
+the Unraid server's LAN IP:
+
+```env
+BOOKGUARD_AUTH_USERNAME=bookguard
+BOOKGUARD_AUTH_PASSWORD=replace-with-a-long-random-password
+BOOKGUARD_BIND_ADDRESS=192.168.1.10
+```
+
 ```bash
 cd /mnt/cache/appdata/bookguard
 git pull
@@ -220,7 +258,9 @@ app/routes/                 Page and API routers grouped by feature
 app/services/dashboard.py  Dashboard view-model assembly
 app/scanner.py              Library scan orchestration
 app/verifier.py             Verification jobs, persistence, and repairs
-app/verification_engine.py  Pure ebook identity extraction/classification
+app/ebook_extraction.py     Ebook metadata and text extraction
+app/verification_engine.py  Ebook identity classification and safety rules
+app/verification_constants.py Shared verification limits
 app/staging.py              Read-only staged-byte verification
 app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery

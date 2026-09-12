@@ -1,4 +1,4 @@
-import app.verifier as verifier
+from app.verification_engine import classify_identity
 
 
 def sample_result():
@@ -20,8 +20,8 @@ def sample_result():
 
 
 def classify(metadata, text):
-    verdict, confidence, evidence = verifier._classify_identity(
-        sample_result(), metadata, text, [], "test", []
+    verdict, confidence, evidence = classify_identity(
+        sample_result(), metadata, text, [], []
     )
     return verdict, confidence, evidence
 

@@ -17,7 +17,6 @@ class StagedVerificationRequest(BaseModel):
     relativePath: str = Field(min_length=1, max_length=4096)
 
 
-
 @router.get("/bindery-status")
 def api_automatic_bindery_status():
     """Read-only connectivity check for the Automatic Maintenance pipeline."""
@@ -26,7 +25,6 @@ def api_automatic_bindery_status():
     except BinderyClientError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return {"ok": True, "bindery": status}
-
 
 
 @router.get("/preimport-readiness")
@@ -42,7 +40,6 @@ def api_automatic_preimport_readiness():
         raise HTTPException(status_code=503, detail=str(exc))
 
 
-
 @router.get("/staging/files")
 def api_automatic_staging_files(limit: int = 500):
     """List verification-supported staged ebooks without reading their contents."""
@@ -50,7 +47,6 @@ def api_automatic_staging_files(limit: int = 500):
         return list_staged_ebooks(limit)
     except StagingSafetyError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-
 
 
 @router.post("/books/{book_id}/staged-verification")
@@ -62,7 +58,6 @@ def api_automatic_staged_verification(book_id: int, payload: StagedVerificationR
         raise HTTPException(status_code=503, detail=str(exc))
     except StagingSafetyError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-
 
 
 @router.get("/books/{book_id}/replacement-preview")
@@ -122,7 +117,6 @@ def _automatic_result(result_id: int) -> dict:
     return item
 
 
-
 @router.get("/results/{result_id}/wrong-content-preview")
 def api_automatic_wrong_content_preview(result_id: int):
     """Read-only preflight for the WRONG_CONTENT remediation path."""
@@ -131,7 +125,6 @@ def api_automatic_wrong_content_preview(result_id: int):
         return {"resultId": result_id, **wrong_content_preview(item)}
     except AutomaticMaintenanceError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-
 
 
 @router.post("/results/{result_id}/remediate-wrong-content")

@@ -47,6 +47,7 @@ async def api_triage_keep(result_id: int, request: Request):
         "message": "Triage decision saved. Bindery and media files were not changed.",
     }
 
+
 @router.post("/triage/keep-selected")
 async def api_triage_keep_selected(request: Request):
     try:

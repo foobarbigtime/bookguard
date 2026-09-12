@@ -313,7 +313,11 @@ function renderLiveResults(rows) {
 async function startScan() {
   scanButton.disabled = true;
   scanButton.textContent = "Starting…";
-  const response = await fetch("/api/scan", {method: "POST"});
+  const response = await fetch("/api/scan", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({confirm: "SCAN"}),
+  });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     alert(body.detail || "Unable to start scan.");
@@ -391,7 +395,11 @@ async function runRepair(id) {
     return;
   }
   if (!confirm(`${text}\n\nApply this metadata repair?`)) return;
-  const response = await fetch(`/api/results/${id}/repair`, {method: "POST"});
+  const response = await fetch(`/api/results/${id}/repair`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({confirm: "REPAIR"})
+  });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) { alert(body.detail || "Metadata repair failed."); return; }
   alert(`Metadata repair completed and verified. Repair history ID: ${body.repair_id}`);
