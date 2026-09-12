@@ -93,10 +93,10 @@ authentication controls access but does not encrypt traffic. Keep plain HTTP on
 a trusted LAN; use an HTTPS reverse proxy or VPN for remote access, and do not
 publish BookGuard directly to the internet.
 
-State-changing repair, undo, scan, reset, detach, quarantine, and remediation
-requests also require an explicit operation-specific confirmation in the JSON
-body. Authentication and confirmation serve different purposes and both are
-enforced by the server.
+State-changing repair, undo, scan, reset, detach, quarantine, remediation,
+admission, and reconciliation requests also require an explicit
+operation-specific confirmation in the JSON body. Authentication and
+confirmation serve different purposes and both are enforced by the server.
 
 ### Bindery actions
 
@@ -105,7 +105,8 @@ BOOKGUARD_ALLOW_ACTIONS=false
 ```
 
 This controls every media-changing operation, including Detach, Quarantine,
-and direct admission. `PASS` results remain protected from destructive actions.
+direct admission, and admission reconciliation. `PASS` results remain protected
+from destructive actions.
 
 ### Metadata repair
 
@@ -133,7 +134,10 @@ BOOKGUARD_AUTOMATIC_REACQUISITION=false
 BOOKGUARD_MAX_STAGED_EBOOK_BYTES=536870912
 ```
 
-Automatic reacquisition fails closed unless every readiness check passes. Keep it disabled until Bindery is deliberately configured for external import and BookGuard's controlled-admission slice is complete.
+Automatic reacquisition fails closed unless every readiness check passes. Keep
+it disabled: queue-to-staging acquisition and orchestration are not implemented
+yet. External import mode should currently be used only during a deliberate,
+operator-controlled admission session.
 
 ### Controlled ebook admission
 
@@ -165,10 +169,12 @@ without overwrite. BookGuard prefers Linux `renameat2(RENAME_NOREPLACE)` and,
 on filesystems such as Unraid `shfs`, falls back to atomically linking the private
 verified snapshot into place before immediately removing its private name. The
 library file is never hardlinked to staging and remains independent from it.
-Admission state is recorded in `/config/bookguard.db` before copying. After
-publication, BookGuard asks Bindery to scan its library and retains the staged
-source even after registration is confirmed; cleanup remains an explicit
-operator choice.
+Admission state is recorded in `/config/bookguard.db` before copying, including
+the successful publication method. If publication succeeds but a later
+durability step reports an error, the record remains recoverable rather than
+being mislabeled as an ordinary failed copy. After publication, BookGuard asks
+Bindery to scan its library and retains the staged source even after registration
+is confirmed; cleanup remains an explicit operator choice.
 
 ## Metadata repair philosophy
 

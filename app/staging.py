@@ -200,7 +200,7 @@ def verify_staged_ebook(
     """Verify staged ebook bytes against one explicit Bindery book.
 
     This function never imports, moves, deletes, or modifies the staged file.
-    A future admission operation must repeat verification at its own mutation
+    An admission operation must repeat verification at its own mutation
     boundary; this read-only result is not a durable authorization token.
     """
     root, path = resolve_staged_file(relative_path)
@@ -216,7 +216,8 @@ def verify_staged_ebook(
         **result,
         "readOnly": True,
         "message": (
-            "Staged bytes independently verify the intended book. Admission remains disabled in this slice."
+            "Staged bytes independently verify the intended book. Admission still requires "
+            "separate readiness checks and explicit confirmation."
             if result["safeToAdmit"]
             else "Staged bytes did not meet the automatic admission safety threshold."
         ),

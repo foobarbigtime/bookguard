@@ -32,7 +32,19 @@ class AdmissionSafetyError(RuntimeError):
     pass
 
 
+class PublishedSnapshotError(RuntimeError):
+    """Report a post-publication failure without losing the durable recovery state."""
+
+    def __init__(self, publication_method: str, cause: OSError) -> None:
+        self.publication_method = publication_method
+        super().__init__(
+            f"Snapshot was published using {publication_method}, "
+            f"but publication finalization failed: {cause}"
+        )
+
+
 _admission_lock = threading.Lock()
+_RECONCILABLE_STATUSES = {"verified", "published", "scan_requested", "registered"}
 _BINDERY_SETTING_DEFAULTS = {
     "import.mode": "auto",
     "import.drop_folder": "",
@@ -342,6 +354,8 @@ def _publish_no_replace(temp_path: Path, destination: Path) -> str:
         | getattr(os, "O_DIRECTORY", 0)
         | getattr(os, "O_NOFOLLOW", 0),
     )
+    published = False
+    publication_method = ""
     try:
         renamed = _rename_no_replace(
             source_directory_fd,
@@ -362,10 +376,15 @@ def _publish_no_replace(temp_path: Path, destination: Path) -> str:
             )
             publication_method = "private-snapshot-link"
 
+        published = True
         os.fsync(destination_directory_fd)
         if not renamed:
             os.unlink(temp_path.name, dir_fd=source_directory_fd)
             os.fsync(source_directory_fd)
+    except OSError as exc:
+        if published:
+            raise PublishedSnapshotError(publication_method, exc) from exc
+        raise
     finally:
         os.close(source_directory_fd)
         os.close(destination_directory_fd)
@@ -376,7 +395,10 @@ def _publish_no_replace(temp_path: Path, destination: Path) -> str:
 def _cleanup_private_snapshot(temp_path: Path | None) -> None:
     if temp_path is None:
         return
-    temp_path.unlink(missing_ok=True)
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        return
     parent = temp_path.parent
     if parent.name.startswith(".bookguard-admission-"):
         try:
@@ -493,7 +515,11 @@ def admit_staged_ebook(
         _seal_snapshot(temp_path, snapshot_hash)
         publication_method = _publish_no_replace(temp_path, destination)
         temp_path = None
-        update_ebook_admission(admission_id, "published")
+        update_ebook_admission(
+            admission_id,
+            "published",
+            publication_method=publication_method,
+        )
 
         scan_state = "requested"
         scan_warning = ""
@@ -532,6 +558,15 @@ def admit_staged_ebook(
                 "The staged source is retained until Bindery registration is confirmed."
             ),
         }
+    except PublishedSnapshotError as exc:
+        if admission_id is not None:
+            update_ebook_admission(
+                admission_id,
+                "published",
+                publication_method=exc.publication_method,
+                error=str(exc),
+            )
+        raise AdmissionSafetyError(str(exc)) from exc
     except (OSError, StagingSafetyError, BinderyClientError) as exc:
         error = str(exc)
         if admission_id is not None:
@@ -551,13 +586,23 @@ def reconcile_admission(
     client: BinderyClient | None = None,
 ) -> dict[str, Any]:
     """Confirm Bindery registered the published bytes; never delete staging."""
+    configured = _automation_settings()
+    if not settings.allow_actions:
+        raise AdmissionSafetyError("Actions are disabled; reconciliation is blocked.")
+    if not configured.admission_enabled:
+        raise AdmissionSafetyError("Direct admission is disabled; reconciliation is blocked.")
+
     admission = ebook_admission_by_id(admission_id)
     if not admission:
         raise AdmissionSafetyError("Admission record not found.")
+    admission_status = str(admission.get("status") or "")
+    if admission_status not in _RECONCILABLE_STATUSES:
+        raise AdmissionSafetyError(
+            f"Admission status '{admission_status}' is not eligible for reconciliation."
+        )
     if not admission.get("staged_sha256"):
         raise AdmissionSafetyError("The admission has no verified snapshot to reconcile.")
 
-    configured = _automation_settings()
     try:
         relative = Path(admission["stored_path"]).relative_to(
             Path(configured.admission_bindery_root)

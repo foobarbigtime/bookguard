@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import sqlite3
 import zipfile
 
 import pytest
 
 import app.admission as admission
 import app.ebook_extraction as ebook_extraction
-from app.db import ebook_admission_by_id, init_local_db
+from app.db import (
+    ebook_admission_by_id,
+    init_local_db,
+    recent_ebook_admissions,
+    update_ebook_admission,
+)
 
 
 class FakeClient:
@@ -154,6 +160,7 @@ def test_verified_snapshot_is_published_without_deleting_staging(admission_setup
     record = ebook_admission_by_id(response["admissionId"])
     assert record is not None
     assert record["status"] == "scan_requested"
+    assert record["publication_method"] == "renameat2"
     assert record["staged_sha256"] == hashlib.sha256(destination.read_bytes()).hexdigest()
     assert record["verification"]["safeToAdmit"] is True
 
@@ -301,6 +308,76 @@ def test_reconcile_confirms_exact_bindery_path(admission_setup):
     assert ebook_admission_by_id(response["admissionId"])["status"] == "registered"
 
 
+def test_reconcile_refuses_failed_admission_record(admission_setup):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+    update_ebook_admission(response["admissionId"], "failed", error="simulated failure")
+
+    with pytest.raises(admission.AdmissionSafetyError, match="not eligible"):
+        admission.reconcile_admission(response["admissionId"], client)
+
+    assert ebook_admission_by_id(response["admissionId"])["status"] == "failed"
+
+
+def test_reconcile_requires_actions_and_admission_to_remain_enabled(
+    admission_setup,
+    monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+
+    monkeypatch.setattr(admission.settings, "allow_actions", False)
+    with pytest.raises(admission.AdmissionSafetyError, match="Actions are disabled"):
+        admission.reconcile_admission(response["admissionId"], client)
+
+    monkeypatch.setattr(admission.settings, "allow_actions", True)
+    monkeypatch.setenv("BOOKGUARD_ADMISSION_ENABLED", "false")
+    with pytest.raises(admission.AdmissionSafetyError, match="admission is disabled"):
+        admission.reconcile_admission(response["admissionId"], client)
+
+    assert client.scan_requests == 1
+
+
+def test_post_publication_failure_retains_reconcilable_audit_state(
+    admission_setup,
+    monkeypatch,
+):
+    setup = admission_setup
+    publish = admission._publish_no_replace
+
+    def publish_then_fail(temporary, destination):
+        method = publish(temporary, destination)
+        raise admission.PublishedSnapshotError(
+            method,
+            OSError("simulated finalization failure"),
+        )
+
+    monkeypatch.setattr(admission, "_publish_no_replace", publish_then_fail)
+
+    with pytest.raises(admission.AdmissionSafetyError, match="was published"):
+        admission.admit_staged_ebook(
+            setup["result"],
+            setup["staged"].name,
+            FakeClient(),
+        )
+
+    record = recent_ebook_admissions(1)[0]
+    assert record["status"] == "published"
+    assert record["publication_method"] == "renameat2"
+    assert "finalization failed" in record["error"]
+    assert (setup["admission_root"] / setup["relative"]).is_file()
+
+
 def test_readiness_fails_closed_when_admission_disabled(admission_setup, monkeypatch):
     monkeypatch.setenv("BOOKGUARD_ADMISSION_ENABLED", "false")
 
@@ -341,3 +418,37 @@ def test_atomic_publish_falls_back_to_private_snapshot_link(tmp_path, monkeypatc
     assert destination.stat().st_nlink == 1
     assert not temporary.exists()
     assert not private.exists()
+
+
+def test_existing_admission_table_gains_publication_method(tmp_path, monkeypatch):
+    monkeypatch.setattr(admission.settings, "config_dir", str(tmp_path))
+    database = tmp_path / "bookguard.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("""
+            CREATE TABLE ebook_admissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id INTEGER NOT NULL,
+                scan_id TEXT NOT NULL,
+                book_id INTEGER NOT NULL,
+                staged_relative_path TEXT NOT NULL,
+                staged_sha256 TEXT,
+                stored_path TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                status TEXT NOT NULL,
+                verification_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                error TEXT
+            )
+        """)
+
+    init_local_db()
+
+    with sqlite3.connect(database) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(ebook_admissions)"
+            ).fetchall()
+        }
+    assert "publication_method" in columns

@@ -195,6 +195,7 @@ def init_local_db() -> None:
                 stored_path TEXT NOT NULL,
                 local_path TEXT NOT NULL,
                 status TEXT NOT NULL,
+                publication_method TEXT,
                 verification_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -209,6 +210,15 @@ def init_local_db() -> None:
         if "reason_code" not in columns:
             conn.execute(
                 "ALTER TABLE scan_results ADD COLUMN reason_code TEXT NOT NULL DEFAULT 'UNKNOWN'"
+            )
+
+        admission_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(ebook_admissions)").fetchall()
+        }
+        if "publication_method" not in admission_columns:
+            conn.execute(
+                "ALTER TABLE ebook_admissions ADD COLUMN publication_method TEXT"
             )
 
         conn.executescript(
@@ -474,6 +484,7 @@ def update_ebook_admission(
     status: str,
     *,
     staged_sha256: str | None = None,
+    publication_method: str | None = None,
     verification: dict | None = None,
     error: str | None = None,
 ) -> None:
@@ -482,6 +493,7 @@ def update_ebook_admission(
             """
             UPDATE ebook_admissions
             SET status=?, staged_sha256=COALESCE(?, staged_sha256),
+                publication_method=COALESCE(?, publication_method),
                 verification_json=COALESCE(?, verification_json),
                 updated_at=?, error=?
             WHERE id=?
@@ -489,6 +501,7 @@ def update_ebook_admission(
             (
                 status,
                 staged_sha256,
+                publication_method,
                 json.dumps(verification, ensure_ascii=False) if verification is not None else None,
                 utc_now(),
                 error,
