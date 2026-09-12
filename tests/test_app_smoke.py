@@ -1,14 +1,39 @@
 from jinja2 import Environment, FileSystemLoader
+from fastapi.routing import APIRoute
 
 import app.main as main
-import app.main_v047 as main_v047
 from app.config import Settings
+from app.services import dashboard
 
 
 def test_app_imports():
     assert main.app.title == "BookGuard"
-    assert main_v047.app.title == "BookGuard"
-    assert main_v047.app.version == "0.4.7"
+    assert main.app.version == "0.5.0"
+
+
+def test_routes_are_unique_and_guarded():
+    routes = {
+        (method, route.path)
+        for route in main.app.routes
+        if isinstance(route, APIRoute)
+        for method in route.methods
+    }
+    route_count = sum(
+        len(route.methods)
+        for route in main.app.routes
+        if isinstance(route, APIRoute)
+    )
+
+    assert len(routes) == route_count
+    assert ("GET", "/health") in routes
+    assert ("GET", "/api/automatic/staging/files") in routes
+    assert ("POST", "/api/automatic/books/{book_id}/staged-verification") in routes
+    assert ("POST", "/api/triage/{result_id}/detach") in routes
+    assert ("POST", "/api/triage/{result_id}/quarantine") in routes
+
+    # These legacy endpoints mutated Bindery/media without body confirmation.
+    assert ("POST", "/api/results/{result_id}/detach") not in routes
+    assert ("POST", "/api/results/{result_id}/quarantine") not in routes
 
 
 def test_templates_parse():
@@ -78,10 +103,10 @@ def test_repairs_page_excludes_full_preview_noop(monkeypatch):
         },
     }
 
-    monkeypatch.setattr(main.settings, "metadata_repair_mode", "preview")
-    monkeypatch.setattr(main, "latest_results", lambda limit=10000: [row])
+    monkeypatch.setattr(dashboard.settings, "metadata_repair_mode", "preview")
+    monkeypatch.setattr(dashboard, "latest_results", lambda limit=10000: [row])
     monkeypatch.setattr(
-        main,
+        dashboard,
         "repair_candidate_summary",
         lambda result: {
             "eligible": True,
@@ -91,7 +116,7 @@ def test_repairs_page_excludes_full_preview_noop(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        main,
+        dashboard,
         "build_repair_preview",
         lambda result: {
             "eligible": False,
@@ -103,4 +128,4 @@ def test_repairs_page_excludes_full_preview_noop(monkeypatch):
         },
     )
 
-    assert main._latest_repair_candidates() == []
+    assert dashboard.latest_repair_candidates() == []

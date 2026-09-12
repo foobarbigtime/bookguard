@@ -1,6 +1,6 @@
 import sqlite3
 
-import app.verifier_v048_final as verifier
+import app.verifier as verifier
 
 
 def test_verification_summary_counts_only_latest_result_per_item(tmp_path, monkeypatch):
@@ -30,15 +30,15 @@ def test_verification_summary_counts_only_latest_result_per_item(tmp_path, monke
     conn.commit()
     conn.close()
 
-    monkeypatch.setattr(verifier.refined, "init_verification_db", lambda: None)
-    monkeypatch.setattr(verifier.legacy, "latest_scan", lambda: {"id": "scan-current"})
+    monkeypatch.setattr(verifier, "init_verification_db", lambda: None)
+    monkeypatch.setattr(verifier, "latest_scan", lambda: {"id": "scan-current"})
 
     def local_conn():
         db = sqlite3.connect(db_path)
         db.row_factory = sqlite3.Row
         return db
 
-    monkeypatch.setattr(verifier.legacy, "local_conn", local_conn)
+    monkeypatch.setattr(verifier, "local_conn", local_conn)
 
     assert verifier.verification_summary() == {
         "INSUFFICIENT_EVIDENCE": 1,

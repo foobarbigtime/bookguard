@@ -1,24 +1,24 @@
 from __future__ import annotations
 
-from fastapi import HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
-from .bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
-from .db import result_by_id
-from .main_v048 import app
-from .preimport import PreImportSafetyError, preimport_readiness
-from .staging import StagingSafetyError, list_staged_ebooks, verify_staged_ebook
+from ..automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
+from ..bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
+from ..db import result_by_id
+from ..preimport import PreImportSafetyError, preimport_readiness
+from ..staging import StagingSafetyError, list_staged_ebooks, verify_staged_ebook
 
 
-app.version = "0.5.0"
+router = APIRouter(prefix="/api/automatic", tags=["automatic maintenance"])
 
 
 class StagedVerificationRequest(BaseModel):
     relativePath: str = Field(min_length=1, max_length=4096)
 
 
-@app.get("/api/automatic/bindery-status")
+
+@router.get("/bindery-status")
 def api_automatic_bindery_status():
     """Read-only connectivity check for the Automatic Maintenance pipeline."""
     try:
@@ -28,7 +28,8 @@ def api_automatic_bindery_status():
     return {"ok": True, "bindery": status}
 
 
-@app.get("/api/automatic/preimport-readiness")
+
+@router.get("/preimport-readiness")
 def api_automatic_preimport_readiness():
     """Read-only gate for the external-import staging topology.
 
@@ -41,7 +42,8 @@ def api_automatic_preimport_readiness():
         raise HTTPException(status_code=503, detail=str(exc))
 
 
-@app.get("/api/automatic/staging/files")
+
+@router.get("/staging/files")
 def api_automatic_staging_files(limit: int = 500):
     """List verification-supported staged ebooks without reading their contents."""
     try:
@@ -50,7 +52,8 @@ def api_automatic_staging_files(limit: int = 500):
         raise HTTPException(status_code=503, detail=str(exc))
 
 
-@app.post("/api/automatic/books/{book_id}/staged-verification")
+
+@router.post("/books/{book_id}/staged-verification")
 def api_automatic_staged_verification(book_id: int, payload: StagedVerificationRequest):
     """Verify staged bytes against one explicit Bindery book without admitting them."""
     try:
@@ -61,7 +64,8 @@ def api_automatic_staged_verification(book_id: int, payload: StagedVerificationR
         raise HTTPException(status_code=409, detail=str(exc))
 
 
-@app.get("/api/automatic/books/{book_id}/replacement-preview")
+
+@router.get("/books/{book_id}/replacement-preview")
 def api_automatic_replacement_preview(book_id: int):
     """Search Bindery and independently gate candidates without grabbing anything."""
     client = BinderyClient()
@@ -118,7 +122,8 @@ def _automatic_result(result_id: int) -> dict:
     return item
 
 
-@app.get("/api/automatic/results/{result_id}/wrong-content-preview")
+
+@router.get("/results/{result_id}/wrong-content-preview")
 def api_automatic_wrong_content_preview(result_id: int):
     """Read-only preflight for the WRONG_CONTENT remediation path."""
     item = _automatic_result(result_id)
@@ -128,7 +133,8 @@ def api_automatic_wrong_content_preview(result_id: int):
         raise HTTPException(status_code=409, detail=str(exc))
 
 
-@app.post("/api/automatic/results/{result_id}/remediate-wrong-content")
+
+@router.post("/results/{result_id}/remediate-wrong-content")
 async def api_automatic_remediate_wrong_content(result_id: int, request: Request):
     """Quarantine + native detach + blocklist + safe replacement search.
 

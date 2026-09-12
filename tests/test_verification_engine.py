@@ -1,4 +1,7 @@
-import app.verifier_v048_final as verifier
+import app.verification_engine as verifier
+
+
+# These tests pin the pure, position-aware identity classifier.
 
 
 def sample_result(title="Cat of Death!", author="Aaron Blabey"):
@@ -27,7 +30,7 @@ def classify(result, metadata, text, front=None):
         [],
         "test",
         [],
-        front if front is not None else text[: verifier.refined.base.FRONT_TEXT_CHARS],
+        front if front is not None else text[: verifier.FRONT_TEXT_CHARS],
     )
 
 

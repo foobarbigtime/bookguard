@@ -65,22 +65,38 @@ def evaluate_replacement_candidate(
     return CandidateDecision(True, "Release contains expected title and author evidence")
 
 
-def _discover_api_key() -> str:
+def _quoted_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def discover_api_key() -> str:
+    """Return the configured key or discover Bindery's persisted key read-only."""
     configured = str(settings.bindery_api_key or "").strip()
     if configured:
         return configured
     try:
         with bindery_conn() as conn:
-            row = conn.execute(
-                "SELECT value FROM settings WHERE key=? LIMIT 1",
-                ("auth.api_key",),
-            ).fetchone()
+            tables = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ).fetchall()
+            for table_row in tables:
+                table = _quoted_identifier(str(table_row["name"]))
+                columns = {
+                    str(row["name"])
+                    for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                if not {"key", "value"}.issubset(columns):
+                    continue
+                row = conn.execute(
+                    f"SELECT value FROM {table} WHERE key=? LIMIT 1",
+                    ("auth.api_key",),
+                ).fetchone()
+                if row and row["value"]:
+                    value = str(row["value"]).strip()
+                    if value:
+                        return value
     except Exception as exc:
         raise BinderyClientError(f"Unable to read Bindery API key: {exc}") from exc
-    if row and row["value"]:
-        value = str(row["value"]).strip()
-        if value:
-            return value
     raise BinderyClientError(
         "Bindery API key is unavailable. Configure BINDERY_API_KEY or mount Bindery's database read-only."
     )
@@ -95,7 +111,7 @@ class BinderyClient:
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         if not self.base_url:
             raise BinderyClientError("Bindery URL is not configured")
-        api_key = str(self.api_key or "").strip() or _discover_api_key()
+        api_key = str(self.api_key or "").strip() or discover_api_key()
 
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["X-Api-Key"] = api_key

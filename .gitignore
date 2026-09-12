@@ -5,3 +5,4 @@ __pycache__/
 bookguard.db
 .DS_Store
 .env.before-*
+.venv/

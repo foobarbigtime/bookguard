@@ -90,3 +90,22 @@ def test_missing_bindery_settings_use_builtin_defaults_instead_of_error(tmp_path
     assert result["bindery"]["dropFolder"] == ""
     assert result["bindery"]["dropLayout"] == "flat"
     assert result["bindery"]["dropLinkMode"] == "copy"
+
+
+def test_staging_and_quarantine_must_not_contain_each_other(tmp_path, monkeypatch):
+    staging = _configure_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(preimport.settings, "quarantine_root", str(staging / "quarantine"))
+    monkeypatch.setenv("BOOKGUARD_BINDERY_DROP_FOLDER", "/handoff")
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_REACQUISITION", "true")
+
+    client = FakeClient({
+        "import.mode": "external",
+        "import.drop_folder": "/handoff",
+        "import.drop_layout": "flat",
+        "import.drop_link_mode": "copy",
+    })
+
+    result = preimport.preimport_readiness(client)
+
+    assert result["ready"] is False
+    assert result["checks"]["stagingSeparateFromQuarantine"] is False

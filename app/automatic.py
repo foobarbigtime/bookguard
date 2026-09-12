@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -9,7 +8,8 @@ from typing import Any
 from .bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from .config import settings
 from .db import associations_inside_path, bindery_file_by_id, latest_scan
-from .verifier_v048_final import verification_for_result, verify_result
+from .file_safety import is_within, sha256_file
+from .verifier import verification_for_result, verify_result
 
 
 class AutomaticMaintenanceError(RuntimeError):
@@ -62,18 +62,10 @@ def _source_grab_event(items: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _quarantine_destination(result: dict[str, Any], source: Path) -> Path:
     root = Path(settings.quarantine_root).resolve()
     media_roots = [Path(settings.ebook_root).resolve(), Path(settings.audiobook_root).resolve()]
-    if root in media_roots or any(root == media or media in root.parents for media in media_roots):
+    if any(is_within(root, media) for media in media_roots):
         raise AutomaticMaintenanceError("Quarantine root must be outside configured media roots.")
 
     destination_dir = root / str(int(result["book_id"]))
@@ -181,7 +173,7 @@ def remediate_wrong_content(result: dict[str, Any], client: BinderyClient | None
     if str(result.get("format") or "") != "ebook" or not source.is_file():
         raise AutomaticMaintenanceError("Automatic wrong-content quarantine currently supports ebook files only.")
 
-    source_hash = _sha256(source)
+    source_hash = sha256_file(source)
     destination = _quarantine_destination(result, source)
 
     try:
@@ -190,7 +182,7 @@ def remediate_wrong_content(result: dict[str, Any], client: BinderyClient | None
         raise AutomaticMaintenanceError(f"Quarantine move failed before Bindery was changed: {exc}") from exc
 
     try:
-        if not destination.is_file() or _sha256(destination) != source_hash:
+        if not destination.is_file() or sha256_file(destination) != source_hash:
             raise AutomaticMaintenanceError("Quarantined file checksum verification failed.")
         client.deregister_file(int(result["book_id"]), str(result["stored_path"]))
     except Exception as exc:
@@ -201,7 +193,9 @@ def remediate_wrong_content(result: dict[str, Any], client: BinderyClient | None
                 shutil.move(str(destination), str(source))
         except Exception as rollback_exc:
             rollback_error = f" Rollback also failed: {rollback_exc}"
-        raise AutomaticMaintenanceError(f"Bindery deregistration failed after quarantine: {exc}.{rollback_error}") from exc
+        raise AutomaticMaintenanceError(
+            f"Bindery deregistration failed after quarantine: {exc}.{rollback_error}"
+        ) from exc
 
     blocklist = None
     blocklist_warning = ""

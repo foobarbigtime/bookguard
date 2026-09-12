@@ -20,6 +20,11 @@ DEFAULT_AUTHOR_ALIASES = [
 ]
 
 REPAIR_MODES = {"off", "preview", "safe"}
+DEFAULT_MAX_STAGED_EBOOK_BYTES = 512 * 1024 * 1024
+
+
+class ConfigurationError(ValueError):
+    pass
 
 
 def _bool(name: str, default: bool = False) -> bool:
@@ -69,6 +74,43 @@ def _clean_lines(raw: object) -> list[str]:
             seen.add(key)
             cleaned.append(value)
     return cleaned
+
+
+@dataclass(frozen=True)
+class AutomationSettings:
+    """Environment-only settings for the experimental maintenance workflow.
+
+    These values are loaded on demand so tests and container restarts observe
+    the current environment without mixing them into persisted UI settings.
+    """
+
+    staging_root: str
+    bindery_drop_folder: str
+    automatic_reacquisition: bool
+    max_staged_ebook_bytes: int
+
+
+def load_automation_settings() -> AutomationSettings:
+    raw_limit = os.getenv("BOOKGUARD_MAX_STAGED_EBOOK_BYTES", "").strip()
+    if not raw_limit:
+        raw_limit = str(DEFAULT_MAX_STAGED_EBOOK_BYTES)
+    try:
+        max_staged_ebook_bytes = int(raw_limit)
+    except ValueError as exc:
+        raise ConfigurationError(
+            "BOOKGUARD_MAX_STAGED_EBOOK_BYTES must be an integer."
+        ) from exc
+    if max_staged_ebook_bytes <= 0:
+        raise ConfigurationError(
+            "BOOKGUARD_MAX_STAGED_EBOOK_BYTES must be greater than zero."
+        )
+
+    return AutomationSettings(
+        staging_root=os.getenv("BOOKGUARD_STAGING_ROOT", "/staging").strip() or "/staging",
+        bindery_drop_folder=os.getenv("BOOKGUARD_BINDERY_DROP_FOLDER", "").strip(),
+        automatic_reacquisition=_bool("BOOKGUARD_AUTOMATIC_REACQUISITION", False),
+        max_staged_ebook_bytes=max_staged_ebook_bytes,
+    )
 
 
 @dataclass

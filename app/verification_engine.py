@@ -6,17 +6,25 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 
-from . import verifier as legacy
 from .config import settings
 from .metadata import ebook_metadata
 from .matcher import author_match_strict, author_mentioned_in_text, meaningful_words, normalize
 
-# v0.4.8 deliberately invalidates v0.4.7 cached verdicts.
-legacy.VERIFIER_VERSION = "2"
-
 FRONT_TEXT_CHARS = 160_000
 PROXIMITY_CHARS = 3_000
 MIN_USEFUL_TEXT = 500
+
+METADATA_ERROR_MAX_PROXIMITY = 500
+METADATA_ERROR_MAX_TITLE_POSITION = 20_000
+CONFLICTING_TITLE_PRIMARY_POSITION = 500
+
+COLLECTION_TITLE_PATTERNS = (
+    r"\bcomplete(?:\s+[\w'’-]+){0,4}\s+(?:series|collection|works|novels|stories)\b",
+    r"\bomnibus\b",
+    r"\bbox(?:ed)?\s+set\b",
+    r"\bcollection\b",
+    r"\banthology\b",
+)
 
 
 def _strip_html_bytes(raw: bytes) -> str:
@@ -224,7 +232,15 @@ def _title_identity_match(expected: str, observed: str) -> bool:
     return bool(ew) and ew == ow
 
 
-def _classify_identity(result: dict, metadata: dict, text: str, identifiers: list[str], source: str, notes: list[str], front_text: str = "") -> tuple[str, int, dict]:
+def _classify_identity_base(
+    result: dict,
+    metadata: dict,
+    text: str,
+    identifiers: list[str],
+    source: str,
+    notes: list[str],
+    front_text: str = "",
+) -> tuple[str, int, dict]:
     expected_title = str(result.get("title") or "")
     expected_author = str(result.get("author") or "")
     embedded_title = str(metadata.get("title") or "")
@@ -257,11 +273,17 @@ def _classify_identity(result: dict, metadata: dict, text: str, identifiers: lis
     }
 
     if metadata_matches_expected and expected["strong_identity"]:
-        evidence["explanation"] = "Embedded metadata matches the expected book and front-of-book content independently supports that identity."
+        evidence["explanation"] = (
+            "Embedded metadata matches the expected book and front-of-book content "
+            "independently supports that identity."
+        )
         return "VERIFIED_CORRECT", 99, evidence
 
     if not metadata_matches_expected and expected["strong_identity"] and not embedded["strong_identity"]:
-        evidence["explanation"] = "Front-of-book content strongly identifies the expected Bindery book, while the conflicting embedded identity is not strongly supported there."
+        evidence["explanation"] = (
+            "Front-of-book content strongly identifies the expected Bindery book, while "
+            "the conflicting embedded identity is not strongly supported there."
+        )
         return "METADATA_ERROR", 97, evidence
 
     if (
@@ -272,96 +294,132 @@ def _classify_identity(result: dict, metadata: dict, text: str, identifiers: lis
         and not expected["title_found"]
         and not expected["author_found"]
     ):
-        evidence["explanation"] = "Front-of-book content strongly supports the conflicting embedded title and author, while neither expected identity field was found anywhere in extracted content."
+        evidence["explanation"] = (
+            "Front-of-book content strongly supports the conflicting embedded title and "
+            "author, while neither expected identity field was found anywhere in extracted content."
+        )
         return "WRONG_CONTENT", 99, evidence
 
     if metadata_matches_expected and (expected["title_found"] or expected["author_found"]):
-        evidence["explanation"] = "Metadata matches the expected book, but content evidence is not positioned strongly enough for a 99% verdict."
+        evidence["explanation"] = (
+            "Metadata matches the expected book, but content evidence is not positioned "
+            "strongly enough for a 99% verdict."
+        )
         return "VERIFIED_CORRECT", 90, evidence
 
     if expected["title_found"] and expected["author_found"] and not metadata_matches_expected:
-        evidence["explanation"] = "Expected title and author occur in the book, but their location/proximity is not strong enough to distinguish true identity from backmatter, series lists, or advertisements."
+        evidence["explanation"] = (
+            "Expected title and author occur in the book, but their location/proximity is not "
+            "strong enough to distinguish true identity from backmatter, series lists, or advertisements."
+        )
         return "INSUFFICIENT_EVIDENCE", 70, evidence
 
-    evidence["explanation"] = "BookGuard could not obtain position-aware identity evidence strong enough for an automatic verdict."
+    evidence["explanation"] = (
+        "BookGuard could not obtain position-aware identity evidence strong enough "
+        "for an automatic verdict."
+    )
     return "INSUFFICIENT_EVIDENCE", 40, evidence
 
 
-def verify_result(result: dict, force: bool = False) -> dict:
-    if not settings.verification_enabled:
-        raise RuntimeError("Content verification is disabled in Settings.")
-
-    target = legacy._resolve_target(result.get("local_path") or "")
-    fingerprint = legacy._file_fingerprint(target)
-    if not force:
-        cached = legacy.verification_for_result(result)
-        if cached:
-            return cached
-
-    if result.get("format") != "ebook":
-        evidence = {
-            "expected": {"title": result.get("title", ""), "author": result.get("author", "")},
-            "embedded": {}, "content": {}, "metadata_matches_expected": False,
-            "notes": ["Audiobook content verification is not implemented yet; existing tag-based scanning remains in use."],
-            "explanation": "This verifier currently establishes book identity from ebook content only.",
-        }
-        return legacy._save_verification(result, target, fingerprint, "INSUFFICIENT_EVIDENCE", 0, "unsupported-audiobook", evidence)
-
-    path = Path(target)
-    if not path.is_file():
-        evidence = {
-            "expected": {"title": result.get("title", ""), "author": result.get("author", "")},
-            "embedded": {}, "content": {}, "metadata_matches_expected": False,
-            "notes": ["The tracked ebook target could not be opened as a file."],
-            "explanation": "No readable ebook file was available for content verification.",
-        }
-        return legacy._save_verification(result, target, fingerprint, "INSUFFICIENT_EVIDENCE", 0, "missing", evidence)
-
-    suffix = path.suffix.lower()
-    metadata = ebook_metadata(str(path))
-    text = ""
-    front_text = ""
-    identifiers: list[str] = []
-    source = "native"
-    notes: list[str] = []
-
-    try:
-        if suffix == ".epub":
-            metadata, text, identifiers, front_text = _epub_identity(str(path))
-            source = "native-epub"
-        elif suffix == ".pdf":
-            metadata, text, identifiers, front_text = _pdf_identity(str(path))
-            source = "native-pdf"
-        elif suffix in {".txt", ".rtf"}:
-            metadata, text, identifiers, front_text = _plain_identity(str(path))
-            source = f"native-{suffix.lstrip('.')}"
-    except Exception as exc:
-        notes.append(f"Native extraction error: {str(exc)[:300]}")
-
-    # Tika remains optional. Use it only when native extraction is genuinely weak.
-    if len(text.strip()) < MIN_USEFUL_TEXT and settings.verification_use_tika and settings.verification_tika_url:
-        tika_text, tika_error = legacy._tika_text(str(path))
-        if tika_text:
-            text = tika_text
-            front_text = tika_text[:FRONT_TEXT_CHARS]
-            source = f"{source}+tika" if source != "native" else "tika"
-            notes.append("Tika fallback supplied content because native extraction was insufficient.")
-        elif tika_error:
-            notes.append(tika_error)
-
-    verdict, confidence, evidence = _classify_identity(result, metadata, text, identifiers, source, notes, front_text)
-    return legacy._save_verification(result, str(path), fingerprint, verdict, confidence, source, evidence)
+def _downgrade_metadata_error(evidence: dict, reason: str) -> tuple[str, int, dict]:
+    evidence["explanation"] = reason
+    evidence.setdefault("notes", []).append(
+        "Automatic metadata repair withheld by the structural safety gate."
+    )
+    return "INSUFFICIENT_EVIDENCE", 70, evidence
 
 
-# Reuse the mature persistence/job/repair machinery, but make all of it call
-# the v0.4.8 verifier. Setting the module global also makes cache signatures v2.
-legacy.verify_result = verify_result
+def _title_is_strict_subphrase(shorter: str, longer: str) -> bool:
+    short = normalize(shorter)
+    long = normalize(longer)
+    return bool(short and long and short != long and f" {short} " in f" {long} ")
 
-init_verification_db = legacy.init_verification_db
-verification_for_result = legacy.verification_for_result
-verification_summary = legacy.verification_summary
-verification_job_status = legacy.verification_job_status
-start_verification_job = legacy.start_verification_job
-test_tika = legacy.test_tika
-verified_repair_preview = legacy.verified_repair_preview
-apply_verified_metadata_repair = legacy.apply_verified_metadata_repair
+
+def _looks_collection_like(title: str) -> bool:
+    value = str(title or "").strip().lower()
+    return bool(value) and any(
+        re.search(pattern, value, flags=re.I)
+        for pattern in COLLECTION_TITLE_PATTERNS
+    )
+
+
+def _classify_identity(
+    result: dict,
+    metadata: dict,
+    text: str,
+    identifiers: list[str],
+    source: str,
+    notes: list[str],
+    front_text: str = "",
+) -> tuple[str, int, dict]:
+    """Classify identity, then apply every automatic-repair safety refinement."""
+    verdict, confidence, evidence = _classify_identity_base(
+        result, metadata, text, identifiers, source, notes, front_text
+    )
+    if verdict != "METADATA_ERROR":
+        return verdict, confidence, evidence
+
+    expected_signal = evidence.get("content", {}).get("expected_signal", {})
+    embedded_signal = evidence.get("content", {}).get("embedded_signal", {})
+    proximity = expected_signal.get("front_proximity_chars")
+    title_position = expected_signal.get("title_first_position")
+    embedded_title_position = embedded_signal.get("title_first_position")
+
+    expected_title = str(evidence.get("expected", {}).get("title") or "")
+    expected_author = str(evidence.get("expected", {}).get("author") or "")
+    embedded_title = str(evidence.get("embedded", {}).get("title") or "")
+    embedded_author = str(evidence.get("embedded", {}).get("author") or "")
+
+    metadata_title_match = _title_identity_match(expected_title, embedded_title)
+    metadata_author_match = author_match_strict(expected_author, embedded_author)
+
+    if _looks_collection_like(embedded_title):
+        return _downgrade_metadata_error(
+            evidence,
+            "The embedded title looks like a collection, omnibus, anthology, or boxed set; "
+            "the expected title may be only one component, so automatic metadata repair is withheld.",
+        )
+    if not metadata_title_match and _title_is_strict_subphrase(expected_title, embedded_title):
+        return _downgrade_metadata_error(
+            evidence,
+            "The expected title is only a shorter phrase within the conflicting embedded title, "
+            "so it is not independent evidence for an automatic metadata rewrite.",
+        )
+    if metadata_title_match and not metadata_author_match:
+        return _downgrade_metadata_error(
+            evidence,
+            "The embedded title matches the expected title but the author conflicts; "
+            "author-only disagreement is kept for review rather than rewritten automatically.",
+        )
+    if (
+        not expected_signal.get("front_proximity")
+        or proximity is None
+        or proximity > METADATA_ERROR_MAX_PROXIMITY
+    ):
+        return _downgrade_metadata_error(
+            evidence,
+            "The expected title and author occur near the front, but not tightly enough together "
+            "for a safe automatic metadata rewrite.",
+        )
+    if title_position is None or title_position > METADATA_ERROR_MAX_TITLE_POSITION:
+        return _downgrade_metadata_error(
+            evidence,
+            "The expected identity appears too far into the book to distinguish it safely from "
+            "advertisements, series lists, or backmatter.",
+        )
+    if (
+        embedded_title_position is not None
+        and embedded_title_position <= CONFLICTING_TITLE_PRIMARY_POSITION
+        and not metadata_title_match
+    ):
+        return _downgrade_metadata_error(
+            evidence,
+            "A conflicting embedded title appears at the very start of the book, so the expected "
+            "identity is not sufficiently dominant for automatic repair.",
+        )
+
+    evidence["explanation"] = (
+        "Title-page-like frontmatter tightly pairs the expected title and author, "
+        "while no competing embedded identity has equally strong structural support."
+    )
+    return "METADATA_ERROR", 97, evidence

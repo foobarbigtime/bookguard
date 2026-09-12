@@ -208,3 +208,25 @@ uvicorn app.main:app --reload --port 8788
 ```
 
 The test suite includes end-to-end synthetic EPUB tests covering preview, safe repair, verification, repair-history persistence, Undo, and staged-byte safety gates.
+
+### Project structure
+
+BookGuard has one application entry point and separates HTTP transport from
+domain behavior:
+
+```text
+app/main.py                 Application composition and startup
+app/routes/                 Page and API routers grouped by feature
+app/services/dashboard.py  Dashboard view-model assembly
+app/scanner.py              Library scan orchestration
+app/verifier.py             Verification jobs, persistence, and repairs
+app/verification_engine.py  Pure ebook identity extraction/classification
+app/staging.py              Read-only staged-byte verification
+app/automatic.py            Guarded automatic-maintenance workflow
+app/bindery_client.py       Bindery API and API-key discovery
+app/file_safety.py          Shared filesystem hashing/safety helpers
+```
+
+Versioned entry-point and verifier wrappers are intentionally avoided. New
+behavior should be added to the relevant router or service and covered by a
+focused test instead of layering another `main_v*` or `verifier_v*` module.
