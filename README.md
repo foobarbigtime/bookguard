@@ -45,8 +45,9 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - A staged file is marked `safeToAdmit` only for a stable `VERIFIED_CORRECT` result at 99% confidence.
 - Opt-in direct ebook admission to the exact former Bindery path, followed by Bindery library reconciliation.
 - Snapshot verification on the destination filesystem, atomic no-overwrite publication, and durable recovery state.
+- One-at-a-time, explicitly selected Bindery acquisition with durable queue and staged-verification state.
 
-Automatic queue grabbing remains disabled. Direct admission is disabled by default and repeats verification on a private copied snapshot at its own mutation boundary; a read-only `safeToAdmit` response is never treated as authorization.
+Unattended scheduling remains disabled. Controlled acquisition and direct admission are separate opt-ins with separate confirmations. Admission repeats verification on a private copied snapshot at its own mutation boundary; a prior `safeToAdmit` response is never treated as authorization.
 
 Read-only staging endpoints:
 
@@ -57,6 +58,12 @@ GET  /api/automatic/admission-readiness
 GET  /api/automatic/admissions
 POST /api/automatic/results/{result_id}/admit-staged-ebook
 POST /api/automatic/admissions/{admission_id}/reconcile
+GET  /api/automatic/acquisition-readiness
+GET  /api/automatic/acquisitions
+POST /api/automatic/results/{result_id}/acquisitions
+POST /api/automatic/acquisitions/{acquisition_id}/reconcile
+POST /api/automatic/acquisitions/{acquisition_id}/admit
+POST /api/automatic/acquisitions/{acquisition_id}/finalize
 ```
 
 The verification request uses a path relative to `/staging`:
@@ -66,6 +73,13 @@ The verification request uses a path relative to `/staging`:
 ```
 
 Absolute paths, traversal outside the staging root, symlinked files, empty files, unsupported formats, and files over the configured size limit are rejected.
+
+Acquisition finalization is a separate, explicitly confirmed operation. It is
+available only after the linked admission is registered at the exact Bindery
+path and the staged SHA-256 still matches. It removes the terminal Bindery
+queue record with download-client and downloaded-data deletion disabled, then
+removes only the verified staging copy. Library bytes and durable audit records
+are retained.
 
 ## Safety model
 
@@ -134,10 +148,28 @@ BOOKGUARD_AUTOMATIC_REACQUISITION=false
 BOOKGUARD_MAX_STAGED_EBOOK_BYTES=536870912
 ```
 
-Automatic reacquisition fails closed unless every readiness check passes. Keep
-it disabled: queue-to-staging acquisition and orchestration are not implemented
-yet. External import mode should currently be used only during a deliberate,
-operator-controlled admission session.
+Automatic reacquisition fails closed unless every readiness check passes. The
+implemented workflow is deliberately operator-driven: it can start one freshly
+revalidated release, observe its Bindery queue record, and verify exactly one
+ebook arriving in an initially empty staging folder. There is no scheduler,
+automatic candidate choice, automatic retry, unattended staged-file deletion,
+or automatic admission.
+
+Starting an acquisition additionally requires Bindery auto-grab to be disabled,
+a complete and idle Bindery queue, an empty and completely inventoried staging
+folder, no other unfinished acquisition, and `BOOKGUARD_ALLOW_ACTIONS=true`. The
+selected release must still appear exactly once in a fresh search, explicitly be
+an ebook, pass BookGuard's independent title/author gate, and not have an exact
+grabbed-and-imported match in Bindery history. BookGuard records the session
+before asking Bindery to grab it.
+
+Reconciliation never moves or deletes staged files. It accepts a staged result
+only after Bindery reaches a completed external-handoff state, the folder
+contains exactly one supported ebook, and its bytes verify at the admission
+threshold. Any ambiguity becomes durable `review_required` state. A third,
+separately confirmed request hands that verified session to the existing
+admission transaction, which checks the hash and repeats full verification
+before publication.
 
 ### Controlled ebook admission
 
@@ -174,7 +206,12 @@ the successful publication method. If publication succeeds but a later
 durability step reports an error, the record remains recoverable rather than
 being mislabeled as an ordinary failed copy. After publication, BookGuard asks
 Bindery to scan its library and retains the staged source even after registration
-is confirmed; cleanup remains an explicit operator choice.
+is confirmed. A separate `FINALIZE_EBOOK_ACQUISITION` request can then verify the
+registered library copy and staged hash, remove only the terminal Bindery queue
+record with download-client and file deletion explicitly disabled, and remove
+only that acquisition's verified staging copy. The library file and durable
+admission/acquisition audit records are retained. Interrupted finalization stays
+blocked as `cleanup_required` unless the exact safe cleanup state can be proven.
 
 ## Metadata repair philosophy
 
@@ -311,6 +348,7 @@ app/verification_engine.py  Ebook identity classification and safety rules
 app/verification_constants.py Shared verification limits
 app/staging.py              Read-only staged-byte verification
 app/admission.py            Atomic direct-admission transaction and recovery
+app/acquisition.py          One-at-a-time Bindery queue-to-staging workflow
 app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery
 app/file_safety.py          Shared filesystem hashing/safety helpers

@@ -201,6 +201,31 @@ def init_local_db() -> None:
                 updated_at TEXT NOT NULL,
                 error TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS ebook_acquisitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id INTEGER NOT NULL,
+                scan_id TEXT NOT NULL,
+                book_id INTEGER NOT NULL,
+                candidate_guid TEXT NOT NULL,
+                candidate_title TEXT NOT NULL,
+                candidate_indexer TEXT,
+                candidate_protocol TEXT,
+                status TEXT NOT NULL,
+                queue_id INTEGER,
+                queue_status TEXT,
+                grab_response_json TEXT,
+                observed_relative_path TEXT,
+                observed_size INTEGER,
+                observed_modified_ns INTEGER,
+                staged_relative_path TEXT,
+                staged_sha256 TEXT,
+                verification_json TEXT,
+                admission_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                error TEXT
+            );
             """
         )
 
@@ -241,6 +266,12 @@ def init_local_db() -> None:
                 ON ebook_admissions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_admissions_result
                 ON ebook_admissions(result_id);
+            CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_created
+                ON ebook_acquisitions(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_result
+                ON ebook_acquisitions(result_id);
+            CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_status
+                ON ebook_acquisitions(status);
             """
         )
         conn.commit()
@@ -538,6 +569,150 @@ def recent_ebook_admissions(limit: int = 100) -> list[dict]:
         item["verification"] = json.loads(raw) if raw else None
         items.append(item)
     return items
+
+
+def _decode_ebook_acquisition(row) -> dict:
+    item = dict(row)
+    for source, target in (
+        ("grab_response_json", "grab_response"),
+        ("verification_json", "verification"),
+    ):
+        raw = item.pop(source)
+        item[target] = json.loads(raw) if raw else None
+    return item
+
+
+def create_ebook_acquisition(
+    result: dict,
+    candidate: dict,
+) -> int:
+    now = utc_now()
+    with local_conn() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO ebook_acquisitions(
+                result_id, scan_id, book_id, candidate_guid, candidate_title,
+                candidate_indexer, candidate_protocol, status, created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'preparing', ?, ?)
+            """,
+            (
+                result["id"],
+                result["scan_id"],
+                result["book_id"],
+                str(candidate.get("guid") or ""),
+                str(candidate.get("title") or ""),
+                str(candidate.get("indexerName") or candidate.get("indexer") or ""),
+                str(candidate.get("protocol") or ""),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def update_ebook_acquisition(
+    acquisition_id: int,
+    status: str,
+    *,
+    queue_id: int | None = None,
+    queue_status: str | None = None,
+    grab_response: dict | list | None = None,
+    observed_relative_path: str | None = None,
+    observed_size: int | None = None,
+    observed_modified_ns: int | None = None,
+    staged_relative_path: str | None = None,
+    staged_sha256: str | None = None,
+    verification: dict | None = None,
+    admission_id: int | None = None,
+    error: str | None = None,
+) -> None:
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ebook_acquisitions
+            SET status=?,
+                queue_id=COALESCE(?, queue_id),
+                queue_status=COALESCE(?, queue_status),
+                grab_response_json=COALESCE(?, grab_response_json),
+                observed_relative_path=COALESCE(?, observed_relative_path),
+                observed_size=COALESCE(?, observed_size),
+                observed_modified_ns=COALESCE(?, observed_modified_ns),
+                staged_relative_path=COALESCE(?, staged_relative_path),
+                staged_sha256=COALESCE(?, staged_sha256),
+                verification_json=COALESCE(?, verification_json),
+                admission_id=COALESCE(?, admission_id),
+                updated_at=?,
+                error=?
+            WHERE id=?
+            """,
+            (
+                status,
+                queue_id,
+                queue_status,
+                json.dumps(grab_response, ensure_ascii=False)
+                if grab_response is not None
+                else None,
+                observed_relative_path,
+                observed_size,
+                observed_modified_ns,
+                staged_relative_path,
+                staged_sha256,
+                json.dumps(verification, ensure_ascii=False)
+                if verification is not None
+                else None,
+                admission_id,
+                utc_now(),
+                error,
+                acquisition_id,
+            ),
+        )
+        conn.commit()
+
+
+def ebook_acquisition_by_id(acquisition_id: int) -> dict | None:
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM ebook_acquisitions WHERE id=?",
+            (acquisition_id,),
+        ).fetchone()
+    return _decode_ebook_acquisition(row) if row else None
+
+
+def recent_ebook_acquisitions(limit: int = 100) -> list[dict]:
+    with local_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ebook_acquisitions ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit), 500)),),
+        ).fetchall()
+    return [_decode_ebook_acquisition(row) for row in rows]
+
+
+def active_ebook_acquisitions() -> list[dict]:
+    active_statuses = (
+        "preparing",
+        "grab_requested",
+        "queued",
+        "downloading",
+        "awaiting_staging",
+        "staging_observed",
+        "verified",
+        "admitted",
+        "finalizing",
+        "cleanup_required",
+    )
+    placeholders = ",".join("?" for _ in active_statuses)
+    with local_conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM ebook_acquisitions
+            WHERE status IN ({placeholders})
+            ORDER BY id
+            """,
+            active_statuses,
+        ).fetchall()
+    return [_decode_ebook_acquisition(row) for row in rows]
 
 
 def create_cleanup_action(result: dict, action_kind: str) -> int:

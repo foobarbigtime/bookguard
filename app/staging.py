@@ -71,6 +71,32 @@ def resolve_staged_file(relative_path: str) -> tuple[Path, Path]:
     return root, resolved
 
 
+def staged_path_is_absent(relative_path: str) -> bool:
+    """Return true only when a safe staging-relative path is genuinely absent."""
+    root = _staging_root()
+    supplied = str(relative_path or "").strip()
+    if not supplied:
+        raise StagingSafetyError("A staging-relative file path is required.")
+
+    requested = Path(supplied)
+    if requested.is_absolute() or any(part in {"", ".", ".."} for part in requested.parts):
+        raise StagingSafetyError("The staged file path must be a safe relative path.")
+
+    lexical = root / requested
+    if lexical.is_symlink():
+        raise StagingSafetyError("Symlinked staged files are not accepted.")
+    if lexical.exists():
+        return False
+
+    try:
+        lexical.parent.resolve(strict=True).relative_to(root)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise StagingSafetyError(
+            "The staged file parent does not exist or resolves outside the staging root."
+        ) from exc
+    return True
+
+
 def book_identity(book: dict[str, Any]) -> tuple[str, str]:
     author_obj = book.get("author") if isinstance(book.get("author"), dict) else {}
     title = str(book.get("title") or "").strip()

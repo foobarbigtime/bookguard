@@ -3,6 +3,15 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..acquisition import (
+    AcquisitionSafetyError,
+    acquisition_history,
+    acquisition_readiness,
+    admit_ebook_acquisition,
+    finalize_ebook_acquisition,
+    reconcile_ebook_acquisition,
+    start_ebook_acquisition,
+)
 from ..admission import (
     AdmissionSafetyError,
     admission_history,
@@ -26,6 +35,11 @@ class StagedVerificationRequest(BaseModel):
 
 
 class StagedAdmissionRequest(StagedVerificationRequest):
+    confirm: str = Field(min_length=1, max_length=64)
+
+
+class EbookAcquisitionRequest(BaseModel):
+    candidateGuid: str = Field(min_length=1, max_length=4096)
     confirm: str = Field(min_length=1, max_length=64)
 
 
@@ -79,6 +93,74 @@ def api_automatic_admission_readiness():
         return admission_readiness()
     except AdmissionSafetyError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/acquisition-readiness")
+def api_automatic_acquisition_readiness():
+    """Report whether one controlled Bindery acquisition may be started."""
+    try:
+        return acquisition_readiness()
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/acquisitions")
+def api_automatic_acquisitions(limit: int = 100):
+    """Return durable queue-to-staging acquisition history."""
+    return acquisition_history(limit)
+
+
+@router.post("/results/{result_id}/acquisitions")
+def api_automatic_start_acquisition(
+    result_id: int,
+    payload: EbookAcquisitionRequest,
+):
+    """Freshly revalidate and grab one explicitly selected ebook release."""
+    require_confirmation(payload, "START_EBOOK_ACQUISITION")
+    item = _automatic_result(result_id)
+    try:
+        return start_ebook_acquisition(item, payload.candidateGuid)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/acquisitions/{acquisition_id}/reconcile")
+def api_automatic_reconcile_acquisition(
+    acquisition_id: int,
+    payload: ConfirmationRequest,
+):
+    """Observe Bindery and verify an unambiguous staged ebook."""
+    require_confirmation(payload, "RECONCILE_EBOOK_ACQUISITION")
+    try:
+        return reconcile_ebook_acquisition(acquisition_id)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/acquisitions/{acquisition_id}/admit")
+def api_automatic_admit_acquisition(
+    acquisition_id: int,
+    payload: ConfirmationRequest,
+):
+    """Submit one verified acquisition to guarded direct admission."""
+    require_confirmation(payload, "ADMIT_EBOOK_ACQUISITION")
+    try:
+        return admit_ebook_acquisition(acquisition_id)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/acquisitions/{acquisition_id}/finalize")
+def api_automatic_finalize_acquisition(
+    acquisition_id: int,
+    payload: ConfirmationRequest,
+):
+    """Finalize a registered admission without deleting download-client data."""
+    require_confirmation(payload, "FINALIZE_EBOOK_ACQUISITION")
+    try:
+        return finalize_ebook_acquisition(acquisition_id)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.get("/admissions")
