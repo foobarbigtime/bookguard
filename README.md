@@ -45,8 +45,9 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - A staged file is marked `safeToAdmit` only for a stable `VERIFIED_CORRECT` result at 99% confidence.
 - Opt-in direct ebook admission to the exact former Bindery path, followed by Bindery library reconciliation.
 - Snapshot verification on the destination filesystem, atomic no-overwrite publication, and durable recovery state.
+- One-at-a-time, explicitly selected Bindery acquisition with durable queue and staged-verification state.
 
-Automatic queue grabbing remains disabled. Direct admission is disabled by default and repeats verification on a private copied snapshot at its own mutation boundary; a read-only `safeToAdmit` response is never treated as authorization.
+Unattended scheduling remains disabled. Controlled acquisition and direct admission are separate opt-ins with separate confirmations. Admission repeats verification on a private copied snapshot at its own mutation boundary; a prior `safeToAdmit` response is never treated as authorization.
 
 Read-only staging endpoints:
 
@@ -57,6 +58,11 @@ GET  /api/automatic/admission-readiness
 GET  /api/automatic/admissions
 POST /api/automatic/results/{result_id}/admit-staged-ebook
 POST /api/automatic/admissions/{admission_id}/reconcile
+GET  /api/automatic/acquisition-readiness
+GET  /api/automatic/acquisitions
+POST /api/automatic/results/{result_id}/acquisitions
+POST /api/automatic/acquisitions/{acquisition_id}/reconcile
+POST /api/automatic/acquisitions/{acquisition_id}/admit
 ```
 
 The verification request uses a path relative to `/staging`:
@@ -134,10 +140,26 @@ BOOKGUARD_AUTOMATIC_REACQUISITION=false
 BOOKGUARD_MAX_STAGED_EBOOK_BYTES=536870912
 ```
 
-Automatic reacquisition fails closed unless every readiness check passes. Keep
-it disabled: queue-to-staging acquisition and orchestration are not implemented
-yet. External import mode should currently be used only during a deliberate,
-operator-controlled admission session.
+Automatic reacquisition fails closed unless every readiness check passes. The
+implemented workflow is deliberately operator-driven: it can start one freshly
+revalidated release, observe its Bindery queue record, and verify exactly one
+ebook arriving in an initially empty staging folder. There is no scheduler,
+automatic candidate choice, automatic retry, staged-file deletion, or automatic
+admission.
+
+Starting an acquisition additionally requires Bindery auto-grab to be disabled,
+a complete and idle Bindery queue, an empty and completely inventoried staging
+folder, no other active acquisition, and `BOOKGUARD_ALLOW_ACTIONS=true`. The
+selected release must still appear exactly once in a fresh search, explicitly be
+an ebook, and pass BookGuard's independent title/author gate. BookGuard records
+the session before asking Bindery to grab it.
+
+Reconciliation never moves or deletes staged files. It accepts a staged result
+only when the folder contains exactly one supported ebook and its bytes verify
+at the admission threshold. Any ambiguity becomes durable `review_required`
+state. A third, separately confirmed request hands that verified session to the
+existing admission transaction, which checks the hash and repeats full
+verification before publication.
 
 ### Controlled ebook admission
 
@@ -311,6 +333,7 @@ app/verification_engine.py  Ebook identity classification and safety rules
 app/verification_constants.py Shared verification limits
 app/staging.py              Read-only staged-byte verification
 app/admission.py            Atomic direct-admission transaction and recovery
+app/acquisition.py          One-at-a-time Bindery queue-to-staging workflow
 app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery
 app/file_safety.py          Shared filesystem hashing/safety helpers
