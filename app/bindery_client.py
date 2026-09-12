@@ -156,6 +156,10 @@ class BinderyClient:
     def search_book(self, book_id: int) -> dict[str, Any]:
         return self._request("POST", f"/book/{int(book_id)}/search")
 
+    def scan_library(self) -> dict[str, Any] | None:
+        """Ask Bindery to reconcile files already placed in its library roots."""
+        return self._request("POST", "/library/scan")
+
     def list_history(self, book_id: int, event_type: str | None = None, limit: int = 100) -> dict[str, Any]:
         params: dict[str, Any] = {"bookId": int(book_id), "limit": int(limit)}
         if event_type:

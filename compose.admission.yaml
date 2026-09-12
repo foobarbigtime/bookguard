@@ -1,0 +1,6 @@
+services:
+  bookguard:
+    volumes:
+      # Opt-in writable alias for controlled ebook admission. The normal
+      # /books mount remains read-only for scanning and verification.
+      - /mnt/user/data/media/books:/admission-books

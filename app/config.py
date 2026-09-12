@@ -108,6 +108,9 @@ class AutomationSettings:
     bindery_drop_folder: str
     automatic_reacquisition: bool
     max_staged_ebook_bytes: int
+    admission_enabled: bool
+    admission_root: str
+    admission_bindery_root: str
 
 
 def load_automation_settings() -> AutomationSettings:
@@ -130,6 +133,13 @@ def load_automation_settings() -> AutomationSettings:
         bindery_drop_folder=os.getenv("BOOKGUARD_BINDERY_DROP_FOLDER", "").strip(),
         automatic_reacquisition=_bool("BOOKGUARD_AUTOMATIC_REACQUISITION", False),
         max_staged_ebook_bytes=max_staged_ebook_bytes,
+        admission_enabled=_bool("BOOKGUARD_ADMISSION_ENABLED", False),
+        admission_root=os.getenv("BOOKGUARD_ADMISSION_ROOT", "/admission-books").strip()
+        or "/admission-books",
+        admission_bindery_root=os.getenv(
+            "BOOKGUARD_ADMISSION_BINDERY_ROOT",
+            "/data/media/books",
+        ).rstrip("/"),
     )
 
 

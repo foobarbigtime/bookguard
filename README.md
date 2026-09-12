@@ -43,14 +43,20 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - Read-only staged ebook inventory and staged-byte verification against one explicit Bindery book.
 - SHA-256 and file-stat stability checks across verification.
 - A staged file is marked `safeToAdmit` only for a stable `VERIFIED_CORRECT` result at 99% confidence.
+- Opt-in direct ebook admission to the exact former Bindery path, followed by Bindery library reconciliation.
+- Snapshot verification on the destination filesystem, atomic no-overwrite publication, and durable recovery state.
 
-Automatic queue grabbing and library admission remain disabled. A read-only `safeToAdmit` result is not a durable authorization token; the future admission operation must repeat verification at its own mutation boundary.
+Automatic queue grabbing remains disabled. Direct admission is disabled by default and repeats verification on a private copied snapshot at its own mutation boundary; a read-only `safeToAdmit` response is never treated as authorization.
 
 Read-only staging endpoints:
 
 ```text
 GET  /api/automatic/staging/files
 POST /api/automatic/books/{book_id}/staged-verification
+GET  /api/automatic/admission-readiness
+GET  /api/automatic/admissions
+POST /api/automatic/results/{result_id}/admit-staged-ebook
+POST /api/automatic/admissions/{admission_id}/reconcile
 ```
 
 The verification request uses a path relative to `/staging`:
@@ -98,7 +104,8 @@ enforced by the server.
 BOOKGUARD_ALLOW_ACTIONS=false
 ```
 
-This controls Detach and Quarantine only. `PASS` results remain protected from those actions.
+This controls every media-changing operation, including Detach, Quarantine,
+and direct admission. `PASS` results remain protected from destructive actions.
 
 ### Metadata repair
 
@@ -127,6 +134,37 @@ BOOKGUARD_MAX_STAGED_EBOOK_BYTES=536870912
 ```
 
 Automatic reacquisition fails closed unless every readiness check passes. Keep it disabled until Bindery is deliberately configured for external import and BookGuard's controlled-admission slice is complete.
+
+### Controlled ebook admission
+
+Direct admission uses a separate writable alias while the ordinary `/books`
+mount remains read-only:
+
+```env
+BOOKGUARD_ADMISSION_ENABLED=false
+BOOKGUARD_ADMISSION_ROOT=/admission-books
+BOOKGUARD_ADMISSION_BINDERY_ROOT=/data/media/books
+```
+
+Start the opt-in topology only when deliberately testing admission:
+
+```bash
+docker compose -f compose.yaml -f compose.admission.yaml up -d --build
+```
+
+An admission is tied to a prior scan result so BookGuard can reuse the exact
+former library path instead of reproducing Bindery's configurable naming
+engine. BookGuard refuses missing/symlinked destination directories, format
+changes, existing destinations, inconsistent root mappings, changed Bindery
+book identity, or an already-registered ebook.
+
+At the mutation boundary BookGuard opens the staged file without following
+symlinks, copies it to a private file on the destination filesystem, verifies
+the copied bytes again at 99% confidence, flushes them, and atomically publishes
+without overwrite. The library file is never hardlinked to staging. Admission
+state is recorded in `/config/bookguard.db` before copying. After publication,
+BookGuard asks Bindery to scan its library and retains the staged source even
+after registration is confirmed; cleanup remains an explicit operator choice.
 
 ## Metadata repair philosophy
 
@@ -262,6 +300,7 @@ app/ebook_extraction.py     Ebook metadata and text extraction
 app/verification_engine.py  Ebook identity classification and safety rules
 app/verification_constants.py Shared verification limits
 app/staging.py              Read-only staged-byte verification
+app/admission.py            Atomic direct-admission transaction and recovery
 app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery
 app/file_safety.py          Shared filesystem hashing/safety helpers

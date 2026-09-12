@@ -3,11 +3,19 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..admission import (
+    AdmissionSafetyError,
+    admission_history,
+    admission_readiness,
+    admit_staged_ebook,
+    reconcile_admission,
+)
 from ..automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
 from ..bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from ..db import result_by_id
 from ..preimport import PreImportSafetyError, preimport_readiness
 from ..staging import StagingSafetyError, list_staged_ebooks, verify_staged_ebook
+from .models import ConfirmationRequest, require_confirmation
 
 
 router = APIRouter(prefix="/api/automatic", tags=["automatic maintenance"])
@@ -15,6 +23,10 @@ router = APIRouter(prefix="/api/automatic", tags=["automatic maintenance"])
 
 class StagedVerificationRequest(BaseModel):
     relativePath: str = Field(min_length=1, max_length=4096)
+
+
+class StagedAdmissionRequest(StagedVerificationRequest):
+    confirm: str = Field(min_length=1, max_length=64)
 
 
 @router.get("/bindery-status")
@@ -57,6 +69,45 @@ def api_automatic_staged_verification(book_id: int, payload: StagedVerificationR
     except BinderyClientError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except StagingSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/admission-readiness")
+def api_automatic_admission_readiness():
+    """Report whether the separate writable admission path is safe and enabled."""
+    try:
+        return admission_readiness()
+    except AdmissionSafetyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/admissions")
+def api_automatic_admissions(limit: int = 100):
+    """Return durable admission history and recovery state."""
+    return admission_history(limit)
+
+
+@router.post("/results/{result_id}/admit-staged-ebook")
+def api_automatic_admit_staged_ebook(result_id: int, payload: StagedAdmissionRequest):
+    """Verify and atomically publish one staged ebook to its former path."""
+    require_confirmation(payload, "ADMIT_STAGED_EBOOK")
+    item = _automatic_result(result_id)
+    try:
+        return admit_staged_ebook(item, payload.relativePath)
+    except AdmissionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/admissions/{admission_id}/reconcile")
+def api_automatic_reconcile_admission(
+    admission_id: int,
+    payload: ConfirmationRequest,
+):
+    """Confirm registration or request another Bindery library scan."""
+    require_confirmation(payload, "RECONCILE_ADMISSION")
+    try:
+        return reconcile_admission(admission_id)
+    except AdmissionSafetyError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
 
