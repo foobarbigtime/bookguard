@@ -182,7 +182,11 @@ saveButton.addEventListener("click", async () => {
 resetButton.addEventListener("click", async () => {
   if (!confirm("Reset all saved BookGuard settings to the current environment/default values?")) return;
   resetButton.disabled = true;
-  const response = await fetch("/api/settings/reset", {method: "POST"});
+  const response = await fetch("/api/settings/reset", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({confirm: "RESET"}),
+  });
   const body = await response.json().catch(() => ({}));
   resetButton.disabled = false;
   if (!response.ok) { showStatus(body.detail || "Unable to reset settings.", "bad"); return; }

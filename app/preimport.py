@@ -5,18 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from .bindery_client import BinderyClient, BinderyClientError
-from .config import settings
+from .config import ConfigurationError, load_automation_settings, settings
+from .file_safety import is_within
 
 
 class PreImportSafetyError(RuntimeError):
     pass
-
-
-def _bool_env(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _setting_text(value: Any) -> str:
@@ -70,9 +64,13 @@ def preimport_readiness(client: BinderyClient | None = None) -> dict[str, Any]:
     This function is read-only and intentionally fails closed.
     """
     client = client or BinderyClient()
-    staging_root = Path(os.getenv("BOOKGUARD_STAGING_ROOT", "/staging")).resolve()
-    expected_drop = os.getenv("BOOKGUARD_BINDERY_DROP_FOLDER", "").strip()
-    enabled = _bool_env("BOOKGUARD_AUTOMATIC_REACQUISITION", False)
+    try:
+        automation = load_automation_settings()
+    except ConfigurationError as exc:
+        raise PreImportSafetyError(str(exc)) from exc
+    staging_root = Path(automation.staging_root).resolve()
+    expected_drop = automation.bindery_drop_folder
+    enabled = automation.automatic_reacquisition
 
     try:
         import_mode = _setting_text(_get_setting_with_defaults(client, "import.mode")).lower()
@@ -84,11 +82,11 @@ def preimport_readiness(client: BinderyClient | None = None) -> dict[str, Any]:
 
     media_roots = [Path(settings.ebook_root).resolve(), Path(settings.audiobook_root).resolve()]
     quarantine_root = Path(settings.quarantine_root).resolve()
-    outside_library = all(
-        staging_root != root and root not in staging_root.parents
-        for root in media_roots
+    outside_library = all(not is_within(staging_root, root) for root in media_roots)
+    separate_from_quarantine = not (
+        is_within(staging_root, quarantine_root)
+        or is_within(quarantine_root, staging_root)
     )
-    separate_from_quarantine = staging_root != quarantine_root and quarantine_root not in staging_root.parents
     exists = staging_root.is_dir()
     writable = exists and os.access(staging_root, os.W_OK | os.X_OK)
     drop_matches = bool(expected_drop and drop_folder and expected_drop == drop_folder)

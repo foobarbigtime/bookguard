@@ -1,14 +1,73 @@
 from jinja2 import Environment, FileSystemLoader
+from fastapi.routing import APIRoute
 
 import app.main as main
-import app.main_v047 as main_v047
 from app.config import Settings
+from app.services import dashboard
+
+
+EXPECTED_ROUTES = {
+    ("GET", "/"),
+    ("GET", "/triage"),
+    ("GET", "/settings"),
+    ("GET", "/repairs"),
+    ("GET", "/health"),
+    ("POST", "/api/scan"),
+    ("GET", "/api/status"),
+    ("GET", "/api/settings"),
+    ("POST", "/api/settings"),
+    ("POST", "/api/settings/reset"),
+    ("GET", "/api/results/{result_id}/repair-preview"),
+    ("POST", "/api/results/{result_id}/repair"),
+    ("POST", "/api/repairs/{repair_id}/undo"),
+    ("POST", "/api/triage/{result_id}/keep"),
+    ("POST", "/api/triage/keep-selected"),
+    ("POST", "/api/triage/{result_id}/reopen"),
+    ("GET", "/api/triage/{result_id}/action-preview"),
+    ("POST", "/api/triage/{result_id}/detach"),
+    ("POST", "/api/triage/{result_id}/quarantine"),
+    ("GET", "/api/results/{result_id}/missing-detach-preview"),
+    ("GET", "/api/missing/preview"),
+    ("POST", "/api/results/{result_id}/detach-missing"),
+    ("POST", "/api/missing/detach-all"),
+    ("GET", "/api/verification/status"),
+    ("GET", "/api/verification/cached"),
+    ("POST", "/api/verification/start"),
+    ("GET", "/api/verification/tika-test"),
+    ("GET", "/api/verification/{result_id}"),
+    ("POST", "/api/verification/{result_id}/run"),
+    ("GET", "/api/verification/{result_id}/repair-preview"),
+    ("POST", "/api/verification/{result_id}/repair"),
+    ("GET", "/api/automatic/bindery-status"),
+    ("GET", "/api/automatic/preimport-readiness"),
+    ("GET", "/api/automatic/staging/files"),
+    ("POST", "/api/automatic/books/{book_id}/staged-verification"),
+    ("GET", "/api/automatic/books/{book_id}/replacement-preview"),
+    ("GET", "/api/automatic/results/{result_id}/wrong-content-preview"),
+    ("POST", "/api/automatic/results/{result_id}/remediate-wrong-content"),
+}
 
 
 def test_app_imports():
     assert main.app.title == "BookGuard"
-    assert main_v047.app.title == "BookGuard"
-    assert main_v047.app.version == "0.4.7"
+    assert main.app.version == "0.5.0"
+
+
+def test_route_contract_is_exact():
+    routes = {
+        (method, route.path)
+        for route in main.app.routes
+        if isinstance(route, APIRoute)
+        for method in route.methods
+    }
+    route_count = sum(
+        len(route.methods)
+        for route in main.app.routes
+        if isinstance(route, APIRoute)
+    )
+
+    assert len(routes) == route_count
+    assert routes == EXPECTED_ROUTES
 
 
 def test_templates_parse():
@@ -16,6 +75,7 @@ def test_templates_parse():
     env.get_template("index.html")
     env.get_template("triage.html")
     env.get_template("settings.html")
+    env.get_template("repairs.html")
 
 
 def test_settings_clamp_and_lists():
@@ -78,10 +138,10 @@ def test_repairs_page_excludes_full_preview_noop(monkeypatch):
         },
     }
 
-    monkeypatch.setattr(main.settings, "metadata_repair_mode", "preview")
-    monkeypatch.setattr(main, "latest_results", lambda limit=10000: [row])
+    monkeypatch.setattr(dashboard.settings, "metadata_repair_mode", "preview")
+    monkeypatch.setattr(dashboard, "latest_results", lambda limit=10000: [row])
     monkeypatch.setattr(
-        main,
+        dashboard,
         "repair_candidate_summary",
         lambda result: {
             "eligible": True,
@@ -91,7 +151,7 @@ def test_repairs_page_excludes_full_preview_noop(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        main,
+        dashboard,
         "build_repair_preview",
         lambda result: {
             "eligible": False,
@@ -103,4 +163,4 @@ def test_repairs_page_excludes_full_preview_noop(monkeypatch):
         },
     )
 
-    assert main._latest_repair_candidates() == []
+    assert dashboard.latest_repair_candidates() == []

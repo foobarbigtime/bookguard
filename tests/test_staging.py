@@ -4,6 +4,7 @@ import zipfile
 
 import pytest
 
+import app.ebook_extraction as ebook_extraction
 import app.staging as staging
 
 
@@ -56,7 +57,7 @@ def _configure(tmp_path, monkeypatch):
     root = tmp_path / "staging"
     root.mkdir()
     monkeypatch.setenv("BOOKGUARD_STAGING_ROOT", str(root))
-    monkeypatch.setattr(staging.settings, "verification_use_tika", False)
+    monkeypatch.setattr(ebook_extraction.settings, "verification_use_tika", False)
     return root
 
 

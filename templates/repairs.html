@@ -127,7 +127,11 @@ async function runRepair(id) {
     return;
   }
   if (!confirm(`${text}\n\nApply this metadata repair?`)) return;
-  const response = await fetch(`/api/results/${id}/repair`, {method: "POST"});
+  const response = await fetch(`/api/results/${id}/repair`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({confirm: "REPAIR"})
+  });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) { alert(body.detail || "Metadata repair failed."); return; }
   alert(`Metadata repair completed and verified. Repair history ID: ${body.repair_id}`);
@@ -136,7 +140,11 @@ async function runRepair(id) {
 
 async function undoRepair(id) {
   if (!confirm("Undo this metadata repair? BookGuard will refuse if the file metadata has changed since the repair.")) return;
-  const response = await fetch(`/api/repairs/${id}/undo`, {method: "POST"});
+  const response = await fetch(`/api/repairs/${id}/undo`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({confirm: "UNDO"})
+  });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) { alert(body.detail || "Undo failed."); return; }
   alert("Metadata repair undone.");

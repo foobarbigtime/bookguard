@@ -13,6 +13,7 @@ from .config import settings
 from .db import (
     create_metadata_repair,
     finish_metadata_repair,
+    latest_scan,
     mark_metadata_repair_undone,
     metadata_repair_by_id,
 )
@@ -26,6 +27,17 @@ from .metadata import AUDIO_EXTENSIONS, ebook_metadata
 
 class RepairError(RuntimeError):
     pass
+
+
+def require_current_scan_result(result: dict) -> None:
+    """Refuse a write based on stale or incomplete scan evidence."""
+    scan = latest_scan()
+    if not scan or scan.get("status") != "complete":
+        raise RepairError("A completed latest scan is required before metadata repair.")
+    if result.get("scan_id") != scan.get("id"):
+        raise RepairError(
+            "This result is not from the latest completed scan. Refresh before metadata repair."
+        )
 
 
 WRITABLE_AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".m4b", ".mp4", ".ogg", ".opus"}
@@ -386,7 +398,8 @@ def build_repair_preview(result: dict) -> dict:
     return _epub_preview(result)
 
 
-def _apply_preview(preview: dict) -> None:
+def apply_repair_changes(preview: dict) -> None:
+    """Apply the changes from a preview already approved by a repair safety gate."""
     kind = preview["kind"]
     if kind == "EPUB_METADATA":
         after = preview["after"]
@@ -410,7 +423,8 @@ def _apply_preview(preview: dict) -> None:
     raise RepairError(f"Unsupported repair kind: {kind}")
 
 
-def _verify_preview(preview: dict) -> None:
+def verify_repair_changes(preview: dict) -> None:
+    """Confirm that the current media metadata matches an approved repair preview."""
     if preview["kind"] == "EPUB_METADATA":
         after = preview["after"]
         current = ebook_metadata(after["path"])
@@ -428,6 +442,7 @@ def _verify_preview(preview: dict) -> None:
 
 
 def apply_metadata_repair(result: dict) -> dict:
+    require_current_scan_result(result)
     if settings.metadata_repair_mode != "safe":
         raise RepairError(
             "Metadata repair is not in Safe mode. Use Preview mode to inspect proposals without writing files."
@@ -447,10 +462,11 @@ def apply_metadata_repair(result: dict) -> dict:
             "The media mount is read-only or not writable. Keep Preview mode until you deliberately make the relevant Docker media mount writable."
         )
 
+    require_current_scan_result(result)
     repair_id = create_metadata_repair(result, preview["kind"], preview["before"], preview["after"])
     try:
-        _apply_preview(preview)
-        _verify_preview(preview)
+        apply_repair_changes(preview)
+        verify_repair_changes(preview)
     except Exception as exc:
         finish_metadata_repair(repair_id, "failed", str(exc)[:1000])
         raise RepairError(str(exc)) from exc
@@ -474,8 +490,8 @@ def undo_metadata_repair(repair_id: int) -> dict:
     }
     # Refuse to overwrite later external changes: the current metadata must still
     # match exactly what BookGuard wrote before an undo is allowed.
-    _verify_preview({"kind": repair["repair_kind"], "after": repair["after"]})
-    _apply_preview(preview)
-    _verify_preview({"kind": repair["repair_kind"], "after": repair["before"]})
+    verify_repair_changes({"kind": repair["repair_kind"], "after": repair["after"]})
+    apply_repair_changes(preview)
+    verify_repair_changes({"kind": repair["repair_kind"], "after": repair["before"]})
     mark_metadata_repair_undone(repair_id)
     return {"ok": True, "repair_id": repair_id}

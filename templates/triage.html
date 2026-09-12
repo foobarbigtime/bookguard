@@ -358,7 +358,11 @@ async function repairVerified(id) {
     return;
   }
   if (!confirm(`${text}\n\nApply this content-verified metadata repair?`)) return;
-  const response = await fetch(`/api/verification/${id}/repair`, {method:'POST'});
+  const response = await fetch(`/api/verification/${id}/repair`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({confirm:'REPAIR'})
+  });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) { alert(body.detail || 'Verified metadata repair failed.'); return; }
   alert(`Verified metadata repair completed and checked. Repair history ID: ${body.repair_id}`);

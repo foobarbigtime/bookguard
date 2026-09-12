@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import hashlib
-import os
 from pathlib import Path
 from typing import Any
 
-from . import verifier as legacy_verifier
-from . import verifier_v048 as verifier
-from . import verifier_v048_final as _final_verifier  # noqa: F401 - installs final classifier
 from .bindery_client import BinderyClient
-from .config import settings
-from .metadata import ebook_metadata
+from .config import ConfigurationError, load_automation_settings
+from .ebook_extraction import extract_ebook_identity
+from .file_safety import sha256_file
+from .verification_engine import classify_identity
 
 
 class StagingSafetyError(RuntimeError):
@@ -19,27 +16,24 @@ class StagingSafetyError(RuntimeError):
 
 SUPPORTED_STAGED_EBOOK_SUFFIXES = {".epub", ".pdf", ".rtf", ".txt"}
 MIN_ADMISSION_CONFIDENCE = 99
-DEFAULT_MAX_STAGED_EBOOK_BYTES = 512 * 1024 * 1024
 
 
 def _staging_root() -> Path:
-    root = Path(os.getenv("BOOKGUARD_STAGING_ROOT", "/staging")).resolve()
+    try:
+        configured = load_automation_settings()
+    except ConfigurationError as exc:
+        raise StagingSafetyError(str(exc)) from exc
+    root = Path(configured.staging_root).resolve()
     if not root.is_dir():
         raise StagingSafetyError("The configured staging root does not exist or is not a directory.")
     return root
 
 
 def _max_staged_ebook_bytes() -> int:
-    raw = os.getenv("BOOKGUARD_MAX_STAGED_EBOOK_BYTES", "").strip()
-    if not raw:
-        return DEFAULT_MAX_STAGED_EBOOK_BYTES
     try:
-        value = int(raw)
-    except ValueError as exc:
-        raise StagingSafetyError("BOOKGUARD_MAX_STAGED_EBOOK_BYTES must be an integer.") from exc
-    if value <= 0:
-        raise StagingSafetyError("BOOKGUARD_MAX_STAGED_EBOOK_BYTES must be greater than zero.")
-    return value
+        return load_automation_settings().max_staged_ebook_bytes
+    except ConfigurationError as exc:
+        raise StagingSafetyError(str(exc)) from exc
 
 
 def _resolve_staged_file(relative_path: str) -> tuple[Path, Path]:
@@ -75,14 +69,6 @@ def _resolve_staged_file(relative_path: str) -> tuple[Path, Path]:
     if resolved.stat().st_size > _max_staged_ebook_bytes():
         raise StagingSafetyError("The staged ebook exceeds the configured verification size limit.")
     return root, resolved
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _book_identity(book: dict[str, Any]) -> tuple[str, str]:
@@ -155,59 +141,25 @@ def verify_staged_ebook(
     expected_title, expected_author = _book_identity(book)
 
     before_stat = path.stat()
-    before_hash = _sha256(path)
-    suffix = path.suffix.lower()
-    metadata = ebook_metadata(str(path))
-    text = ""
-    front_text = ""
-    identifiers: list[str] = []
-    source = "native"
-    notes: list[str] = []
-
-    try:
-        if suffix == ".epub":
-            metadata, text, identifiers, front_text = verifier._epub_identity(str(path))
-            source = "native-epub"
-        elif suffix == ".pdf":
-            metadata, text, identifiers, front_text = verifier._pdf_identity(str(path))
-            source = "native-pdf"
-        elif suffix in {".txt", ".rtf"}:
-            metadata, text, identifiers, front_text = verifier._plain_identity(str(path))
-            source = f"native-{suffix.lstrip('.')}"
-    except Exception as exc:
-        notes.append(f"Native extraction error: {str(exc)[:300]}")
-
-    if (
-        len(text.strip()) < verifier.MIN_USEFUL_TEXT
-        and settings.verification_use_tika
-        and settings.verification_tika_url
-    ):
-        tika_text, tika_error = legacy_verifier._tika_text(str(path))
-        if tika_text:
-            text = tika_text
-            front_text = tika_text[: verifier.FRONT_TEXT_CHARS]
-            source = f"{source}+tika" if source != "native" else "tika"
-            notes.append("Tika fallback supplied content because native extraction was insufficient.")
-        elif tika_error:
-            notes.append(tika_error)
+    before_hash = sha256_file(path)
+    extracted = extract_ebook_identity(str(path))
 
     identity = {
         "book_id": int(book_id),
         "title": expected_title,
         "author": expected_author,
     }
-    verdict, confidence, evidence = verifier._classify_identity(
+    verdict, confidence, evidence = classify_identity(
         identity,
-        metadata,
-        text,
-        identifiers,
-        source,
-        notes,
-        front_text,
+        extracted.metadata,
+        extracted.text,
+        extracted.identifiers,
+        extracted.notes,
+        extracted.front_text,
     )
 
     after_stat = path.stat()
-    after_hash = _sha256(path)
+    after_hash = sha256_file(path)
     stable = (
         before_hash == after_hash
         and before_stat.st_size == after_stat.st_size
@@ -237,7 +189,7 @@ def verify_staged_ebook(
         "expectedAuthor": expected_author,
         "verdict": verdict,
         "confidence": int(confidence),
-        "source": source,
+        "source": extracted.source,
         "evidence": evidence,
         "safeToAdmit": safe_to_admit,
         "admissionBlockers": blockers,

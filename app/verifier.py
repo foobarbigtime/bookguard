@@ -2,17 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
-import html
 import json
 import os
 from pathlib import Path
-import re
 import threading
 import uuid
-import zipfile
-import xml.etree.ElementTree as ET
-
-import requests
 
 from .config import settings
 from .db import (
@@ -22,13 +16,21 @@ from .db import (
     latest_scan,
     local_conn,
 )
-from .matcher import author_match_strict, author_mentioned_in_text, meaningful_words, normalize
+from .ebook_extraction import extract_ebook_identity
+from .matcher import normalize
 from .metadata import ebook_metadata
-from .repair import RepairError, _apply_preview, _verify_preview
+from .repair import (
+    RepairError,
+    apply_repair_changes,
+    require_current_scan_result,
+    verify_repair_changes,
+)
 from .triage import result_signature, triage_state
+from .tika_client import test_connection
+from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "1"
+VERIFIER_VERSION = "6"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -55,6 +57,11 @@ _job_state: dict = {
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def test_tika() -> dict:
+    """Expose the Tika connectivity check through the verifier service API."""
+    return test_connection()
 
 
 def init_verification_db() -> None:
@@ -213,235 +220,6 @@ def _save_verification(
     return item
 
 
-def _strip_html_bytes(raw: bytes) -> str:
-    text = raw.decode("utf-8", errors="replace")
-    text = re.sub(r"<script\b.*?</script>", " ", text, flags=re.I | re.S)
-    text = re.sub(r"<style\b.*?</style>", " ", text, flags=re.I | re.S)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = html.unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _epub_identity(path: str) -> tuple[dict, str, list[str]]:
-    metadata = {"title": "", "author": "", "source": "epub"}
-    identifiers: list[str] = []
-    text_parts: list[str] = []
-    max_chars = settings.verification_max_text_chars
-
-    with zipfile.ZipFile(path) as zf:
-        container = ET.fromstring(zf.read("META-INF/container.xml"))
-        rootfile = ""
-        for elem in container.iter():
-            if elem.tag.endswith("rootfile"):
-                rootfile = elem.attrib.get("full-path", "")
-                if rootfile:
-                    break
-        if rootfile:
-            package = ET.fromstring(zf.read(rootfile))
-            creators: list[str] = []
-            for elem in package.iter():
-                local = elem.tag.rsplit("}", 1)[-1].lower()
-                value = (elem.text or "").strip()
-                if local == "title" and value and not metadata["title"]:
-                    metadata["title"] = value
-                elif local == "creator" and value:
-                    creators.append(value)
-                elif local == "identifier" and value:
-                    identifiers.append(value)
-            metadata["author"] = "; ".join(creators)
-
-        for name in zf.namelist():
-            if len(" ".join(text_parts)) >= max_chars:
-                break
-            lower = name.lower()
-            if not lower.endswith((".xhtml", ".html", ".htm")):
-                continue
-            try:
-                text_parts.append(_strip_html_bytes(zf.read(name)))
-            except Exception:
-                continue
-
-    return metadata, " ".join(text_parts)[:max_chars], identifiers[:25]
-
-
-def _pdf_identity(path: str) -> tuple[dict, str, list[str]]:
-    from pypdf import PdfReader
-
-    metadata = ebook_metadata(path)
-    reader = PdfReader(path)
-    parts: list[str] = []
-    max_chars = settings.verification_max_text_chars
-    page_limit = min(len(reader.pages), settings.verification_pdf_pages)
-    for page in reader.pages[:page_limit]:
-        if sum(len(part) for part in parts) >= max_chars:
-            break
-        try:
-            parts.append(page.extract_text() or "")
-        except Exception:
-            continue
-    return metadata, " ".join(parts)[:max_chars], []
-
-
-def _plain_identity(path: str) -> tuple[dict, str, list[str]]:
-    metadata = ebook_metadata(path)
-    raw = Path(path).read_bytes()[: settings.verification_max_text_chars * 2]
-    text = raw.decode("utf-8", errors="replace")
-    if "\ufffd" in text[:4096]:
-        text = raw.decode("cp1252", errors="replace")
-    if Path(path).suffix.lower() == ".rtf":
-        text = re.sub(r"\\[a-z]+-?\d* ?", " ", text, flags=re.I)
-        text = text.replace("{", " ").replace("}", " ")
-    return metadata, re.sub(r"\s+", " ", text)[: settings.verification_max_text_chars], []
-
-
-def _tika_text(path: str) -> tuple[str, str]:
-    url = str(settings.verification_tika_url or "").rstrip("/")
-    if not settings.verification_use_tika or not url:
-        return "", ""
-    try:
-        with open(path, "rb") as fh:
-            response = requests.put(
-                f"{url}/tika",
-                data=fh,
-                headers={"Accept": "text/plain"},
-                timeout=90,
-            )
-        if response.status_code >= 300:
-            return "", f"Tika returned HTTP {response.status_code}."
-        return response.text[: settings.verification_max_text_chars], ""
-    except Exception as exc:
-        return "", f"Tika unavailable: {exc}"
-
-
-def test_tika() -> dict:
-    url = str(settings.verification_tika_url or "").rstrip("/")
-    if not url:
-        return {"configured": False, "ok": False, "message": "Tika URL is not configured."}
-    try:
-        response = requests.get(f"{url}/version", timeout=10)
-        if response.status_code >= 300:
-            return {
-                "configured": True,
-                "ok": False,
-                "message": f"Tika returned HTTP {response.status_code}.",
-            }
-        return {
-            "configured": True,
-            "ok": True,
-            "message": response.text.strip()[:200] or "Tika responded successfully.",
-        }
-    except Exception as exc:
-        return {"configured": True, "ok": False, "message": str(exc)[:300]}
-
-
-def _phrase_found(value: str, text: str) -> bool:
-    needle = normalize(value)
-    haystack = normalize(text)
-    if not needle or not haystack:
-        return False
-    return f" {needle} " in f" {haystack} "
-
-
-def _embedded_author_found(author: str, text: str) -> bool:
-    candidates = [part.strip() for part in re.split(r"[;|]", author or "") if part.strip()]
-    if not candidates and author:
-        candidates = [author]
-    return any(author_mentioned_in_text(candidate, text) for candidate in candidates)
-
-
-def _title_identity_match(expected: str, observed: str) -> bool:
-    e = normalize(expected)
-    o = normalize(observed)
-    if not e or not o:
-        return False
-    if e == o:
-        return True
-    ew = meaningful_words(expected)
-    ow = meaningful_words(observed)
-    return bool(ew) and ew == ow
-
-
-def _classify_identity(result: dict, metadata: dict, text: str, identifiers: list[str], source: str, notes: list[str]) -> tuple[str, int, dict]:
-    expected_title = str(result.get("title") or "")
-    expected_author = str(result.get("author") or "")
-    embedded_title = str(metadata.get("title") or "")
-    embedded_author = str(metadata.get("author") or "")
-
-    expected_title_found = _phrase_found(expected_title, text)
-    expected_author_found = author_mentioned_in_text(expected_author, text)
-    embedded_title_found = _phrase_found(embedded_title, text)
-    embedded_author_found = _embedded_author_found(embedded_author, text)
-
-    metadata_title_match = _title_identity_match(expected_title, embedded_title)
-    metadata_author_match = author_match_strict(expected_author, embedded_author)
-    metadata_matches_expected = metadata_title_match and metadata_author_match
-
-    evidence = {
-        "expected": {"title": expected_title, "author": expected_author},
-        "embedded": {
-            "title": embedded_title,
-            "author": embedded_author,
-            "identifiers": identifiers,
-        },
-        "content": {
-            "expected_title_found": expected_title_found,
-            "expected_author_found": expected_author_found,
-            "embedded_title_found": embedded_title_found,
-            "embedded_author_found": embedded_author_found,
-            "text_characters_examined": len(text),
-        },
-        "metadata_matches_expected": metadata_matches_expected,
-        "notes": notes,
-    }
-
-    expected_content_match = expected_title_found and expected_author_found
-    embedded_content_match = embedded_title_found and embedded_author_found
-
-    if metadata_matches_expected and expected_content_match:
-        evidence["explanation"] = "Embedded metadata and internal content both identify the expected Bindery book."
-        return "VERIFIED_CORRECT", 99, evidence
-
-    if (
-        not metadata_matches_expected
-        and expected_content_match
-        and not embedded_content_match
-    ):
-        evidence["explanation"] = (
-            "Internal content identifies the expected Bindery book, while the conflicting embedded metadata is not supported by the content."
-        )
-        return "METADATA_ERROR", 97, evidence
-
-    if (
-        not metadata_matches_expected
-        and embedded_title
-        and embedded_author
-        and embedded_content_match
-        and not expected_title_found
-        and not expected_author_found
-    ):
-        evidence["explanation"] = (
-            "Internal content supports the conflicting embedded title and author, while neither expected identity field was found."
-        )
-        return "WRONG_CONTENT", 99, evidence
-
-    if metadata_matches_expected and (expected_title_found or expected_author_found):
-        evidence["explanation"] = (
-            "Embedded metadata matches the expected book and internal content supplies supporting identity evidence, but not both expected fields were found."
-        )
-        return "VERIFIED_CORRECT", 90, evidence
-
-    if expected_content_match and not metadata_matches_expected:
-        evidence["explanation"] = (
-            "Internal content supports the expected book, but conflicting embedded metadata also has some content support. Manual review is safer than rewriting automatically."
-        )
-        return "INSUFFICIENT_EVIDENCE", 70, evidence
-
-    evidence["explanation"] = (
-        "BookGuard could not obtain two independent internal-content identity signals strong enough for an automatic verdict."
-    )
-    return "INSUFFICIENT_EVIDENCE", 40, evidence
-
-
 def verify_result(result: dict, force: bool = False) -> dict:
     if not settings.verification_enabled:
         raise RuntimeError("Content verification is disabled in Settings.")
@@ -480,40 +258,18 @@ def verify_result(result: dict, force: bool = False) -> dict:
             result, target, fingerprint, "INSUFFICIENT_EVIDENCE", 0, "missing", evidence
         )
 
-    suffix = path.suffix.lower()
-    metadata: dict = ebook_metadata(str(path))
-    text = ""
-    identifiers: list[str] = []
-    source = "native"
-    notes: list[str] = []
+    extracted = extract_ebook_identity(str(path))
 
-    try:
-        if suffix == ".epub":
-            metadata, text, identifiers = _epub_identity(str(path))
-            source = "native-epub"
-        elif suffix == ".pdf":
-            metadata, text, identifiers = _pdf_identity(str(path))
-            source = "native-pdf"
-        elif suffix in {".txt", ".rtf"}:
-            metadata, text, identifiers = _plain_identity(str(path))
-            source = f"native-{suffix.lstrip('.')}"
-    except Exception as exc:
-        notes.append(f"Native extraction error: {str(exc)[:300]}")
-
-    # Optional Tika fallback only when native extraction did not provide useful text.
-    if len(text.strip()) < 200 and settings.verification_use_tika and settings.verification_tika_url:
-        tika_text, tika_error = _tika_text(str(path))
-        if tika_text:
-            text = tika_text
-            source = f"{source}+tika" if source != "native" else "tika"
-        elif tika_error:
-            notes.append(tika_error)
-
-    verdict, confidence, evidence = _classify_identity(
-        result, metadata, text, identifiers, source, notes
+    verdict, confidence, evidence = classify_identity(
+        result,
+        extracted.metadata,
+        extracted.text,
+        extracted.identifiers,
+        extracted.notes,
+        extracted.front_text,
     )
     return _save_verification(
-        result, str(path), fingerprint, verdict, confidence, source, evidence
+        result, str(path), fingerprint, verdict, confidence, extracted.source, evidence
     )
 
 
@@ -574,6 +330,7 @@ def verified_repair_preview(result: dict, verification: dict | None = None) -> d
 
 
 def apply_verified_metadata_repair(result: dict) -> dict:
+    require_current_scan_result(result)
     if settings.metadata_repair_mode != "safe":
         raise RepairError("Switch Metadata repair mode to Safe before writing verified metadata repairs.")
 
@@ -587,10 +344,11 @@ def apply_verified_metadata_repair(result: dict) -> dict:
     if not os.access(target, os.W_OK):
         raise RepairError("The ebook media mount is read-only or the EPUB is not writable.")
 
+    require_current_scan_result(result)
     repair_id = create_metadata_repair(result, "EPUB_METADATA", preview["before"], preview["after"])
     try:
-        _apply_preview(preview)
-        _verify_preview(preview)
+        apply_repair_changes(preview)
+        verify_repair_changes(preview)
     except Exception as exc:
         finish_metadata_repair(repair_id, "failed", str(exc)[:1000])
         raise RepairError(str(exc)) from exc
@@ -599,10 +357,28 @@ def apply_verified_metadata_repair(result: dict) -> dict:
 
 
 def verification_summary() -> dict:
+    """Count only the newest verification for each result in the latest scan."""
     init_verification_db()
+    scan = latest_scan()
+    if not scan or not scan.get("id"):
+        return {}
     with local_conn() as conn:
         rows = conn.execute(
-            "SELECT verdict, COUNT(*) AS n FROM content_verifications GROUP BY verdict"
+            """
+            SELECT cv.verdict, COUNT(*) AS n
+            FROM content_verifications AS cv
+            WHERE cv.scan_id = ?
+              AND cv.id = (
+                  SELECT cv2.id
+                  FROM content_verifications AS cv2
+                  WHERE cv2.scan_id = cv.scan_id
+                    AND cv2.result_id = cv.result_id
+                  ORDER BY cv2.updated_at DESC, cv2.id DESC
+                  LIMIT 1
+              )
+            GROUP BY cv.verdict
+            """,
+            (scan["id"],),
         ).fetchall()
     return {str(row["verdict"]): int(row["n"]) for row in rows}
 
