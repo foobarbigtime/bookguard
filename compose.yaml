@@ -26,6 +26,10 @@ services:
       BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED: ${BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED:-false}
       BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS: ${BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS:-10}
       BOOKGUARD_MAX_STAGED_EBOOK_BYTES: ${BOOKGUARD_MAX_STAGED_EBOOK_BYTES:-536870912}
+      # Ebook quarantine/remediation uses a separate opt-in writable alias.
+      # The alias is absent unless compose.actions.yaml is deliberately included.
+      BOOKGUARD_EBOOK_ACTIONS_ENABLED: ${BOOKGUARD_EBOOK_ACTIONS_ENABLED:-false}
+      BOOKGUARD_EBOOK_ACTION_ROOT: ${BOOKGUARD_EBOOK_ACTION_ROOT:-/action-books}
       # Direct admission is separately gated and has no writable library mount
       # unless compose.admission.yaml is deliberately included.
       BOOKGUARD_ADMISSION_ENABLED: ${BOOKGUARD_ADMISSION_ENABLED:-false}

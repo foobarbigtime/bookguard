@@ -1,0 +1,6 @@
+services:
+  bookguard:
+    volumes:
+      # Opt-in writable alias for guarded ebook quarantine/remediation. The
+      # normal /books path remains read-only for scanning and verification.
+      - /mnt/user/data/media/books:/action-books
