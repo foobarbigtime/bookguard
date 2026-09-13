@@ -166,7 +166,7 @@
               <span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_',' ') }}</span>
               <small>{{ row.format }}</small>
             </td>
-            <td id="verification-cell-{{ row.id }}" class="verification-cell" data-verification-id="{{ row.id }}" data-book-id="{{ row.book_id }}"><span class="muted">Not verified</span></td>
+            <td id="verification-cell-{{ row.id }}" class="verification-cell" data-verification-id="{{ row.id }}" data-book-id="{{ row.book_id }}" data-format="{{ row.format }}" data-reason-code="{{ row.reason_code }}"><span class="muted">Not verified</span></td>
             <td class="book-cell"><strong>{{ row.title }}</strong><small>{{ row.author }}</small></td>
             <td class="book-cell detected-cell">
               <strong>{{ row.detected_title or '—' }}</strong>
@@ -277,9 +277,16 @@ function renderVerification(id, verification) {
   if (verification.verdict === 'METADATA_ERROR') {
     controls += ` <button class="repair-verified-button" onclick="repairVerified(${id})">Review metadata fix</button>`;
   }
-  if (verification.verdict === 'WRONG_CONTENT') {
+  const preparedReplacement = (
+    verification.verdict === 'INSUFFICIENT_EVIDENCE' &&
+    verification.source === 'missing' &&
+    cell.dataset.format === 'ebook' &&
+    cell.dataset.reasonCode === 'MISMATCH'
+  );
+  if (verification.verdict === 'WRONG_CONTENT' || preparedReplacement) {
     const bookId = Number(cell.dataset.bookId);
-    controls += ` <button class="danger" type="button" data-replacement-result="${id}" data-replacement-book="${bookId}">Replacement workflow</button>`;
+    const label = preparedReplacement ? 'Resume replacement' : 'Replacement workflow';
+    controls += ` <button class="danger" type="button" data-replacement-result="${id}" data-replacement-book="${bookId}">${label}</button>`;
   }
   cell.innerHTML = `
     <span class="verification-badge ${verificationClass(verification.verdict)}">${escapeHtml(verificationLabel(verification.verdict))}</span>

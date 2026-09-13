@@ -181,7 +181,10 @@ safe and rejected search candidates, start one selected release, and show the
 durable acquisition state. It pauses for an explicit Admit verified ebook
 decision. When the coordinator is disabled, equivalent manual progress,
 registration, and finalization controls remain available. The UI never enables
-environment or action gates on the operator's behalf.
+environment or action gates on the operator's behalf. A prepared MISMATCH ebook
+whose source is now absent retains a Resume replacement entry after refresh;
+the backend still revalidates the missing path and Bindery association before
+allowing a release to start.
 
 Starting an acquisition additionally requires Bindery auto-grab to be disabled,
 a complete and idle Bindery queue, an empty and completely inventoried staging

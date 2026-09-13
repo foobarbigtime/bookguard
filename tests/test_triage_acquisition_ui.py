@@ -9,8 +9,17 @@ def test_triage_loads_supervised_replacement_controller():
     assert 'id="acquisitionPanel"' in TEMPLATE
     assert 'id="replacementPanel"' in TEMPLATE
     assert 'data-book-id="{{ row.book_id }}"' in TEMPLATE
+    assert 'data-format="{{ row.format }}"' in TEMPLATE
+    assert 'data-reason-code="{{ row.reason_code }}"' in TEMPLATE
     assert 'src="/static/triage-acquisition.js"' in TEMPLATE
     assert 'data-replacement-result="${id}"' in TEMPLATE
+
+
+def test_prepared_missing_mismatch_retains_replacement_entry_point():
+    assert "verification.source === 'missing'" in TEMPLATE
+    assert "cell.dataset.format === 'ebook'" in TEMPLATE
+    assert "cell.dataset.reasonCode === 'MISMATCH'" in TEMPLATE
+    assert "'Resume replacement'" in TEMPLATE
 
 
 def test_controller_uses_existing_guarded_lifecycle_endpoints():
