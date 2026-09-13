@@ -6,6 +6,10 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from .acquisition_coordinator import (
+    start_acquisition_coordinator,
+    stop_acquisition_coordinator,
+)
 from .auth import BasicAuthMiddleware
 from .config import settings
 from .db import init_local_db, load_persisted_settings
@@ -28,7 +32,11 @@ async def lifespan(_: FastAPI):
     settings.apply(load_persisted_settings())
     if settings.scan_on_start:
         start_scan()
-    yield
+    start_acquisition_coordinator()
+    try:
+        yield
+    finally:
+        stop_acquisition_coordinator()
 
 
 app = FastAPI(title="BookGuard", version=__version__, lifespan=lifespan)

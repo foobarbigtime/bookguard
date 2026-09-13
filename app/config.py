@@ -21,6 +21,7 @@ DEFAULT_AUTHOR_ALIASES = [
 
 REPAIR_MODES = {"off", "preview", "safe"}
 DEFAULT_MAX_STAGED_EBOOK_BYTES = 512 * 1024 * 1024
+DEFAULT_ACQUISITION_COORDINATOR_INTERVAL_SECONDS = 10
 
 
 class ConfigurationError(ValueError):
@@ -107,6 +108,8 @@ class AutomationSettings:
     staging_root: str
     bindery_drop_folder: str
     automatic_reacquisition: bool
+    acquisition_coordinator_enabled: bool
+    acquisition_coordinator_interval_seconds: int
     max_staged_ebook_bytes: int
     admission_enabled: bool
     admission_root: str
@@ -132,6 +135,18 @@ def load_automation_settings() -> AutomationSettings:
         staging_root=os.getenv("BOOKGUARD_STAGING_ROOT", "/staging").strip() or "/staging",
         bindery_drop_folder=os.getenv("BOOKGUARD_BINDERY_DROP_FOLDER", "").strip(),
         automatic_reacquisition=_bool("BOOKGUARD_AUTOMATIC_REACQUISITION", False),
+        acquisition_coordinator_enabled=_bool(
+            "BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED",
+            False,
+        ),
+        acquisition_coordinator_interval_seconds=_clamp(
+            _int(
+                "BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS",
+                DEFAULT_ACQUISITION_COORDINATOR_INTERVAL_SECONDS,
+            ),
+            2,
+            300,
+        ),
         max_staged_ebook_bytes=max_staged_ebook_bytes,
         admission_enabled=_bool("BOOKGUARD_ADMISSION_ENABLED", False),
         admission_root=os.getenv("BOOKGUARD_ADMISSION_ROOT", "/admission-books").strip()

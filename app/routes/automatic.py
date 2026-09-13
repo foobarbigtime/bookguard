@@ -12,6 +12,7 @@ from ..acquisition import (
     reconcile_ebook_acquisition,
     start_ebook_acquisition,
 )
+from ..acquisition_coordinator import acquisition_coordinator_status
 from ..admission import (
     AdmissionSafetyError,
     admission_history,
@@ -108,6 +109,12 @@ def api_automatic_acquisition_readiness():
 def api_automatic_acquisitions(limit: int = 100):
     """Return durable queue-to-staging acquisition history."""
     return acquisition_history(limit)
+
+
+@router.get("/acquisition-coordinator")
+def api_automatic_acquisition_coordinator():
+    """Return the read-only supervised coordinator lifecycle status."""
+    return acquisition_coordinator_status()
 
 
 @router.post("/results/{result_id}/acquisitions")

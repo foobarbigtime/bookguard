@@ -12,6 +12,8 @@ def test_automation_settings_are_loaded_on_demand(monkeypatch):
     monkeypatch.setenv("BOOKGUARD_STAGING_ROOT", "/test-staging")
     monkeypatch.setenv("BOOKGUARD_BINDERY_DROP_FOLDER", "/test-drop")
     monkeypatch.setenv("BOOKGUARD_AUTOMATIC_REACQUISITION", "true")
+    monkeypatch.setenv("BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED", "true")
+    monkeypatch.setenv("BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS", "25")
     monkeypatch.setenv("BOOKGUARD_ADMISSION_ENABLED", "true")
     monkeypatch.setenv("BOOKGUARD_ADMISSION_ROOT", "/test-admission")
     monkeypatch.setenv("BOOKGUARD_ADMISSION_BINDERY_ROOT", "/bindery-books")
@@ -22,6 +24,8 @@ def test_automation_settings_are_loaded_on_demand(monkeypatch):
     assert configured.staging_root == "/test-staging"
     assert configured.bindery_drop_folder == "/test-drop"
     assert configured.automatic_reacquisition is True
+    assert configured.acquisition_coordinator_enabled is True
+    assert configured.acquisition_coordinator_interval_seconds == 25
     assert configured.max_staged_ebook_bytes == DEFAULT_MAX_STAGED_EBOOK_BYTES
     assert configured.admission_enabled is True
     assert configured.admission_root == "/test-admission"
