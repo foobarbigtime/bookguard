@@ -47,6 +47,7 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - Snapshot verification on the destination filesystem, atomic no-overwrite publication, and durable recovery state.
 - One-at-a-time, explicitly selected Bindery acquisition with durable queue and staged-verification state.
 - An opt-in supervised coordinator that resumes operator-started work after restart and pauses for explicit admission.
+- A Triage-page replacement workflow for guarded preparation, candidate choice, progress, explicit admission, and finalization.
 
 Unattended candidate selection remains disabled. Controlled acquisition and direct admission are separate opt-ins with separate confirmations. Admission repeats verification on a private copied snapshot at its own mutation boundary; a prior `safeToAdmit` response is never treated as authorization.
 
@@ -172,6 +173,15 @@ guarded actions are enabled. Turning off either mutation gate makes it remain
 blocked without changing durable acquisition state. Its read-only status is
 available from `GET /api/automatic/acquisition-coordinator`. The polling
 interval is clamped between 2 and 300 seconds.
+
+The Triage page exposes this workflow without changing its safety policy. A
+`WRONG_CONTENT` verification gains a Replacement workflow button. The browser
+can run the read-only preflight, explicitly prepare the exact bad file, display
+safe and rejected search candidates, start one selected release, and show the
+durable acquisition state. It pauses for an explicit Admit verified ebook
+decision. When the coordinator is disabled, equivalent manual progress,
+registration, and finalization controls remain available. The UI never enables
+environment or action gates on the operator's behalf.
 
 Starting an acquisition additionally requires Bindery auto-grab to be disabled,
 a complete and idle Bindery queue, an empty and completely inventoried staging
@@ -400,6 +410,7 @@ app/bindery_client.py       Bindery API and API-key discovery
 app/file_safety.py          Shared filesystem hashing/safety helpers
 tools/smoke_test.py         Isolated workflow and Compose safety harness
 scripts/smoke-test.sh       One-command containerized smoke-test runner
+static/triage-acquisition.js Supervised replacement UI controller
 ```
 
 Versioned entry-point and verifier wrappers are intentionally avoided. New
