@@ -18,6 +18,11 @@ COLLECTION_TITLE_PATTERNS = (
     r"\banthology\b",
 )
 
+GENERIC_TITLE_SUFFIX = re.compile(
+    r"\s*[:;,\-\u2013\u2014]\s*(?:a\s+)?novel\s*$",
+    flags=re.IGNORECASE,
+)
+
 
 def _phrase_pos(value: str, text: str) -> int:
     needle = normalize(value)
@@ -89,6 +94,23 @@ def _title_identity_match(expected: str, observed: str) -> bool:
     if not e or not o:
         return False
     if e == o:
+        return True
+
+    # Catalogues commonly omit a leading article while publisher metadata adds
+    # a non-distinguishing work-type suffix. Keep this deliberately narrow: a
+    # separator is required before "A Novel", and no substantive subtitle is
+    # discarded. Exact author and front-of-book evidence are still independently
+    # required by the classifier before automatic admission can be authorized.
+    def catalog_title(value: str) -> str:
+        value = GENERIC_TITLE_SUFFIX.sub("", value or "")
+        words = normalize(value).split()
+        if words and words[0] in {"a", "an", "the"}:
+            words = words[1:]
+        return " ".join(words)
+
+    catalog_expected = catalog_title(expected)
+    catalog_observed = catalog_title(observed)
+    if catalog_expected and catalog_expected == catalog_observed:
         return True
     ew = meaningful_words(expected)
     ow = meaningful_words(observed)

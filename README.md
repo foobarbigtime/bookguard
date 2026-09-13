@@ -220,6 +220,11 @@ separately confirmed request hands that verified session to the existing
 admission transaction, which checks the hash and repeats full verification
 before publication.
 
+An operator can explicitly retry staged verification from `review_required`
+after verifier rules are updated. The coordinator does not retry that state on
+its own, and the staged file remains untouched unless it later passes the same
+admission threshold.
+
 ### Controlled ebook admission
 
 Direct admission uses a separate writable alias while the ordinary `/books`

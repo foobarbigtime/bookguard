@@ -229,6 +229,14 @@
           ["Status", pretty(latest.status)],
           ["Coordinator", coordinatorLabel],
         ]);
+        if (latest.status === "review_required") {
+          const retry = actionButton(
+            "Retry staged verification",
+            () => reconcileAcquisition(latest, retry),
+            "primary",
+          );
+          controls.append(retry);
+        }
         controls.append(actionButton("Refresh status", refreshWorkflow));
         scheduleRefresh(false);
         return;

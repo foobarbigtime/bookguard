@@ -62,6 +62,10 @@ _RECONCILABLE_STATUSES = {
     "awaiting_staging",
     "staging_observed",
     "verified",
+    # An operator may explicitly retry unchanged staged bytes after verifier
+    # rules are improved. The coordinator intentionally does not treat this as
+    # active, so review never resumes automatically.
+    "review_required",
 }
 _FINALIZABLE_STATUSES = {
     "admitted",
