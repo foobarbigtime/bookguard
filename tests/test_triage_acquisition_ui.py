@@ -55,6 +55,11 @@ def test_controller_preserves_explicit_confirmation_contracts():
         assert confirmation in CONTROLLER
 
 
+def test_review_required_workflow_offers_explicit_verification_retry():
+    assert 'latest.status === "review_required"' in CONTROLLER
+    assert "Retry staged verification" in CONTROLLER
+
+
 def test_preflight_displays_separate_writable_action_alias():
     assert "Writable action alias" in CONTROLLER
     assert "ebookActionReady" in CONTROLLER

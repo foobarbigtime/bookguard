@@ -101,6 +101,38 @@ def test_matching_metadata_with_front_content_is_verified():
     assert evidence["metadata_matches_expected"] is True
 
 
+def test_catalog_article_and_generic_novel_suffix_are_identity_equivalent():
+    result = sample_result(title="English Girl", author="Daniel Silva")
+    text = "The English Girl: A Novel Daniel Silva " + ("chapter " * 100)
+
+    verdict, confidence, evidence = classify(
+        result,
+        {"title": "The English Girl: A Novel", "author": "Daniel Silva"},
+        text,
+    )
+
+    assert verdict == "VERIFIED_CORRECT"
+    assert confidence == 99
+    assert evidence["metadata_matches_expected"] is True
+    assert evidence["content"]["expected_signal"]["strong_identity"] is True
+    assert evidence["content"]["embedded_signal"]["strong_identity"] is True
+
+
+def test_substantive_subtitle_is_not_discarded_as_catalogue_noise():
+    result = sample_result(title="English Girl", author="Daniel Silva")
+    text = "The English Girl: Spy Stories Daniel Silva " + ("chapter " * 100)
+
+    verdict, confidence, evidence = classify(
+        result,
+        {"title": "The English Girl: Spy Stories", "author": "Daniel Silva"},
+        text,
+    )
+
+    assert verdict == "INSUFFICIENT_EVIDENCE"
+    assert confidence == 70
+    assert evidence["metadata_matches_expected"] is False
+
+
 def test_same_title_conflicting_author_is_never_auto_rewritten():
     result = sample_result(title="One Last Strike", author="John Grisham")
     text = "One Last Strike John Grisham " + ("chapter " * 1000)

@@ -345,6 +345,66 @@ def test_reconcile_refuses_ambiguous_staging(acquisition_setup):
     assert len(result["stagedFiles"]) == 2
 
 
+def test_operator_can_retry_review_required_staged_verification(
+    acquisition_setup,
+    monkeypatch,
+):
+    setup = acquisition_setup
+    started = acquisition.start_ebook_acquisition(
+        setup["result"],
+        "safe-guid",
+        setup["client"],
+    )
+    staged = setup["staging"] / "Bel Canto - Ann Patchett.epub"
+    _write_epub(staged, "Bel Canto", "Ann Patchett")
+    setup["client"].queue = {
+        "items": [{"id": 77, "bookId": 42, "status": "importExternal"}],
+        "partial": False,
+    }
+
+    acquisition.reconcile_ebook_acquisition(
+        started["acquisition"]["id"],
+        setup["client"],
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "verify_staged_ebook",
+        lambda *args, **kwargs: {
+            "relativePath": staged.name,
+            "safeToAdmit": False,
+            "verdict": "INSUFFICIENT_EVIDENCE",
+            "confidence": 70,
+            "sha256": hashlib.sha256(staged.read_bytes()).hexdigest(),
+        },
+    )
+    reviewed = acquisition.reconcile_ebook_acquisition(
+        started["acquisition"]["id"],
+        setup["client"],
+    )
+    assert reviewed["acquisition"]["status"] == "review_required"
+
+    monkeypatch.setattr(
+        acquisition,
+        "verify_staged_ebook",
+        lambda *args, **kwargs: {
+            "relativePath": staged.name,
+            "safeToAdmit": True,
+            "verdict": "VERIFIED_CORRECT",
+            "confidence": 99,
+            "sha256": hashlib.sha256(staged.read_bytes()).hexdigest(),
+        },
+    )
+    retried = acquisition.reconcile_ebook_acquisition(
+        started["acquisition"]["id"],
+        setup["client"],
+    )
+
+    assert retried["ok"] is True
+    assert retried["acquisition"]["status"] == "verified"
+    assert retried["acquisition"]["staged_relative_path"] == staged.name
+    assert staged.is_file()
+
+
 def test_reconcile_records_failed_bindery_download(acquisition_setup):
     setup = acquisition_setup
     started = acquisition.start_ebook_acquisition(
