@@ -5,6 +5,11 @@ from pathlib import Path
 import shutil
 from typing import Any
 
+from .action_paths import (
+    EbookActionSafetyError,
+    ebook_action_preview,
+    resolve_writable_ebook_path,
+)
 from .bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from .config import settings
 from .db import associations_inside_path, bindery_file_by_id, latest_scan
@@ -112,7 +117,7 @@ def wrong_content_preview(result: dict[str, Any], client: BinderyClient | None =
     )
     association_count = len(associations_inside_path(str(result.get("stored_path") or "")))
 
-    safe = all((
+    content_safe = all((
         verdict == "WRONG_CONTENT",
         confidence >= MIN_WRONG_CONTENT_CONFIDENCE,
         source.is_file(),
@@ -120,9 +125,18 @@ def wrong_content_preview(result: dict[str, Any], client: BinderyClient | None =
         _tracked_path(book, str(result.get("stored_path") or "")),
         association_count == 1,
     ))
+    try:
+        action = ebook_action_preview(
+            str(result.get("local_path") or ""),
+            str(result.get("stored_path") or ""),
+        )
+    except EbookActionSafetyError as exc:
+        raise AutomaticMaintenanceError(str(exc)) from exc
+    safe = content_safe and action["ready"]
 
     return {
         "safe": safe,
+        "contentSafe": content_safe,
         "verdict": verdict,
         "confidence": confidence,
         "bookId": int(result["book_id"]),
@@ -132,6 +146,9 @@ def wrong_content_preview(result: dict[str, Any], client: BinderyClient | None =
         "exactDbMatch": exact_db_match,
         "binderyTracksPath": _tracked_path(book, str(result.get("stored_path") or "")),
         "associationCount": association_count,
+        "ebookActionReady": action["ready"],
+        "ebookActionChecks": action["checks"],
+        "ebookActionBlockers": action["blockers"],
         "blocklistHistoryId": int(provenance["id"]) if provenance and provenance.get("id") else None,
         "blocklistSourceTitle": str(provenance.get("sourceTitle") or "") if provenance else "",
         "canBlocklistSource": provenance is not None,
@@ -177,20 +194,40 @@ def remediate_wrong_content(result: dict[str, Any], client: BinderyClient | None
     destination = _quarantine_destination(result, source)
 
     try:
-        shutil.move(str(source), str(destination))
+        action_source = resolve_writable_ebook_path(
+            str(result.get("local_path") or ""),
+            str(result.get("stored_path") or ""),
+        )
+    except EbookActionSafetyError as exc:
+        raise AutomaticMaintenanceError(str(exc)) from exc
+    if sha256_file(action_source) != source_hash:
+        raise AutomaticMaintenanceError(
+            "Writable ebook alias changed after verification; no file was moved."
+        )
+
+    try:
+        shutil.move(str(action_source), str(destination))
     except Exception as exc:
         raise AutomaticMaintenanceError(f"Quarantine move failed before Bindery was changed: {exc}") from exc
 
     try:
+        if source.exists():
+            raise AutomaticMaintenanceError(
+                "The read-only source remained visible after the quarantine move."
+            )
         if not destination.is_file() or sha256_file(destination) != source_hash:
             raise AutomaticMaintenanceError("Quarantined file checksum verification failed.")
         client.deregister_file(int(result["book_id"]), str(result["stored_path"]))
     except Exception as exc:
         rollback_error = ""
         try:
-            source.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists() and not source.exists():
-                shutil.move(str(destination), str(source))
+            action_source.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists() and not action_source.exists():
+                shutil.move(str(destination), str(action_source))
+            if not source.is_file() or sha256_file(source) != source_hash:
+                raise AutomaticMaintenanceError(
+                    "The original source could not be verified after rollback."
+                )
         except Exception as rollback_exc:
             rollback_error = f" Rollback also failed: {rollback_exc}"
         raise AutomaticMaintenanceError(

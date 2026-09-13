@@ -55,6 +55,12 @@ def test_controller_preserves_explicit_confirmation_contracts():
         assert confirmation in CONTROLLER
 
 
+def test_preflight_displays_separate_writable_action_alias():
+    assert "Writable action alias" in CONTROLLER
+    assert "ebookActionReady" in CONTROLLER
+    assert "ebookActionBlockers" in CONTROLLER
+
+
 def test_controller_does_not_change_safety_settings_or_render_api_html():
     assert "/api/settings" not in CONTROLLER
     assert "BOOKGUARD_" not in CONTROLLER

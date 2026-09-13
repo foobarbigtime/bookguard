@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import time
 
+from .action_paths import EbookActionSafetyError, mount_is_writable, resolve_writable_ebook_path
 from .bindery_client import BinderyClient, BinderyClientError, discover_api_key
 from .config import settings
 from .db import (
@@ -176,7 +177,7 @@ def _safe_quarantine_destination(local_path: str) -> str:
 
 
 def quarantine(book_id: int, stored_path: str, local_path: str) -> str:
-    _require_actions()
+    api_key = _require_actions()
     if not os.path.exists(local_path):
         raise ActionError("The physical path is already missing.")
 
@@ -187,12 +188,39 @@ def quarantine(book_id: int, stored_path: str, local_path: str) -> str:
         )
 
     destination = _safe_quarantine_destination(local_path)
-    detach(book_id, stored_path)
+    read_source = Path(local_path).resolve()
+    ebook_root = Path(settings.ebook_root).resolve()
+    if is_within(read_source, ebook_root):
+        try:
+            mutation_source = resolve_writable_ebook_path(local_path, stored_path)
+        except EbookActionSafetyError as exc:
+            raise ActionError(str(exc)) from exc
+    else:
+        mutation_source = read_source
+        if not mount_is_writable(mutation_source):
+            raise ActionError("The source media mount is read-only.")
+
     try:
-        shutil.move(local_path, destination)
+        shutil.move(str(mutation_source), destination)
     except Exception as exc:
         raise ActionError(
-            "Bindery was detached, but moving the file/folder failed. Manual attention is required: "
-            f"{exc}"
+            f"Quarantine move failed before Bindery was changed: {exc}"
+        ) from exc
+
+    try:
+        if read_source.exists() or not Path(destination).exists():
+            raise ActionError("Quarantine move could not be verified.")
+        _delete_bindery_path(book_id, stored_path, api_key)
+    except Exception as exc:
+        rollback_error = ""
+        try:
+            if Path(destination).exists() and not mutation_source.exists():
+                shutil.move(destination, str(mutation_source))
+            if not read_source.exists():
+                raise ActionError("The original source did not reappear after rollback.")
+        except Exception as rollback_exc:
+            rollback_error = f" Rollback also failed: {rollback_exc}"
+        raise ActionError(
+            f"Bindery detach failed after quarantine: {exc}.{rollback_error}"
         ) from exc
     return destination

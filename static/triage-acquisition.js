@@ -27,6 +27,17 @@
     automaticReacquisitionEnabled: "automatic reacquisition is disabled",
     binderyExternalImport: "Bindery is not in external import mode",
     actionsEnabled: "guarded actions are disabled",
+    ebookActionsEnabled: "ebook quarantine/remediation is disabled",
+    absolutePaths: "one or more ebook paths are not absolute",
+    readRootExists: "the read-only ebook root is unavailable",
+    sourceExists: "the source ebook is absent",
+    pathMappingConfirmed: "the BookGuard and Bindery ebook paths do not agree",
+    actionRootSeparate: "the writable action path is not a separate alias",
+    actionRootExists: "the writable ebook action mount is absent",
+    actionRootWritable: "the ebook action mount is not writable",
+    actionAliasExists: "the ebook is absent through the writable alias",
+    actionAliasSameFile: "the read-only and writable paths are not the same file",
+    quarantineOutsideActionRoot: "quarantine overlaps the ebook library",
     admissionEnabled: "direct admission is disabled",
     admissionRootExists: "the writable admission mount is absent",
     admissionRootWritable: "the admission mount is not writable",
@@ -439,8 +450,8 @@
         element("strong", {text: preview.safe ? "Ready for guarded preparation" : "Preparation is currently blocked"}),
         element("p", {
           text: preview.safe
-            ? "The latest verification, exact Bindery association, and physical file all passed the read-only preflight."
-            : "BookGuard will not move or detach this item because one or more read-only preflight checks failed.",
+            ? "Verification, Bindery identity, and the separately gated writable alias all passed preflight."
+            : "BookGuard will not move or detach this item because one or more safety preflight checks failed.",
         }),
       );
       const facts = [
@@ -448,6 +459,7 @@
         ["Source file", preview.sourceExists ? "present" : "absent"],
         ["Exact DB match", preview.exactDbMatch ? "yes" : "no"],
         ["Bindery association", preview.binderyTracksPath ? "exact" : "absent"],
+        ["Writable action alias", preview.ebookActionReady ? "verified" : "blocked"],
       ];
       const factList = element("dl", {className: "workflow-details"});
       for (const [label, value] of facts) {
@@ -456,6 +468,12 @@
         factList.append(wrapper);
       }
       preflight.append(factList);
+      if (!preview.ebookActionReady && (preview.ebookActionBlockers || []).length) {
+        preflight.append(element("p", {
+          className: "candidate-reason",
+          text: blockerText(preview.ebookActionBlockers).join("; "),
+        }));
+      }
       replacementBody.append(preflight);
 
       if (preview.safe) {

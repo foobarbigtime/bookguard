@@ -142,6 +142,24 @@ The supplied Compose file deliberately mounts ebooks and audiobooks read-only:
 
 So even if Safe mode is selected accidentally, Docker still blocks writes. Remove `:ro` only when you deliberately want metadata repair to modify that library.
 
+Guarded ebook quarantine and wrong-content remediation do not require making
+`/books` writable. They use a separate, independently gated alias:
+
+```env
+BOOKGUARD_EBOOK_ACTIONS_ENABLED=false
+BOOKGUARD_EBOOK_ACTION_ROOT=/action-books
+```
+
+Include `compose.actions.yaml` only for a deliberate ebook action session. The
+read-only source path and writable alias must have identical library-relative
+paths and must resolve to the same device and inode before BookGuard will move
+anything. A failed move occurs before Bindery is changed; a later detach failure
+causes BookGuard to restore the file through the writable alias.
+
+```bash
+docker compose -f compose.yaml -f compose.actions.yaml up -d --build
+```
+
 ### Automatic reacquisition
 
 ```env
@@ -217,6 +235,17 @@ Start the opt-in topology only when deliberately testing admission:
 
 ```bash
 docker compose -f compose.yaml -f compose.admission.yaml up -d --build
+```
+
+For the complete supervised replacement workflow, include both narrow aliases;
+`/books` remains read-only throughout:
+
+```bash
+docker compose \
+  -f compose.yaml \
+  -f compose.actions.yaml \
+  -f compose.admission.yaml \
+  up -d --build
 ```
 
 An admission is tied to a prior scan result so BookGuard can reuse the exact
@@ -350,8 +379,8 @@ Before a release or live acceptance test, run:
 ./scripts/smoke-test.sh
 ```
 
-The command builds the current source and validates both the normal Compose
-topology and the opt-in admission overlay. It then exercises the complete ebook
+The command builds the current source and validates the normal Compose topology,
+each opt-in writable alias, and their combined topology. It then exercises the complete ebook
 workflow—acquisition, external-handoff enforcement, staged-byte verification,
 atomic admission, registration, and finalization—against a fake Bindery client
 and temporary files.

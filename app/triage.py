@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import time
 
+from .action_paths import ebook_action_preview, mount_is_writable
 from .actions import ActionError, detach, quarantine
 from .config import settings
 from .db import (
@@ -243,11 +243,29 @@ def triage_action_preview(result: dict, action: str) -> dict:
             else "The Bindery association changed since the scan. Refresh before detaching."
         )
     elif action == "quarantine":
-        safe = exact and physical_exists
+        ebook_action = None
+        writable_source = True
+        if str(result.get("format") or "").lower() == "ebook" and physical_exists:
+            ebook_action = ebook_action_preview(
+                str(result.get("local_path") or ""),
+                str(result.get("stored_path") or ""),
+            )
+            writable_source = bool(ebook_action["ready"])
+        elif physical_exists:
+            writable_source = mount_is_writable(str(result.get("local_path") or ""))
+
+        safe = exact and physical_exists and writable_source
         if not exact:
             reason = "The Bindery association changed since the scan. Refresh before quarantine."
         elif not physical_exists:
             reason = "The physical path is no longer present. Quarantine is not appropriate."
+        elif ebook_action and not ebook_action["ready"]:
+            reason = (
+                "Writable ebook action preflight failed: "
+                + ", ".join(ebook_action["blockers"])
+            )
+        elif not writable_source:
+            reason = "The source media mount is read-only."
         else:
             reason = "The association still matches and the physical path exists."
     else:
@@ -262,6 +280,7 @@ def triage_action_preview(result: dict, action: str) -> dict:
         "physical_exists": physical_exists,
         "stored_path": result["stored_path"],
         "local_path": result["local_path"],
+        "ebook_action": ebook_action if action == "quarantine" else None,
     }
 
 
@@ -297,42 +316,6 @@ def triage_detach(result: dict) -> int:
         raise ActionError(str(exc)) from exc
 
 
-def _decode_mount_path(value: str) -> str:
-    return (
-        value.replace("\\040", " ")
-        .replace("\\011", "\t")
-        .replace("\\012", "\n")
-        .replace("\\134", "\\")
-    )
-
-
-def _mount_is_writable(path: str) -> bool:
-    target = Path(path).resolve()
-    while not target.exists() and target != target.parent:
-        target = target.parent
-
-    best_len = -1
-    best_rw = False
-    try:
-        with open("/proc/self/mountinfo", "r", encoding="utf-8") as fh:
-            for line in fh:
-                left = line.split(" - ", 1)[0].split()
-                if len(left) < 6:
-                    continue
-                mount_point = Path(_decode_mount_path(left[4])).resolve()
-                try:
-                    target.relative_to(mount_point)
-                except ValueError:
-                    continue
-                length = len(str(mount_point))
-                if length > best_len:
-                    best_len = length
-                    best_rw = "rw" in left[5].split(",")
-    except OSError:
-        return False
-    return best_len >= 0 and best_rw
-
-
 def triage_quarantine(result: dict) -> tuple[int, str]:
     if not settings.allow_actions:
         raise ActionError("Bindery actions are disabled. Enable actions in Settings before quarantining REVIEW/REJECT items.")
@@ -341,11 +324,7 @@ def triage_quarantine(result: dict) -> tuple[int, str]:
     if not preview["safe"]:
         raise ActionError(preview["reason"])
 
-    if not _mount_is_writable(result["local_path"]):
-        raise ActionError(
-            "The source media mount is read-only. BookGuard refuses to detach first and then fail the quarantine move."
-        )
-    if not _mount_is_writable(settings.quarantine_root):
+    if not mount_is_writable(settings.quarantine_root):
         raise ActionError("The quarantine mount is not writable.")
 
     cleanup_id = create_cleanup_action(result, "TRIAGE_QUARANTINE")

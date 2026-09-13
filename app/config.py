@@ -111,6 +111,8 @@ class AutomationSettings:
     acquisition_coordinator_enabled: bool
     acquisition_coordinator_interval_seconds: int
     max_staged_ebook_bytes: int
+    ebook_actions_enabled: bool
+    ebook_action_root: str
     admission_enabled: bool
     admission_root: str
     admission_bindery_root: str
@@ -148,6 +150,12 @@ def load_automation_settings() -> AutomationSettings:
             300,
         ),
         max_staged_ebook_bytes=max_staged_ebook_bytes,
+        ebook_actions_enabled=_bool("BOOKGUARD_EBOOK_ACTIONS_ENABLED", False),
+        ebook_action_root=os.getenv(
+            "BOOKGUARD_EBOOK_ACTION_ROOT",
+            "/action-books",
+        ).strip()
+        or "/action-books",
         admission_enabled=_bool("BOOKGUARD_ADMISSION_ENABLED", False),
         admission_root=os.getenv("BOOKGUARD_ADMISSION_ROOT", "/admission-books").strip()
         or "/admission-books",

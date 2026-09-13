@@ -45,8 +45,8 @@ def _volume_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
-    """Validate the rendered base or opt-in admission storage topology."""
-    if profile not in {"base", "admission"}:
+    """Validate base and opt-in writable-alias storage topologies."""
+    if profile not in {"base", "actions", "admission", "full"}:
         raise SmokeTestFailure(f"Unknown Compose profile: {profile}.")
 
     volumes = _volume_map(payload)
@@ -78,8 +78,25 @@ def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
         ),
     }
 
+    action = volumes.get("/action-books")
+    action_expected = profile in {"actions", "full"}
+    if not action_expected:
+        checks["writableActionAliasAbsent"] = action is None
+    else:
+        checks.update({
+            "writableActionAliasPresent": action is not None,
+            "writableActionAliasWritable": (
+                action is not None and not bool(action.get("read_only"))
+            ),
+            "actionAliasMapsLibrary": (
+                action is not None
+                and action.get("source") == volumes.get("/books", {}).get("source")
+            ),
+        })
+
     admission = volumes.get("/admission-books")
-    if profile == "base":
+    admission_expected = profile in {"admission", "full"}
+    if not admission_expected:
         checks["writableAdmissionAliasAbsent"] = admission is None
     else:
         checks.update({
@@ -413,7 +430,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run isolated BookGuard smoke tests.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     compose_parser = subparsers.add_parser("compose")
-    compose_parser.add_argument("profile", choices=("base", "admission"))
+    compose_parser.add_argument(
+        "profile",
+        choices=("base", "actions", "admission", "full"),
+    )
     subparsers.add_parser("workflow")
     args = parser.parse_args(argv)
 
