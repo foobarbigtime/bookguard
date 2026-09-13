@@ -858,7 +858,11 @@ def finalize_ebook_acquisition(
             staging_root, staged_path = resolve_staged_file(relative_path)
         except StagingSafetyError as exc:
             safely_absent = False
-            if queue_item is None and status in {"finalizing", "cleanup_required"}:
+            if queue_item is None and status in {
+                "admitted",
+                "finalizing",
+                "cleanup_required",
+            }:
                 try:
                     safely_absent = staged_path_is_absent(relative_path)
                 except StagingSafetyError as recovery_exc:
@@ -873,8 +877,14 @@ def finalize_ebook_acquisition(
                     "ok": True,
                     "acquisition": ebook_acquisition_by_id(acquisition_id),
                     "queueRecordRemoved": True,
+                    "removedFromDownloadClient": False,
+                    "downloadedDataDeleted": False,
                     "stagedFileRemoved": True,
-                    "message": "A previously interrupted finalization is complete.",
+                    "cleanupAlreadyComplete": True,
+                    "message": (
+                        "The registered acquisition was already safely cleaned; "
+                        "its durable audit state is now finalized."
+                    ),
                 }
             raise AcquisitionSafetyError(str(exc)) from exc
 
