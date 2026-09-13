@@ -664,3 +664,55 @@ def test_interrupted_finalize_refuses_symlinked_staging_path(
 
     assert staged.is_symlink()
     assert outside.read_bytes() == b"must remain"
+
+
+def test_finalize_reconciles_already_cleaned_registered_acquisition(
+    acquisition_setup,
+    monkeypatch,
+):
+    setup = acquisition_setup
+    started = acquisition.start_ebook_acquisition(
+        setup["result"],
+        "safe-guid",
+        setup["client"],
+    )
+    staged_name = "Bel Canto - Ann Patchett.epub"
+    library = Path(setup["result"]["local_path"])
+    _write_epub(library, "Bel Canto", "Ann Patchett")
+    staged_hash = hashlib.sha256(library.read_bytes()).hexdigest()
+    acquisition.update_ebook_acquisition(
+        started["acquisition"]["id"],
+        "admitted",
+        queue_id=77,
+        queue_status="downloading",
+        staged_relative_path=staged_name,
+        staged_sha256=staged_hash,
+        admission_id=91,
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "ebook_admission_by_id",
+        lambda admission_id: {
+            "id": admission_id,
+            "result_id": 17,
+            "book_id": 42,
+            "status": "registered",
+            "staged_relative_path": staged_name,
+            "staged_sha256": staged_hash,
+            "stored_path": setup["result"]["stored_path"],
+            "local_path": setup["result"]["local_path"],
+        },
+    )
+    setup["client"].registered = True
+
+    response = acquisition.finalize_ebook_acquisition(
+        started["acquisition"]["id"],
+        setup["client"],
+    )
+
+    assert response["acquisition"]["status"] == "finalized"
+    assert response["cleanupAlreadyComplete"] is True
+    assert response["removedFromDownloadClient"] is False
+    assert response["downloadedDataDeleted"] is False
+    assert library.is_file()
+    assert setup["client"].removed_queue_items == []

@@ -212,6 +212,10 @@ record with download-client and file deletion explicitly disabled, and remove
 only that acquisition's verified staging copy. The library file and durable
 admission/acquisition audit records are retained. Interrupted finalization stays
 blocked as `cleanup_required` unless the exact safe cleanup state can be proven.
+An explicitly finalized historical record may also adopt cleanup that an
+operator already completed, but only after proving the registered library hash,
+complete queue response, absent exact queue record, and safely absent staged
+path; that recovery changes the audit status only.
 
 ## Metadata repair philosophy
 
