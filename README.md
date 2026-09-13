@@ -46,10 +46,11 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - Opt-in direct ebook admission to the exact former Bindery path, followed by Bindery library reconciliation.
 - Snapshot verification on the destination filesystem, atomic no-overwrite publication, and durable recovery state.
 - One-at-a-time, explicitly selected Bindery acquisition with durable queue and staged-verification state.
+- An opt-in supervised coordinator that resumes operator-started work after restart and pauses for explicit admission.
 
-Unattended scheduling remains disabled. Controlled acquisition and direct admission are separate opt-ins with separate confirmations. Admission repeats verification on a private copied snapshot at its own mutation boundary; a prior `safeToAdmit` response is never treated as authorization.
+Unattended candidate selection remains disabled. Controlled acquisition and direct admission are separate opt-ins with separate confirmations. Admission repeats verification on a private copied snapshot at its own mutation boundary; a prior `safeToAdmit` response is never treated as authorization.
 
-Read-only staging endpoints:
+Automatic-maintenance endpoints (status and inventory `GET` requests are read-only):
 
 ```text
 GET  /api/automatic/staging/files
@@ -60,6 +61,7 @@ POST /api/automatic/results/{result_id}/admit-staged-ebook
 POST /api/automatic/admissions/{admission_id}/reconcile
 GET  /api/automatic/acquisition-readiness
 GET  /api/automatic/acquisitions
+GET  /api/automatic/acquisition-coordinator
 POST /api/automatic/results/{result_id}/acquisitions
 POST /api/automatic/acquisitions/{acquisition_id}/reconcile
 POST /api/automatic/acquisitions/{acquisition_id}/admit
@@ -145,15 +147,31 @@ So even if Safe mode is selected accidentally, Docker still blocks writes. Remov
 BOOKGUARD_STAGING_ROOT=/staging
 BOOKGUARD_BINDERY_DROP_FOLDER=/data/bookguard-staging
 BOOKGUARD_AUTOMATIC_REACQUISITION=false
+BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED=false
+BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS=10
 BOOKGUARD_MAX_STAGED_EBOOK_BYTES=536870912
 ```
 
 Automatic reacquisition fails closed unless every readiness check passes. The
 implemented workflow is deliberately operator-driven: it can start one freshly
 revalidated release, observe its Bindery queue record, and verify exactly one
-ebook arriving in an initially empty staging folder. There is no scheduler,
-automatic candidate choice, automatic retry, unattended staged-file deletion,
-or automatic admission.
+ebook arriving in an initially empty staging folder. There is no automatic
+candidate choice, automatic retry, or automatic admission.
+
+The optional supervised coordinator removes the need to press Reconcile
+repeatedly. It discovers the single durable active acquisition after startup,
+polls Bindery, observes stable staging bytes, and advances verification. It
+stops at `verified` with `explicitAdmissionRequired`; it never calls the
+admission operation. After an operator explicitly admits those verified bytes,
+the coordinator can resume registration reconciliation and finalization. It
+removes only the exact terminal Bindery queue record and verified staging copy,
+with download-client and downloaded-data deletion disabled.
+
+The coordinator starts only when its own opt-in, automatic reacquisition, and
+guarded actions are enabled. Turning off either mutation gate makes it remain
+blocked without changing durable acquisition state. Its read-only status is
+available from `GET /api/automatic/acquisition-coordinator`. The polling
+interval is clamped between 2 and 300 seconds.
 
 Starting an acquisition additionally requires Bindery auto-grab to be disabled,
 a complete and idle Bindery queue, an empty and completely inventoried staging
@@ -376,6 +394,7 @@ app/verification_constants.py Shared verification limits
 app/staging.py              Read-only staged-byte verification
 app/admission.py            Atomic direct-admission transaction and recovery
 app/acquisition.py          One-at-a-time Bindery queue-to-staging workflow
+app/acquisition_coordinator.py Restart-safe supervised workflow advancement
 app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery
 app/file_safety.py          Shared filesystem hashing/safety helpers
