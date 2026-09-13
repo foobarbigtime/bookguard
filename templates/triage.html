@@ -87,6 +87,33 @@
     Verification is read-only. BookGuard checks the ebook itself and separates verified books, repairable metadata errors, wrong content, and cases that still need human review.
   </div>
 
+  <section id="acquisitionPanel" class="table-card acquisition-panel" aria-live="polite">
+    <div class="section-title row-between">
+      <div>
+        <h2>Supervised ebook replacement</h2>
+        <p>BookGuard can prepare one verified wrong-content result, supervise its replacement, and pause before admission.</p>
+      </div>
+      <span id="acquisitionState" class="workflow-state workflow-state-loading">Loading status</span>
+    </div>
+    <div class="acquisition-body">
+      <p id="acquisitionMessage" class="muted">Checking the replacement safety gates…</p>
+      <dl id="acquisitionDetails" class="workflow-details" hidden></dl>
+      <div id="acquisitionControls" class="workflow-controls"></div>
+      <div id="acquisitionError" class="notice warning workflow-error" role="alert" hidden></div>
+    </div>
+  </section>
+
+  <section id="replacementPanel" class="table-card replacement-panel" aria-live="polite" hidden>
+    <div class="section-title row-between">
+      <div>
+        <h2 id="replacementTitle">Replacement candidates</h2>
+        <p id="replacementSubtitle"></p>
+      </div>
+      <button type="button" data-replacement-close>Close</button>
+    </div>
+    <div id="replacementBody" class="replacement-body"></div>
+  </section>
+
   <section class="filter-row">
     <div class="triage-toolbar">
       <strong>{{ classification }}</strong>
@@ -139,7 +166,7 @@
               <span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_',' ') }}</span>
               <small>{{ row.format }}</small>
             </td>
-            <td id="verification-cell-{{ row.id }}" class="verification-cell" data-verification-id="{{ row.id }}"><span class="muted">Not verified</span></td>
+            <td id="verification-cell-{{ row.id }}" class="verification-cell" data-verification-id="{{ row.id }}" data-book-id="{{ row.book_id }}"><span class="muted">Not verified</span></td>
             <td class="book-cell"><strong>{{ row.title }}</strong><small>{{ row.author }}</small></td>
             <td class="book-cell detected-cell">
               <strong>{{ row.detected_title or '—' }}</strong>
@@ -249,6 +276,10 @@ function renderVerification(id, verification) {
   let controls = `<button onclick="showVerification(${id})">Details</button>`;
   if (verification.verdict === 'METADATA_ERROR') {
     controls += ` <button class="repair-verified-button" onclick="repairVerified(${id})">Review metadata fix</button>`;
+  }
+  if (verification.verdict === 'WRONG_CONTENT') {
+    const bookId = Number(cell.dataset.bookId);
+    controls += ` <button class="danger" type="button" data-replacement-result="${id}" data-replacement-book="${bookId}">Replacement workflow</button>`;
   }
   cell.innerHTML = `
     <span class="verification-badge ${verificationClass(verification.verdict)}">${escapeHtml(verificationLabel(verification.verdict))}</span>
@@ -434,5 +465,6 @@ async function triageAction(id, action) {
 loadCachedVerifications();
 pollVerificationJob();
 </script>
+<script src="/static/triage-acquisition.js" defer></script>
 </body>
 </html>
