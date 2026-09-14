@@ -15,6 +15,7 @@ def _write_epub(
     package_path: str = "OEBPS/content.opf",
     include_package: bool = True,
     conforming_mimetype: bool = True,
+    mimetype_value: str = "application/epub+zip",
 ) -> None:
     container = f"""<?xml version="1.0"?>
 <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -34,14 +35,14 @@ def _write_epub(
         if conforming_mimetype:
             archive.writestr(
                 zipfile.ZipInfo("mimetype"),
-                "application/epub+zip",
+                mimetype_value,
                 compress_type=zipfile.ZIP_STORED,
             )
         archive.writestr("META-INF/container.xml", container)
         if not conforming_mimetype:
             archive.writestr(
                 "mimetype",
-                "application/epub+zip",
+                mimetype_value,
                 compress_type=zipfile.ZIP_DEFLATED,
             )
         if include_package:
@@ -66,7 +67,11 @@ def test_valid_epub_passes_signature_and_structure(tmp_path):
 
 def test_nonconforming_mimetype_packaging_is_a_non_blocking_warning(tmp_path):
     path = tmp_path / "legacy.epub"
-    _write_epub(path, conforming_mimetype=False)
+    _write_epub(
+        path,
+        conforming_mimetype=False,
+        mimetype_value="application/epub+zip\r\n",
+    )
 
     report = inspect_ebook_security(path)
 
@@ -75,6 +80,7 @@ def test_nonconforming_mimetype_packaging_is_a_non_blocking_warning(tmp_path):
     assert report["failures"] == []
     assert structure["status"] == "warning"
     assert structure["warnings"] == [
+        "The mimetype file contains a UTF-8 BOM or surrounding ASCII whitespace.",
         "The mimetype file is not the first archive member.",
         "The mimetype file is compressed instead of stored.",
     ]

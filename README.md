@@ -375,8 +375,9 @@ Verification and security settings include three default-on, read-only checks:
 A deterministic failure produces an `UNSAFE_FILE` verdict before content identity is evaluated.
 Unsafe files cannot pass staged verification or controlled admission. Plain-text and legacy formats
 without a reliable fixed signature are reported as not applicable instead of being guessed.
-An EPUB whose valid `mimetype` entry is merely compressed or not first receives a visible
-conformance warning rather than an unsafe verdict; structural and identity verification continue.
+An EPUB whose valid `mimetype` entry is merely compressed, not first, or padded with a UTF-8
+BOM or ASCII whitespace receives a visible conformance warning rather than an unsafe verdict;
+structural and identity verification continue.
 
 Metadata repair settings include:
 

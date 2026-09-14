@@ -28,6 +28,7 @@ def _write_epub(
     body: str,
     *,
     conforming_mimetype: bool = True,
+    mimetype_value: str = "application/epub+zip",
 ) -> None:
     container = """<?xml version="1.0"?>
 <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -58,14 +59,14 @@ def _write_epub(
         if conforming_mimetype:
             archive.writestr(
                 zipfile.ZipInfo("mimetype"),
-                "application/epub+zip",
+                mimetype_value,
                 compress_type=zipfile.ZIP_STORED,
             )
         archive.writestr("META-INF/container.xml", container)
         if not conforming_mimetype:
             archive.writestr(
                 "mimetype",
-                "application/epub+zip",
+                mimetype_value,
                 compress_type=zipfile.ZIP_DEFLATED,
             )
         archive.writestr("OEBPS/content.opf", package)
@@ -136,6 +137,7 @@ def test_mimetype_packaging_warning_does_not_block_verified_admission(
         "Ann Patchett",
         "Bel Canto by Ann Patchett. " + ("A fictional passage. " * 80),
         conforming_mimetype=False,
+        mimetype_value="application/epub+zip\r\n",
     )
 
     result = staging.verify_staged_ebook(
