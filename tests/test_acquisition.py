@@ -116,6 +116,11 @@ def _write_epub(path: Path, title: str, author: str) -> None:
         "</body></html>"
     )
     with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            zipfile.ZipInfo("mimetype"),
+            "application/epub+zip",
+            compress_type=zipfile.ZIP_STORED,
+        )
         archive.writestr("META-INF/container.xml", container)
         archive.writestr("OEBPS/content.opf", package)
         archive.writestr("OEBPS/chapter.xhtml", chapter)

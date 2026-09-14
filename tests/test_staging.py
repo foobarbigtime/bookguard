@@ -48,6 +48,11 @@ def _write_epub(path, title: str, author: str, body: str) -> None:
 <h1>{title}</h1><p>by {author}</p><p>{body}</p>
 </body></html>"""
     with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            zipfile.ZipInfo("mimetype"),
+            "application/epub+zip",
+            compress_type=zipfile.ZIP_STORED,
+        )
         archive.writestr("META-INF/container.xml", container)
         archive.writestr("OEBPS/content.opf", package)
         archive.writestr("OEBPS/chapter.xhtml", chapter)
@@ -84,6 +89,25 @@ def test_verified_correct_staged_epub_is_eligible_but_not_admitted(tmp_path, mon
     assert result["readOnly"] is True
     assert result["sha256"]
     assert "separate readiness checks" in result["message"]
+    assert result["evidence"]["security"]["safe"] is True
+
+
+def test_corrupt_staged_epub_is_blocked_before_identity_verification(tmp_path, monkeypatch):
+    root = _configure(tmp_path, monkeypatch)
+    path = root / "Bel Canto - Ann Patchett.epub"
+    path.write_bytes(b"not an epub")
+
+    result = staging.verify_staged_ebook(
+        42,
+        path.name,
+        FakeClient("Bel Canto", "Ann Patchett"),
+    )
+
+    assert result["verdict"] == "UNSAFE_FILE"
+    assert result["source"] == "deterministic-safety"
+    assert result["safeToAdmit"] is False
+    assert "deterministicSecurityChecksFailed" in result["admissionBlockers"]
+    assert result["evidence"]["security"]["safe"] is False
 
 
 def test_wrong_staged_epub_is_never_eligible(tmp_path, monkeypatch):

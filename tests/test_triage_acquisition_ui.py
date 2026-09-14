@@ -22,6 +22,13 @@ def test_prepared_missing_mismatch_retains_replacement_entry_point():
     assert "'Resume replacement'" in TEMPLATE
 
 
+def test_triage_surfaces_deterministic_security_results():
+    assert "Verification and security" in TEMPLATE
+    assert "verdict === 'UNSAFE_FILE'" in TEMPLATE
+    assert "Unsafe files:" in TEMPLATE
+    assert "Deterministic security" in TEMPLATE
+
+
 def test_controller_uses_existing_guarded_lifecycle_endpoints():
     endpoints = {
         "/api/automatic/acquisition-coordinator",

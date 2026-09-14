@@ -219,6 +219,15 @@ class Settings:
     )
     verification_use_tika: bool = _bool("BOOKGUARD_VERIFICATION_USE_TIKA", True)
     verification_tika_url: str = os.getenv("BOOKGUARD_TIKA_URL", "").rstrip("/")
+    verification_file_signatures: bool = _bool(
+        "BOOKGUARD_VERIFICATION_FILE_SIGNATURES", True
+    )
+    verification_epub_structure: bool = _bool(
+        "BOOKGUARD_VERIFICATION_EPUB_STRUCTURE", True
+    )
+    verification_pdf_integrity: bool = _bool(
+        "BOOKGUARD_VERIFICATION_PDF_INTEGRITY", True
+    )
 
     # Metadata repair. Preview is intentionally the default; it never writes files.
     metadata_repair_mode: str = field(
@@ -247,6 +256,8 @@ class Settings:
             "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
             "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
             "verification_enabled", "verification_use_tika",
+            "verification_file_signatures", "verification_epub_structure",
+            "verification_pdf_integrity",
             "repair_audiobooks", "repair_ebooks", "repair_normalize_pass",
             "repair_audio_album", "repair_audio_album_artist", "repair_audio_genre",
         }
@@ -329,6 +340,9 @@ class Settings:
             "verification_pdf_pages": self.verification_pdf_pages,
             "verification_use_tika": self.verification_use_tika,
             "verification_tika_url": self.verification_tika_url,
+            "verification_file_signatures": self.verification_file_signatures,
+            "verification_epub_structure": self.verification_epub_structure,
+            "verification_pdf_integrity": self.verification_pdf_integrity,
             "metadata_repair_mode": self.metadata_repair_mode,
             "repair_audiobooks": self.repair_audiobooks,
             "repair_ebooks": self.repair_ebooks,

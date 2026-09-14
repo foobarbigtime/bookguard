@@ -79,9 +79,16 @@
       </section>
 
       <section class="settings-section">
-        <div class="settings-section-title"><h3>Content verification</h3><p>Verify what the ebook actually contains before deciding whether metadata should be repaired or the content is wrong.</p></div>
+        <div class="settings-section-title"><h3>Verification and security</h3><p>Validate ebook bytes and structure before deciding whether metadata should be repaired or the content is wrong.</p></div>
         <div class="form-grid">
           <label class="check-field span-2"><input name="verification_enabled" type="checkbox" {% if settings.verification_enabled %}checked{% endif %}><span>Enable native content verification</span></label>
+          <div class="field checks-stack span-2 option-panel">
+            <span>Deterministic ebook safety checks (recommended)</span>
+            <label class="check-field"><input name="verification_file_signatures" type="checkbox" {% if settings.verification_file_signatures %}checked{% endif %}><span>Verify the file signature matches its extension</span></label>
+            <label class="check-field"><input name="verification_epub_structure" type="checkbox" {% if settings.verification_epub_structure %}checked{% endif %}><span>Validate EPUB package structure and ZIP integrity</span></label>
+            <label class="check-field"><input name="verification_pdf_integrity" type="checkbox" {% if settings.verification_pdf_integrity %}checked{% endif %}><span>Validate PDF structure and page tree</span></label>
+            <small>These checks are read-only, enabled by default, and block unsafe or corrupt files from verified admission.</small>
+          </div>
           <label class="field"><span>Maximum text examined per ebook</span><input name="verification_max_text_chars" type="number" min="50000" max="5000000" step="50000" value="{{ settings.verification_max_text_chars }}"><small>Default 1,500,000 characters. Verification is read-only.</small></label>
           <label class="field"><span>PDF pages examined</span><input name="verification_pdf_pages" type="number" min="1" max="100" value="{{ settings.verification_pdf_pages }}"><small>BookGuard starts with the front matter because title/author evidence is usually strongest there.</small></label>
           <div class="field checks-stack span-2 option-panel">
@@ -91,7 +98,7 @@
           <label class="field span-2"><span>Tika URL</span><input name="verification_tika_url" type="text" value="{{ settings.verification_tika_url }}" placeholder="http://tika:9998"><small>Optional. Leave blank to run BookGuard with native verification only.</small></label>
           <div class="field span-2"><button id="testTikaButton" type="button">Test Tika connection</button><small id="tikaStatus" class="muted"></small></div>
         </div>
-        <div class="notice info">v0.4.8 uses native, position-aware ebook verification first. Tika is an optional fallback when native extraction cannot obtain useful text. Audiobook content verification remains a future feature.</div>
+        <div class="notice info">BookGuard runs deterministic file safety checks before native, position-aware identity verification. Tika is an optional fallback when native extraction cannot obtain useful text. Audiobook content verification remains a future feature.</div>
       </section>
 
       <section class="settings-section metadata-repair-section">
@@ -149,7 +156,8 @@ const tikaStatus = document.getElementById("tikaStatus");
 const booleanFields = [
   "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
   "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
-  "verification_enabled", "verification_use_tika",
+  "verification_enabled", "verification_use_tika", "verification_file_signatures",
+  "verification_epub_structure", "verification_pdf_integrity",
   "repair_audiobooks", "repair_ebooks", "repair_normalize_pass", "repair_audio_album",
   "repair_audio_album_artist", "repair_audio_genre", "clear_api_key"
 ];

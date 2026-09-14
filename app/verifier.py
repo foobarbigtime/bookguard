@@ -17,6 +17,7 @@ from .db import (
     local_conn,
 )
 from .ebook_extraction import extract_ebook_identity
+from .ebook_security import inspect_ebook_security
 from .matcher import normalize
 from .metadata import ebook_metadata
 from .repair import (
@@ -30,12 +31,13 @@ from .tika_client import test_connection
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "6"
+VERIFIER_VERSION = "7"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
     "WRONG_CONTENT",
     "INSUFFICIENT_EVIDENCE",
+    "UNSAFE_FILE",
 }
 EBOOK_SUFFIXES = {
     ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".rtf", ".txt", ".cbr", ".lit"
@@ -136,8 +138,21 @@ def _file_fingerprint(path: str) -> str:
 
 
 def _verification_signature(result: dict, target_path: str, fingerprint: str) -> str:
+    policy = json.dumps(
+        {
+            "enabled": settings.verification_enabled,
+            "fileSignatures": settings.verification_file_signatures,
+            "epubStructure": settings.verification_epub_structure,
+            "pdfIntegrity": settings.verification_pdf_integrity,
+            "maxTextChars": settings.verification_max_text_chars,
+            "pdfPages": settings.verification_pdf_pages,
+            "useTika": settings.verification_use_tika,
+            "tikaUrl": settings.verification_tika_url,
+        },
+        sort_keys=True,
+    )
     raw = "|".join(
-        [VERIFIER_VERSION, result_signature(result), target_path, fingerprint]
+        [VERIFIER_VERSION, result_signature(result), target_path, fingerprint, policy]
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
@@ -258,6 +273,38 @@ def verify_result(result: dict, force: bool = False) -> dict:
             result, target, fingerprint, "INSUFFICIENT_EVIDENCE", 0, "missing", evidence
         )
 
+    security = inspect_ebook_security(
+        path,
+        check_file_signatures=settings.verification_file_signatures,
+        check_epub_structure=settings.verification_epub_structure,
+        check_pdf_integrity=settings.verification_pdf_integrity,
+    )
+    if not security["safe"]:
+        evidence = {
+            "expected": {
+                "title": result.get("title", ""),
+                "author": result.get("author", ""),
+            },
+            "embedded": {},
+            "content": {},
+            "metadata_matches_expected": False,
+            "security": security,
+            "notes": [security["message"]],
+            "explanation": (
+                "Book identity was not evaluated because deterministic file safety "
+                "or integrity validation failed."
+            ),
+        }
+        return _save_verification(
+            result,
+            str(path),
+            fingerprint,
+            "UNSAFE_FILE",
+            100,
+            "deterministic-safety",
+            evidence,
+        )
+
     extracted = extract_ebook_identity(str(path))
 
     verdict, confidence, evidence = classify_identity(
@@ -268,6 +315,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
         extracted.notes,
         extracted.front_text,
     )
+    evidence["security"] = security
     return _save_verification(
         result, str(path), fingerprint, verdict, confidence, extracted.source, evidence
     )
