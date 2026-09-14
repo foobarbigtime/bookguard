@@ -9,6 +9,7 @@ import sqlite3
 import stat
 import tempfile
 import threading
+import time
 from typing import Any
 
 from .bindery_client import BinderyClient, BinderyClientError
@@ -16,8 +17,10 @@ from .config import ConfigurationError, load_automation_settings, settings
 from .db import (
     associations_inside_path,
     create_ebook_admission,
+    ebook_acquisition_by_admission_id,
     ebook_admission_by_id,
     recent_ebook_admissions,
+    result_by_id,
     update_ebook_admission,
 )
 from .file_safety import is_within, sha256_file
@@ -53,6 +56,19 @@ _RECONCILABLE_STATUSES = {
     "registration_conflict",
     "registered",
 }
+_REGISTRATION_CORRECTION_STATUSES = {
+    "registration_conflict",
+    "registration_correcting",
+}
+_HISTORICAL_QUEUE_STATUSES = {
+    "cancelled",
+    "failed",
+    "importblocked",
+    "imported",
+    "removed",
+}
+_REGISTRATION_CORRECTION_POLL_ATTEMPTS = 120
+_REGISTRATION_CORRECTION_POLL_SECONDS = 0.5
 _BINDERY_SETTING_DEFAULTS = {
     "import.mode": "auto",
     "import.drop_folder": "",
@@ -222,6 +238,47 @@ def _book_has_ebook(book: dict[str, Any]) -> bool:
         for item in (book.get("bookFiles") or [])
         if isinstance(item, dict)
     )
+
+
+def _book_has_exact_ebook(book: dict[str, Any], stored_path: str) -> bool:
+    expected = os.path.normpath(stored_path)
+    return any(
+        isinstance(item, dict)
+        and str(item.get("format") or "").casefold() == "ebook"
+        and os.path.normpath(str(item.get("path") or "")) == expected
+        for item in (book.get("bookFiles") or [])
+    )
+
+
+def _exact_ebook_associations(stored_path: str) -> list[dict[str, Any]]:
+    expected = os.path.normpath(stored_path)
+    return [
+        item
+        for item in associations_inside_path(stored_path)
+        if str(item.get("format") or "").casefold() == "ebook"
+        and os.path.normpath(str(item.get("stored_path") or "")) == expected
+    ]
+
+
+def _complete_queue_items(client: BinderyClient) -> list[dict[str, Any]]:
+    try:
+        payload = client.list_queue()
+    except BinderyClientError as exc:
+        raise AdmissionSafetyError(str(exc)) from exc
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        raise AdmissionSafetyError("Bindery returned an invalid queue response.")
+    if payload.get("partial"):
+        raise AdmissionSafetyError(
+            "Bindery returned a partial queue response; correction stopped."
+        )
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        raise AdmissionSafetyError(
+            "Bindery queue response did not contain an item list."
+        )
+    return [item for item in raw_items if isinstance(item, dict)]
 
 
 def _same_file_state(left: os.stat_result, right: os.stat_result) -> bool:
@@ -589,6 +646,72 @@ def admit_staged_ebook(
         _admission_lock.release()
 
 
+def _verified_published_destination(
+    admission: dict[str, Any],
+    configured: Any,
+) -> Path:
+    try:
+        relative = Path(admission["stored_path"]).relative_to(
+            Path(configured.admission_bindery_root)
+        )
+    except ValueError as exc:
+        raise AdmissionSafetyError(
+            "The recorded admission path is outside the configured Bindery root."
+        ) from exc
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise AdmissionSafetyError(
+            "The recorded admission path contains an unsafe component."
+        )
+    configured_root = Path(configured.admission_root)
+    if configured_root.is_symlink():
+        raise AdmissionSafetyError("The admission root must not be a symlink.")
+    try:
+        admission_root = configured_root.resolve(strict=True)
+    except OSError as exc:
+        raise AdmissionSafetyError("The configured admission root is unavailable.") from exc
+    cursor = admission_root
+    for part in relative.parent.parts:
+        cursor /= part
+        if cursor.is_symlink():
+            raise AdmissionSafetyError("Symlinked destination directories are not accepted.")
+    destination = admission_root / relative
+    try:
+        destination.parent.resolve(strict=True).relative_to(admission_root)
+    except (RuntimeError, ValueError) as exc:
+        raise AdmissionSafetyError(
+            "The recorded destination resolves outside admission."
+        ) from exc
+    if not destination.is_file() or destination.is_symlink():
+        raise AdmissionSafetyError("The published library file is missing or symlinked.")
+    try:
+        destination_hash = sha256_file(destination)
+    except OSError as exc:
+        raise AdmissionSafetyError(
+            "The published library file could not be read."
+        ) from exc
+    if destination_hash != admission["staged_sha256"]:
+        raise AdmissionSafetyError(
+            "The published library file no longer matches the verified snapshot."
+        )
+    return destination
+
+
+def _verified_staged_source(admission: dict[str, Any]) -> Path:
+    try:
+        _, staged_path = resolve_staged_file(str(admission["staged_relative_path"]))
+    except StagingSafetyError as exc:
+        raise AdmissionSafetyError(str(exc)) from exc
+    try:
+        staged_hash = sha256_file(staged_path)
+    except OSError as exc:
+        raise AdmissionSafetyError("The verified staged file could not be read.") from exc
+    if staged_hash != admission["staged_sha256"]:
+        raise AdmissionSafetyError(
+            "The staged file no longer matches the verified snapshot."
+        )
+    return staged_path
+
+
 def reconcile_admission(
     admission_id: int,
     client: BinderyClient | None = None,
@@ -611,43 +734,7 @@ def reconcile_admission(
     if not admission.get("staged_sha256"):
         raise AdmissionSafetyError("The admission has no verified snapshot to reconcile.")
 
-    try:
-        relative = Path(admission["stored_path"]).relative_to(
-            Path(configured.admission_bindery_root)
-        )
-    except ValueError as exc:
-        raise AdmissionSafetyError(
-            "The recorded admission path is outside the configured Bindery root."
-        ) from exc
-    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
-        raise AdmissionSafetyError("The recorded admission path contains an unsafe component.")
-    configured_root = Path(configured.admission_root)
-    if configured_root.is_symlink():
-        raise AdmissionSafetyError("The admission root must not be a symlink.")
-    try:
-        admission_root = configured_root.resolve(strict=True)
-    except OSError as exc:
-        raise AdmissionSafetyError("The configured admission root is unavailable.") from exc
-    cursor = admission_root
-    for part in relative.parent.parts:
-        cursor /= part
-        if cursor.is_symlink():
-            raise AdmissionSafetyError("Symlinked destination directories are not accepted.")
-    destination = admission_root / relative
-    try:
-        destination.parent.resolve(strict=True).relative_to(admission_root)
-    except (RuntimeError, ValueError) as exc:
-        raise AdmissionSafetyError("The recorded destination resolves outside admission.") from exc
-    if not destination.is_file() or destination.is_symlink():
-        raise AdmissionSafetyError("The published library file is missing or symlinked.")
-    try:
-        destination_hash = sha256_file(destination)
-    except OSError as exc:
-        raise AdmissionSafetyError("The published library file could not be read.") from exc
-    if destination_hash != admission["staged_sha256"]:
-        raise AdmissionSafetyError(
-            "The published library file no longer matches the verified snapshot."
-        )
+    _verified_published_destination(admission, configured)
 
     client = client or BinderyClient()
     try:
@@ -664,16 +751,11 @@ def reconcile_admission(
     if registered:
         update_ebook_admission(admission_id, "registered")
     else:
-        expected_path = os.path.normpath(str(admission["stored_path"]))
         expected_book_id = int(admission["book_id"])
         try:
-            exact_associations = [
-                item
-                for item in associations_inside_path(str(admission["stored_path"]))
-                if str(item.get("format") or "").casefold() == "ebook"
-                and os.path.normpath(str(item.get("stored_path") or ""))
-                == expected_path
-            ]
+            exact_associations = _exact_ebook_associations(
+                str(admission["stored_path"])
+            )
         except sqlite3.Error as exc:
             raise AdmissionSafetyError(
                 "Bindery path ownership could not be confirmed; no library scan "
@@ -736,6 +818,370 @@ def reconcile_admission(
             else "Bindery has not registered the file yet; a library scan was requested."
         ),
     }
+
+
+def correct_registration_conflict(
+    admission_id: int,
+    client: BinderyClient | None = None,
+) -> dict[str, Any]:
+    """Explicitly reassign one proven wrong Bindery owner without changing bytes."""
+    if not _admission_lock.acquire(blocking=False):
+        raise AdmissionSafetyError("Another admission operation is already running.")
+
+    correction_started = False
+    try:
+        configured = _automation_settings()
+        if not settings.allow_actions:
+            raise AdmissionSafetyError(
+                "Actions are disabled; registration correction is blocked."
+            )
+        if not configured.automatic_reacquisition:
+            raise AdmissionSafetyError(
+                "Automatic reacquisition is disabled; registration correction is blocked."
+            )
+        if not configured.admission_enabled:
+            raise AdmissionSafetyError(
+                "Direct admission is disabled; registration correction is blocked."
+            )
+
+        admission = ebook_admission_by_id(admission_id)
+        if not admission:
+            raise AdmissionSafetyError("Admission record not found.")
+        admission_status = str(admission.get("status") or "")
+        if admission_status not in _REGISTRATION_CORRECTION_STATUSES:
+            raise AdmissionSafetyError(
+                f"Admission status '{admission_status}' is not eligible for "
+                "registration correction."
+            )
+        if not admission.get("staged_sha256"):
+            raise AdmissionSafetyError(
+                "The admission has no verified snapshot to protect."
+            )
+
+        destination = _verified_published_destination(admission, configured)
+        staged_path = _verified_staged_source(admission)
+        stored_path = str(admission["stored_path"])
+        expected_book_id = int(admission["book_id"])
+
+        result = result_by_id(int(admission["result_id"]))
+        if (
+            not result
+            or int(result.get("book_id") or 0) != expected_book_id
+            or str(result.get("stored_path") or "") != stored_path
+            or str(result.get("local_path") or "")
+            != str(admission.get("local_path") or "")
+        ):
+            raise AdmissionSafetyError(
+                "The admission no longer matches its original scan result."
+            )
+
+        acquisition = ebook_acquisition_by_admission_id(admission_id)
+        if (
+            not acquisition
+            or str(acquisition.get("status") or "") != "admitted"
+            or int(acquisition.get("book_id") or 0) != expected_book_id
+            or int(acquisition.get("result_id") or 0)
+            != int(admission["result_id"])
+            or int(acquisition.get("admission_id") or 0) != admission_id
+        ):
+            raise AdmissionSafetyError(
+                "The admission is not linked to one active admitted acquisition."
+            )
+        queue_id = acquisition.get("queue_id")
+        if queue_id is None:
+            raise AdmissionSafetyError(
+                "The linked acquisition has no exact Bindery queue ID."
+            )
+
+        client = client or BinderyClient()
+        auto_grab = _bindery_setting(client, "autoGrab.enabled").casefold()
+        if auto_grab != "false":
+            raise AdmissionSafetyError(
+                "Bindery auto-grab must be disabled before registration correction."
+            )
+
+        import_mode = _bindery_setting(client, "import.mode").casefold() or "auto"
+        if admission_status == "registration_correcting" and import_mode == "auto":
+            try:
+                client.set_setting("import.mode", "external")
+                import_mode = (
+                    _bindery_setting(client, "import.mode").casefold() or "auto"
+                )
+            except BinderyClientError as exc:
+                raise AdmissionSafetyError(
+                    "An interrupted correction left Bindery outside external import "
+                    f"mode, and recovery failed: {exc}"
+                ) from exc
+        if import_mode != "external":
+            raise AdmissionSafetyError(
+                "Bindery must be in external import mode before registration correction."
+            )
+
+        try:
+            target_book = client.get_book(expected_book_id)
+            exact_associations = _exact_ebook_associations(stored_path)
+        except (BinderyClientError, sqlite3.Error) as exc:
+            raise AdmissionSafetyError(
+                f"Bindery ownership could not be verified: {exc}"
+            ) from exc
+        if not _result_matches_book(result, target_book):
+            raise AdmissionSafetyError(
+                "The intended Bindery book identity changed since the scan."
+            )
+
+        target_registered = _book_has_exact_ebook(target_book, stored_path)
+        only_target_association = (
+            len(exact_associations) == 1
+            and int(exact_associations[0].get("book_id") or 0)
+            == expected_book_id
+        )
+        if target_registered and only_target_association:
+            update_ebook_admission(admission_id, "registered")
+            return {
+                "ok": True,
+                "admissionId": admission_id,
+                "bookId": expected_book_id,
+                "status": "registered",
+                "alreadyCorrected": True,
+                "queueRecordRemoved": False,
+                "removedFromDownloadClient": False,
+                "downloadedDataDeleted": False,
+                "libraryBytesChanged": False,
+                "stagedFileRetained": True,
+                "message": (
+                    "The exact Bindery association was already corrected and is now "
+                    "recorded as registered."
+                ),
+            }
+        if target_registered or only_target_association:
+            raise AdmissionSafetyError(
+                "Bindery's API and database disagree about the exact path owner."
+            )
+        if _book_has_ebook(target_book):
+            raise AdmissionSafetyError(
+                "The intended Bindery book already tracks a different ebook."
+            )
+        if len(exact_associations) != 1:
+            raise AdmissionSafetyError(
+                "Exactly one conflicting ebook association is required."
+            )
+        wrong_owner = exact_associations[0]
+        if int(wrong_owner.get("book_id") or 0) == expected_book_id:
+            raise AdmissionSafetyError(
+                "The exact path is not owned by a different Bindery book."
+            )
+
+        queue_items = _complete_queue_items(client)
+        active_queue = [
+            item
+            for item in queue_items
+            if str(item.get("status") or "").casefold()
+            not in _HISTORICAL_QUEUE_STATUSES
+        ]
+        queue_matches = [
+            item
+            for item in queue_items
+            if str(item.get("id") or "") == str(queue_id)
+        ]
+        if len(queue_matches) > 1:
+            raise AdmissionSafetyError(
+                "Multiple Bindery queue records share the acquisition queue ID."
+            )
+        queue_item = queue_matches[0] if queue_matches else None
+        unrelated_active = [
+            item
+            for item in active_queue
+            if str(item.get("id") or "") != str(queue_id)
+        ]
+        if unrelated_active:
+            raise AdmissionSafetyError(
+                "Another active Bindery queue record blocks registration correction."
+            )
+        if queue_item is None and admission_status != "registration_correcting":
+            raise AdmissionSafetyError(
+                "The exact acquisition queue record is absent; correction stopped."
+            )
+        if queue_item is not None and (
+            int(queue_item.get("bookId") or 0) != expected_book_id
+            or str(queue_item.get("status") or "").casefold() != "importexternal"
+        ):
+            raise AdmissionSafetyError(
+                "The exact acquisition queue record is not a matching external import."
+            )
+
+        try:
+            preview = client.preview_manual_reassignment(
+                stored_path,
+                expected_book_id,
+                file_format="ebook",
+            )
+        except BinderyClientError as exc:
+            raise AdmissionSafetyError(str(exc)) from exc
+        if not isinstance(preview, dict):
+            raise AdmissionSafetyError(
+                "Bindery returned an invalid reassignment preview."
+            )
+        if (
+            os.path.normpath(str(preview.get("source") or ""))
+            != os.path.normpath(stored_path)
+            or os.path.normpath(str(preview.get("destination") or ""))
+            != os.path.normpath(stored_path)
+            or str(preview.get("format") or "").casefold() != "ebook"
+            or str(preview.get("status") or "").casefold() != "noop"
+        ):
+            raise AdmissionSafetyError(
+                "Bindery's reassignment preview was not an exact no-move ebook operation."
+            )
+
+        update_ebook_admission(
+            admission_id,
+            "registration_correcting",
+            error=(
+                "An explicit Bindery registration correction is in progress. "
+                "Library and staged bytes must remain unchanged."
+            ),
+        )
+        correction_started = True
+        if queue_item is not None:
+            try:
+                client.remove_queue_item(
+                    int(queue_id),
+                    remove_from_client=False,
+                    delete_files=False,
+                )
+            except BinderyClientError as exc:
+                raise AdmissionSafetyError(str(exc)) from exc
+
+        response: dict[str, Any] | None = None
+        operation_error: str | None = None
+        restore_error: str | None = None
+        try:
+            client.set_setting("import.mode", "auto")
+            response = client.reassign_manual_import(
+                stored_path,
+                expected_book_id,
+                file_format="ebook",
+            )
+            for _ in range(_REGISTRATION_CORRECTION_POLL_ATTEMPTS):
+                exact_associations = _exact_ebook_associations(stored_path)
+                target_book = client.get_book(expected_book_id)
+                if (
+                    len(exact_associations) == 1
+                    and int(exact_associations[0].get("book_id") or 0)
+                    == expected_book_id
+                    and _book_has_exact_ebook(target_book, stored_path)
+                ):
+                    break
+                time.sleep(_REGISTRATION_CORRECTION_POLL_SECONDS)
+            else:
+                operation_error = (
+                    "Bindery did not confirm the corrected exact-path owner in time."
+                )
+        except (BinderyClientError, sqlite3.Error) as exc:
+            operation_error = str(exc)
+        finally:
+            try:
+                client.set_setting("import.mode", "external")
+                if _bindery_setting(client, "import.mode").casefold() != "external":
+                    restore_error = (
+                        "Bindery did not confirm restoration of external import mode."
+                    )
+            except BinderyClientError as exc:
+                restore_error = str(exc)
+
+        if operation_error or restore_error:
+            parts = [part for part in (operation_error, restore_error) if part]
+            error = (
+                "Registration correction did not complete safely: "
+                + " ".join(parts)
+                + " The durable correction state and both byte copies were retained."
+            )
+            update_ebook_admission(
+                admission_id,
+                "registration_correcting",
+                error=error,
+            )
+            raise AdmissionSafetyError(error)
+
+        # Repeat every byte and ownership check after Bindery reports success.
+        _verified_published_destination(admission, configured)
+        _verified_staged_source(admission)
+        try:
+            final_book = client.get_book(expected_book_id)
+            final_associations = _exact_ebook_associations(stored_path)
+        except (BinderyClientError, sqlite3.Error) as exc:
+            error = f"Corrected ownership could not be independently confirmed: {exc}"
+            update_ebook_admission(
+                admission_id,
+                "registration_correcting",
+                error=error,
+            )
+            raise AdmissionSafetyError(error) from exc
+        if (
+            len(final_associations) != 1
+            or int(final_associations[0].get("book_id") or 0)
+            != expected_book_id
+            or not _book_has_exact_ebook(final_book, stored_path)
+            or _bindery_setting(client, "import.mode").casefold() != "external"
+            or _bindery_setting(client, "autoGrab.enabled").casefold() != "false"
+            or sha256_file(destination) != admission["staged_sha256"]
+            or sha256_file(staged_path) != admission["staged_sha256"]
+        ):
+            error = (
+                "Post-correction safety verification failed; the durable correction "
+                "state was retained for explicit recovery."
+            )
+            update_ebook_admission(
+                admission_id,
+                "registration_correcting",
+                error=error,
+            )
+            raise AdmissionSafetyError(error)
+
+        update_ebook_admission(admission_id, "registered")
+        return {
+            "ok": True,
+            "admissionId": admission_id,
+            "bookId": expected_book_id,
+            "status": "registered",
+            "alreadyCorrected": False,
+            "formerOwner": wrong_owner,
+            "reassignResponse": response,
+            "queueRecordRemoved": queue_item is not None,
+            "removedFromDownloadClient": False,
+            "downloadedDataDeleted": False,
+            "libraryBytesChanged": False,
+            "stagedFileRetained": True,
+            "message": (
+                "Bindery now assigns the exact admitted path to the intended book. "
+                "The coordinator may continue with safe finalization."
+            ),
+        }
+    except AdmissionSafetyError as exc:
+        if correction_started:
+            update_ebook_admission(
+                admission_id,
+                "registration_correcting",
+                error=(
+                    f"{exc} The explicit correction may be safely retried after "
+                    "reviewing this error."
+                ),
+            )
+        raise
+    except (BinderyClientError, sqlite3.Error, OSError) as exc:
+        error = str(exc)
+        if correction_started:
+            update_ebook_admission(
+                admission_id,
+                "registration_correcting",
+                error=(
+                    "Registration correction was interrupted: "
+                    f"{error}. Explicit recovery is required."
+                ),
+            )
+        raise AdmissionSafetyError(error) from exc
+    finally:
+        _admission_lock.release()
 
 
 def admission_history(limit: int = 100) -> dict[str, Any]:

@@ -24,14 +24,27 @@ class FakeClient:
         self.registered_path = ""
         self.scan_requests = 0
         self.scan_error: Exception | None = None
-
-    def get_setting(self, key: str):
-        return {
+        self.setting_values = {
             "import.mode": "external",
             "import.drop_folder": "/data/bookguard-staging",
             "import.drop_layout": "flat",
             "import.drop_link_mode": "copy",
-        }[key]
+            "autoGrab.enabled": "false",
+        }
+        self.setting_updates = []
+        self.queue_items = []
+        self.removed_queue_items = []
+        self.reassignment_preview = None
+        self.reassignment_error: Exception | None = None
+        self.on_reassign = None
+
+    def get_setting(self, key: str):
+        return self.setting_values[key]
+
+    def set_setting(self, key: str, value):
+        self.setting_values[key] = value
+        self.setting_updates.append((key, value))
+        return {"key": key, "value": value}
 
     def get_book(self, book_id: int):
         files = []
@@ -50,6 +63,53 @@ class FakeClient:
         if self.scan_error:
             raise self.scan_error
         return {"message": "library scan started"}
+
+    def list_queue(self):
+        return {"items": list(self.queue_items), "partial": False}
+
+    def remove_queue_item(
+        self,
+        queue_id: int,
+        *,
+        remove_from_client: bool = False,
+        delete_files: bool = False,
+    ):
+        self.removed_queue_items.append(
+            (queue_id, remove_from_client, delete_files)
+        )
+        self.queue_items = [
+            item
+            for item in self.queue_items
+            if int(item.get("id") or 0) != queue_id
+        ]
+
+    def preview_manual_reassignment(
+        self,
+        tracked_path: str,
+        target_book_id: int,
+        *,
+        file_format: str = "ebook",
+    ):
+        return self.reassignment_preview or {
+            "source": tracked_path,
+            "destination": tracked_path,
+            "format": file_format,
+            "status": "noop",
+        }
+
+    def reassign_manual_import(
+        self,
+        tracked_path: str,
+        target_book_id: int,
+        *,
+        file_format: str = "ebook",
+    ):
+        if self.reassignment_error:
+            raise self.reassignment_error
+        if self.on_reassign:
+            self.on_reassign(tracked_path, target_book_id, file_format)
+        self.registered_path = tracked_path
+        return {"id": 9001, "status": "completed"}
 
 
 def _write_epub(path: Path, title: str, author: str, body: str) -> None:
@@ -106,6 +166,7 @@ def admission_setup(tmp_path, monkeypatch):
     monkeypatch.setenv("BOOKGUARD_STAGING_ROOT", str(staging))
     monkeypatch.setenv("BOOKGUARD_BINDERY_DROP_FOLDER", "/data/bookguard-staging")
     monkeypatch.setenv("BOOKGUARD_ADMISSION_ENABLED", "true")
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_REACQUISITION", "true")
     monkeypatch.setenv("BOOKGUARD_ADMISSION_ROOT", str(admission_root))
     monkeypatch.setenv("BOOKGUARD_ADMISSION_BINDERY_ROOT", "/data/media/books")
     monkeypatch.setattr(admission.settings, "allow_actions", True)
@@ -376,6 +437,210 @@ def test_registration_conflict_can_be_explicitly_rechecked_after_correction(
     record = ebook_admission_by_id(response["admissionId"])
     assert record["status"] == "registered"
     assert record["error"] is None
+
+
+def _prepare_registration_correction(
+    admission_setup,
+    monkeypatch,
+    client,
+):
+    setup = admission_setup
+    admitted = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+    admission_id = admitted["admissionId"]
+    update_ebook_admission(
+        admission_id,
+        "registration_conflict",
+        error="wrong owner",
+    )
+    queue_id = 771
+    client.queue_items = [
+        {
+            "id": queue_id,
+            "bookId": setup["result"]["book_id"],
+            "status": "importExternal",
+        }
+    ]
+    owner = {
+        "file_id": 91,
+        "book_id": 77,
+        "format": "ebook",
+        "stored_path": setup["result"]["stored_path"],
+        "title": "A Different Book",
+        "author": "Ann Patchett",
+    }
+    owners = [owner]
+
+    monkeypatch.setattr(
+        admission,
+        "associations_inside_path",
+        lambda stored_path: [dict(item) for item in owners],
+    )
+    monkeypatch.setattr(
+        admission,
+        "result_by_id",
+        lambda result_id: dict(setup["result"]),
+    )
+    monkeypatch.setattr(
+        admission,
+        "ebook_acquisition_by_admission_id",
+        lambda requested_id: {
+            "id": 31,
+            "result_id": setup["result"]["id"],
+            "book_id": setup["result"]["book_id"],
+            "status": "admitted",
+            "queue_id": queue_id,
+            "admission_id": admission_id,
+        },
+    )
+
+    def assign_to_target(tracked_path, target_book_id, file_format):
+        owners[:] = [{
+            **owner,
+            "book_id": target_book_id,
+            "title": setup["result"]["title"],
+        }]
+
+    client.on_reassign = assign_to_target
+    return admission_id, owners, queue_id
+
+
+def test_explicit_registration_correction_changes_only_bindery_ownership(
+    admission_setup,
+    monkeypatch,
+):
+    client = FakeClient()
+    admission_id, owners, queue_id = _prepare_registration_correction(
+        admission_setup,
+        monkeypatch,
+        client,
+    )
+    setup = admission_setup
+    destination = setup["admission_root"] / setup["relative"]
+    staged_before = setup["staged"].read_bytes()
+    destination_before = destination.read_bytes()
+
+    corrected = admission.correct_registration_conflict(admission_id, client)
+
+    assert corrected["status"] == "registered"
+    assert corrected["queueRecordRemoved"] is True
+    assert corrected["removedFromDownloadClient"] is False
+    assert corrected["downloadedDataDeleted"] is False
+    assert corrected["libraryBytesChanged"] is False
+    assert corrected["stagedFileRetained"] is True
+    assert owners[0]["book_id"] == setup["result"]["book_id"]
+    assert client.removed_queue_items == [(queue_id, False, False)]
+    assert client.setting_updates == [
+        ("import.mode", "auto"),
+        ("import.mode", "external"),
+    ]
+    assert client.setting_values["import.mode"] == "external"
+    assert setup["staged"].read_bytes() == staged_before
+    assert destination.read_bytes() == destination_before
+    assert ebook_admission_by_id(admission_id)["status"] == "registered"
+
+
+def test_registration_correction_rejects_non_noop_preview(
+    admission_setup,
+    monkeypatch,
+):
+    client = FakeClient()
+    admission_id, _, queue_id = _prepare_registration_correction(
+        admission_setup,
+        monkeypatch,
+        client,
+    )
+    client.reassignment_preview = {
+        "source": admission_setup["result"]["stored_path"],
+        "destination": "/data/media/books/Somewhere/Else.epub",
+        "format": "ebook",
+        "status": "move",
+    }
+
+    with pytest.raises(
+        admission.AdmissionSafetyError,
+        match="not an exact no-move",
+    ):
+        admission.correct_registration_conflict(admission_id, client)
+
+    assert client.removed_queue_items == []
+    assert client.setting_updates == []
+    assert client.queue_items[0]["id"] == queue_id
+    assert ebook_admission_by_id(admission_id)["status"] == "registration_conflict"
+
+
+def test_interrupted_registration_correction_is_durable_and_resumable(
+    admission_setup,
+    monkeypatch,
+):
+    client = FakeClient()
+    admission_id, owners, queue_id = _prepare_registration_correction(
+        admission_setup,
+        monkeypatch,
+        client,
+    )
+    client.reassignment_error = admission.BinderyClientError("simulated outage")
+
+    with pytest.raises(
+        admission.AdmissionSafetyError,
+        match="did not complete safely",
+    ):
+        admission.correct_registration_conflict(admission_id, client)
+
+    interrupted = ebook_admission_by_id(admission_id)
+    assert interrupted["status"] == "registration_correcting"
+    assert "retained" in interrupted["error"]
+    assert client.removed_queue_items == [(queue_id, False, False)]
+    assert client.queue_items == []
+    assert client.setting_values["import.mode"] == "external"
+    assert owners[0]["book_id"] == 77
+
+    # Simulate a hard interruption after the temporary mode change. A retry
+    # first restores external mode, then safely resumes with the known queue
+    # record already absent.
+    client.setting_values["import.mode"] = "auto"
+    client.reassignment_error = None
+    corrected = admission.correct_registration_conflict(admission_id, client)
+
+    assert corrected["status"] == "registered"
+    assert corrected["queueRecordRemoved"] is False
+    assert client.setting_values["import.mode"] == "external"
+    assert owners[0]["book_id"] == admission_setup["result"]["book_id"]
+    assert ebook_admission_by_id(admission_id)["status"] == "registered"
+
+
+def test_completed_reassignment_recovery_only_restores_mode_and_audit_state(
+    admission_setup,
+    monkeypatch,
+):
+    client = FakeClient()
+    admission_id, owners, _ = _prepare_registration_correction(
+        admission_setup,
+        monkeypatch,
+        client,
+    )
+    stored_path = admission_setup["result"]["stored_path"]
+    target_book_id = admission_setup["result"]["book_id"]
+    owners[0]["book_id"] = target_book_id
+    owners[0]["title"] = admission_setup["result"]["title"]
+    client.registered_path = stored_path
+    client.queue_items = []
+    client.setting_values["import.mode"] = "auto"
+    update_ebook_admission(
+        admission_id,
+        "registration_correcting",
+        error="simulated interruption after reassignment",
+    )
+
+    recovered = admission.correct_registration_conflict(admission_id, client)
+
+    assert recovered["alreadyCorrected"] is True
+    assert recovered["queueRecordRemoved"] is False
+    assert client.setting_updates == [("import.mode", "external")]
+    assert ebook_admission_by_id(admission_id)["status"] == "registered"
 
 
 def test_reconcile_does_not_scan_when_path_ownership_is_unavailable(

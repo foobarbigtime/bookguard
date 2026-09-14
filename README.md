@@ -49,6 +49,7 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - An opt-in supervised coordinator that resumes operator-started work after restart and pauses for explicit admission.
 - A Triage-page replacement workflow for guarded preparation, candidate choice, progress, explicit admission, and finalization.
 - Exact-path registration-conflict detection that stops scan loops when Bindery assigns an admitted ebook to the wrong book.
+- Explicit, guarded exact-path Bindery association correction with durable interrupted-operation recovery.
 
 Unattended candidate selection remains disabled. Controlled acquisition and direct admission are separate opt-ins with separate confirmations. Admission repeats verification on a private copied snapshot at its own mutation boundary; a prior `safeToAdmit` response is never treated as authorization.
 
@@ -61,6 +62,7 @@ GET  /api/automatic/admission-readiness
 GET  /api/automatic/admissions
 POST /api/automatic/results/{result_id}/admit-staged-ebook
 POST /api/automatic/admissions/{admission_id}/reconcile
+POST /api/automatic/admissions/{admission_id}/correct-registration
 GET  /api/automatic/acquisition-readiness
 GET  /api/automatic/acquisitions
 GET  /api/automatic/acquisition-coordinator
@@ -287,8 +289,15 @@ Before requesting any follow-up library scan, reconciliation checks Bindery's
 read-only database for the exact admitted path. If a different book owns that
 path, the admission enters durable `registration_conflict` state, the
 coordinator stops polling it, and no additional scan is requested. Triage shows
-the conflicting state and provides an explicit recheck after the association is
-corrected; library and staged bytes remain untouched throughout.
+the conflicting state and offers either a recheck after an external correction
+or a separately confirmed guarded correction. The guarded correction repeats
+the library and staging hashes, intended-book identity, exact wrong owner,
+complete queue, disabled auto-grab, and Bindery no-move preview checks. It removes
+only the linked queue record with client and file deletion disabled, temporarily
+uses Bindery's manual reassignment operation, and restores external import mode.
+Library and staged bytes are never moved or deleted. An interruption remains in
+durable `registration_correcting` state; the coordinator pauses and only another
+explicit operator request may resume it.
 
 ## Metadata repair philosophy
 

@@ -150,6 +150,14 @@ class BinderyClient:
             return payload.get("value")
         return payload
 
+    def set_setting(self, key: str, value: Any) -> Any:
+        """Change one named Bindery setting through its public API."""
+        return self._request(
+            "PUT",
+            f"/setting/{quote(str(key), safe='')}",
+            json={"value": value},
+        )
+
     def get_book(self, book_id: int) -> dict[str, Any]:
         return self._request("GET", f"/book/{int(book_id)}")
 
@@ -159,6 +167,42 @@ class BinderyClient:
     def scan_library(self) -> dict[str, Any] | None:
         """Ask Bindery to reconcile files already placed in its library roots."""
         return self._request("POST", "/library/scan")
+
+    def preview_manual_reassignment(
+        self,
+        tracked_path: str,
+        target_book_id: int,
+        *,
+        file_format: str = "ebook",
+    ) -> dict[str, Any]:
+        """Preview one exact manual-import reassignment without changing it."""
+        return self._request(
+            "GET",
+            "/queue/manual-import/reassign/preview",
+            params={
+                "path": tracked_path,
+                "targetBookId": int(target_book_id),
+                "format": file_format,
+            },
+        )
+
+    def reassign_manual_import(
+        self,
+        tracked_path: str,
+        target_book_id: int,
+        *,
+        file_format: str = "ebook",
+    ) -> dict[str, Any]:
+        """Reassign one exact imported path to an explicitly selected book."""
+        return self._request(
+            "POST",
+            "/queue/manual-import/reassign",
+            json={
+                "path": tracked_path,
+                "targetBookId": int(target_book_id),
+                "format": file_format,
+            },
+        )
 
     def list_queue(self) -> dict[str, Any] | list[dict[str, Any]]:
         """Return Bindery's complete queue response for guarded correlation."""

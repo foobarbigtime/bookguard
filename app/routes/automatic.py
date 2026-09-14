@@ -18,6 +18,7 @@ from ..admission import (
     admission_history,
     admission_readiness,
     admit_staged_ebook,
+    correct_registration_conflict,
     reconcile_admission,
 )
 from ..automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
@@ -196,6 +197,19 @@ def api_automatic_reconcile_admission(
     require_confirmation(payload, "RECONCILE_ADMISSION")
     try:
         return reconcile_admission(admission_id)
+    except AdmissionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/admissions/{admission_id}/correct-registration")
+def api_automatic_correct_registration(
+    admission_id: int,
+    payload: ConfirmationRequest,
+):
+    """Explicitly correct one proven exact-path Bindery ownership conflict."""
+    require_confirmation(payload, "CORRECT_BINDERY_REGISTRATION")
+    try:
+        return correct_registration_conflict(admission_id)
     except AdmissionSafetyError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 

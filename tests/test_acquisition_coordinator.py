@@ -224,6 +224,44 @@ def test_coordinator_stops_on_existing_registration_conflict(monkeypatch):
     assert "book #77" in status["lastError"]
 
 
+def test_coordinator_never_resumes_explicit_registration_correction(monkeypatch):
+    worker = coordinator_module.SupervisedAcquisitionCoordinator()
+    monkeypatch.setattr(
+        coordinator_module,
+        "load_automation_settings",
+        lambda: _configured(),
+    )
+    monkeypatch.setattr(coordinator_module.settings, "allow_actions", True)
+    monkeypatch.setattr(
+        coordinator_module,
+        "active_ebook_acquisitions",
+        lambda: [_acquisition("admitted", admission_id=91)],
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "ebook_admission_by_id",
+        lambda admission_id: {
+            "id": admission_id,
+            "status": "registration_correcting",
+            "error": "Explicit recovery is required.",
+        },
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "reconcile_admission",
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("explicit correction resumed automatically")
+        ),
+    )
+
+    status = worker.run_once(object())
+
+    assert status["state"] == "attention_required"
+    assert status["action"] is None
+    assert status["blockers"] == ["registrationCorrectionInterrupted"]
+    assert "Explicit recovery" in status["lastError"]
+
+
 def test_coordinator_surfaces_new_registration_conflict(monkeypatch):
     worker = coordinator_module.SupervisedAcquisitionCoordinator()
     monkeypatch.setattr(

@@ -680,6 +680,24 @@ def ebook_acquisition_by_id(acquisition_id: int) -> dict | None:
     return _decode_ebook_acquisition(row) if row else None
 
 
+def ebook_acquisition_by_admission_id(admission_id: int) -> dict | None:
+    with local_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM ebook_acquisitions
+            WHERE admission_id=?
+            ORDER BY id DESC
+            LIMIT 2
+            """,
+            (admission_id,),
+        ).fetchall()
+    if len(rows) > 1:
+        raise sqlite3.IntegrityError(
+            "Multiple ebook acquisitions reference the same admission."
+        )
+    return _decode_ebook_acquisition(rows[0]) if rows else None
+
+
 def recent_ebook_acquisitions(limit: int = 100) -> list[dict]:
     with local_conn() as conn:
         rows = conn.execute(

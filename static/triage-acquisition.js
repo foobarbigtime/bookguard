@@ -50,6 +50,7 @@
     coordinatorEnabled: "the supervised coordinator is disabled",
     explicitAdmissionRequired: "explicit admission approval is required",
     registrationConflict: "Bindery assigned the admitted path to a different book",
+    registrationCorrectionInterrupted: "an explicit Bindery association correction must be resumed",
   };
 
   const panel = document.getElementById("acquisitionPanel");
@@ -193,6 +194,28 @@
     });
   }
 
+  async function correctRegistration(acquisition, button) {
+    const confirmed = window.confirm(
+      "Correct this exact Bindery ebook association?\n\n" +
+      "BookGuard will recheck both byte copies, the intended book, the current " +
+      "wrong owner, and the exact queue record. It will remove only that queue " +
+      "record without deleting download-client data, temporarily use Bindery's " +
+      "manual reassignment operation, then restore external import mode. No " +
+      "library or staged bytes will be moved or deleted."
+    );
+    if (!confirmed) return;
+    await runOperation(button, async () => {
+      await requestJson(
+        `/api/automatic/admissions/${acquisition.admission_id}/correct-registration`,
+        {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({confirm: "CORRECT_BINDERY_REGISTRATION"}),
+        },
+      );
+    });
+  }
+
   async function finalizeAcquisition(acquisition, button) {
     const confirmed = window.confirm(
       "Finalize this registered acquisition?\n\n" +
@@ -261,15 +284,19 @@
       (item) => Number(item.id) === Number(acquisition.admission_id),
     );
     const registrationConflict = admission?.status === "registration_conflict";
-    if (registrationConflict) {
+    const registrationCorrecting = admission?.status === "registration_correcting";
+    const registrationAttention = registrationConflict || registrationCorrecting;
+    if (registrationAttention) {
       showError(
         errorBox,
         admission.error || coordinator.lastError ||
-          "Bindery assigned the admitted path to a different book.",
+          (registrationCorrecting
+            ? "An interrupted Bindery association correction must be resumed explicitly."
+            : "Bindery assigned the admitted path to a different book."),
       );
     }
     const needsReview = status === "review_required" || status === "failed";
-    const tone = registrationConflict
+    const tone = registrationAttention
       ? "review"
       : status === "verified"
       ? "ready"
@@ -279,9 +306,18 @@
       ? "complete"
       : "active";
 
-    setState(registrationConflict ? "Registration conflict" : pretty(status), tone);
-    message.textContent = registrationConflict
-      ? "BookGuard stopped registration scans because Bindery assigned the exact admitted path to another book. Correct that association, then recheck it here."
+    setState(
+      registrationCorrecting
+        ? "Correction requires attention"
+        : registrationConflict
+        ? "Registration conflict"
+        : pretty(status),
+      tone,
+    );
+    message.textContent = registrationCorrecting
+      ? "BookGuard retained a durable interrupted-correction state. Resume the same guarded operation; the coordinator will not do this automatically."
+      : registrationConflict
+      ? "BookGuard stopped registration scans because Bindery assigned the exact admitted path to another book. Correct that association here or in Bindery, then recheck it."
       : status === "verified"
       ? "The staged ebook independently verified. BookGuard is paused for your explicit admission approval."
       : coordinator.enabled
@@ -303,9 +339,22 @@
       const button = actionButton("Admit verified ebook", () => admitAcquisition(acquisition, button), "primary");
       controls.append(button);
     }
-    if (status === "admitted" && registrationConflict) {
-      const button = actionButton("Recheck corrected association", () => reconcileAdmission(acquisition, button));
-      controls.append(button);
+    if (status === "admitted" && registrationAttention) {
+      const correction = actionButton(
+        registrationCorrecting
+          ? "Resume guarded association correction"
+          : "Correct Bindery association",
+        () => correctRegistration(acquisition, correction),
+        "primary",
+      );
+      controls.append(correction);
+      if (registrationConflict) {
+        const recheck = actionButton(
+          "Recheck external correction",
+          () => reconcileAdmission(acquisition, recheck),
+        );
+        controls.append(recheck);
+      }
     } else if (status === "admitted" && !coordinator.enabled && admission?.status !== "registered") {
       const button = actionButton("Check Bindery registration", () => reconcileAdmission(acquisition, button));
       controls.append(button);
@@ -319,7 +368,7 @@
       controls.append(button);
     }
     controls.append(actionButton("Refresh status", refreshWorkflow));
-    if (!registrationConflict) scheduleRefresh(true);
+    if (!registrationAttention) scheduleRefresh(true);
   }
 
   async function refreshWorkflow() {
