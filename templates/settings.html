@@ -85,6 +85,7 @@
           <div class="field checks-stack span-2 option-panel">
             <span>Deterministic ebook safety checks (recommended)</span>
             <label class="check-field"><input name="verification_file_signatures" type="checkbox" {% if settings.verification_file_signatures %}checked{% endif %}><span>Verify the file signature matches its extension</span></label>
+            <label class="check-field"><input name="verification_archive_safety" type="checkbox" {% if settings.verification_archive_safety %}checked{% endif %}><span>Reject unsafe archive paths, links, encryption, and expansion</span></label>
             <label class="check-field"><input name="verification_epub_structure" type="checkbox" {% if settings.verification_epub_structure %}checked{% endif %}><span>Validate EPUB package structure and ZIP integrity</span></label>
             <label class="check-field"><input name="verification_pdf_integrity" type="checkbox" {% if settings.verification_pdf_integrity %}checked{% endif %}><span>Validate PDF structure and page tree</span></label>
             <small>These checks are read-only, enabled by default, and block unsafe or corrupt files from verified admission.</small>
@@ -157,6 +158,7 @@ const booleanFields = [
   "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
   "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
   "verification_enabled", "verification_use_tika", "verification_file_signatures",
+  "verification_archive_safety",
   "verification_epub_structure", "verification_pdf_integrity",
   "repair_audiobooks", "repair_ebooks", "repair_normalize_pass", "repair_audio_album",
   "repair_audio_album_artist", "repair_audio_genre", "clear_api_key"

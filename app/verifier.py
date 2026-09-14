@@ -142,6 +142,7 @@ def _verification_signature(result: dict, target_path: str, fingerprint: str) ->
         {
             "enabled": settings.verification_enabled,
             "fileSignatures": settings.verification_file_signatures,
+            "archiveSafety": settings.verification_archive_safety,
             "epubStructure": settings.verification_epub_structure,
             "pdfIntegrity": settings.verification_pdf_integrity,
             "maxTextChars": settings.verification_max_text_chars,
@@ -276,6 +277,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
     security = inspect_ebook_security(
         path,
         check_file_signatures=settings.verification_file_signatures,
+        check_archive_safety=settings.verification_archive_safety,
         check_epub_structure=settings.verification_epub_structure,
         check_pdf_integrity=settings.verification_pdf_integrity,
     )

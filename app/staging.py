@@ -131,6 +131,7 @@ def verify_ebook_file(
     security = inspect_ebook_security(
         path,
         check_file_signatures=settings.verification_file_signatures,
+        check_archive_safety=settings.verification_archive_safety,
         check_epub_structure=settings.verification_epub_structure,
         check_pdf_integrity=settings.verification_pdf_integrity,
     )

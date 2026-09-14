@@ -105,6 +105,7 @@ def test_settings_clamp_and_lists():
         "verification_enabled": True,
         "verification_use_tika": True,
         "verification_file_signatures": False,
+        "verification_archive_safety": False,
         "verification_epub_structure": False,
         "verification_pdf_integrity": False,
         "verification_tika_url": "http://tika:9998/",
@@ -123,6 +124,7 @@ def test_settings_clamp_and_lists():
     assert cfg.verification_enabled is True
     assert cfg.verification_use_tika is True
     assert cfg.verification_file_signatures is False
+    assert cfg.verification_archive_safety is False
     assert cfg.verification_epub_structure is False
     assert cfg.verification_pdf_integrity is False
     assert cfg.verification_tika_url == "http://tika:9998"

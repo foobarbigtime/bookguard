@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 TEMPLATE = Path("templates/triage.html").read_text(encoding="utf-8")
+SETTINGS_TEMPLATE = Path("templates/settings.html").read_text(encoding="utf-8")
 CONTROLLER = Path("static/triage-acquisition.js").read_text(encoding="utf-8")
 
 
@@ -27,6 +28,7 @@ def test_triage_surfaces_deterministic_security_results():
     assert "verdict === 'UNSAFE_FILE'" in TEMPLATE
     assert "Unsafe files:" in TEMPLATE
     assert "Deterministic security" in TEMPLATE
+    assert 'name="verification_archive_safety"' in SETTINGS_TEMPLATE
 
 
 def test_controller_uses_existing_guarded_lifecycle_endpoints():

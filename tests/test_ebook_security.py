@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import zipfile
+import stat
 
 from pypdf import PdfWriter
 
+import app.ebook_security as ebook_security
 from app.ebook_security import inspect_ebook_security
 
 
@@ -49,6 +51,7 @@ def test_valid_epub_passes_signature_and_structure(tmp_path):
     assert report["readOnly"] is True
     assert report["failures"] == []
     assert report["checks"]["fileSignature"]["status"] == "passed"
+    assert report["checks"]["archiveSafety"]["status"] == "passed"
     assert report["checks"]["epubStructure"]["status"] == "passed"
     assert report["checks"]["pdfIntegrity"]["status"] == "not_applicable"
 
@@ -113,6 +116,88 @@ def test_plain_text_signature_is_explicitly_not_applicable(tmp_path):
     assert report["checks"]["fileSignature"]["status"] == "not_applicable"
 
 
+def test_archive_path_traversal_fails_closed(tmp_path):
+    path = tmp_path / "traversal.cbz"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("../outside.txt", "unsafe")
+
+    report = inspect_ebook_security(path)
+
+    assert report["safe"] is False
+    assert report["checks"]["archiveSafety"]["status"] == "failed"
+    assert "unsafe member path" in report["checks"]["archiveSafety"]["message"]
+
+
+def test_archive_case_collision_fails_closed(tmp_path):
+    path = tmp_path / "collision.cbz"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("Images/Page01.jpg", "one")
+        archive.writestr("images/page01.JPG", "two")
+
+    report = inspect_ebook_security(path)
+
+    assert report["safe"] is False
+    assert "case-colliding" in report["checks"]["archiveSafety"]["message"]
+
+
+def test_archive_symlink_member_fails_closed(tmp_path):
+    path = tmp_path / "link.cbz"
+    link = zipfile.ZipInfo("page-link")
+    link.create_system = 3
+    link.external_attr = (stat.S_IFLNK | 0o777) << 16
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(link, "target")
+
+    report = inspect_ebook_security(path)
+
+    assert report["safe"] is False
+    assert "symbolic-link" in report["checks"]["archiveSafety"]["message"]
+
+
+def test_archive_encrypted_member_fails_closed(tmp_path):
+    path = tmp_path / "encrypted.cbz"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("page.txt", "content")
+
+    raw = bytearray(path.read_bytes())
+    local_header = raw.index(b"PK\x03\x04")
+    central_header = raw.index(b"PK\x01\x02")
+    raw[local_header + 6] |= 0x01
+    raw[central_header + 8] |= 0x01
+    path.write_bytes(raw)
+
+    report = inspect_ebook_security(path)
+
+    assert report["safe"] is False
+    assert "encrypted member" in report["checks"]["archiveSafety"]["message"]
+
+
+def test_archive_member_limit_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(ebook_security, "MAX_ARCHIVE_MEMBERS", 1)
+    path = tmp_path / "many.cbz"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("one.txt", "one")
+        archive.writestr("two.txt", "two")
+
+    report = inspect_ebook_security(path)
+
+    assert report["safe"] is False
+    assert "members; the limit" in report["checks"]["archiveSafety"]["message"]
+
+
+def test_dangerous_member_expansion_ratio_fails_before_extraction(tmp_path, monkeypatch):
+    monkeypatch.setattr(ebook_security, "MIN_RATIO_CHECK_BYTES", 1)
+    monkeypatch.setattr(ebook_security, "MAX_ARCHIVE_MEMBER_RATIO", 2)
+    path = tmp_path / "expansion.cbz"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("page.txt", b"0" * 4096)
+
+    report = inspect_ebook_security(path)
+
+    assert report["safe"] is False
+    assert "expansion ratio" in report["checks"]["archiveSafety"]["message"]
+
+
 def test_checks_can_be_explicitly_disabled(tmp_path):
     path = tmp_path / "broken.epub"
     path.write_bytes(b"not an epub")
@@ -120,9 +205,11 @@ def test_checks_can_be_explicitly_disabled(tmp_path):
     report = inspect_ebook_security(
         path,
         check_file_signatures=False,
+        check_archive_safety=False,
         check_epub_structure=False,
     )
 
     assert report["safe"] is True
     assert report["checks"]["fileSignature"]["status"] == "disabled"
+    assert report["checks"]["archiveSafety"]["status"] == "disabled"
     assert report["checks"]["epubStructure"]["status"] == "disabled"

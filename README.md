@@ -42,6 +42,7 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - A fail-closed external-import readiness gate with a dedicated staging mount outside the library and quarantine roots.
 - Read-only staged ebook inventory and staged-byte verification against one explicit Bindery book.
 - SHA-256 and file-stat stability checks across verification.
+- Default-on archive safety checks before EPUB/CBZ extraction.
 - A staged file is marked `safeToAdmit` only for a stable `VERIFIED_CORRECT` result at 99% confidence.
 - Opt-in direct ebook admission to the exact former Bindery path, followed by Bindery library reconciliation.
 - Snapshot verification on the destination filesystem, atomic no-overwrite publication, and durable recovery state.
@@ -367,6 +368,7 @@ Most behavior can be changed at `/settings` and is persisted in `/config/bookgua
 Verification and security settings include three default-on, read-only checks:
 
 - the file signature must match the ebook extension when the format has a fixed signature
+- EPUB/CBZ archives reject traversal paths, symlinks, encryption, duplicate or case-colliding names, excessive member counts and sizes, and dangerous expansion ratios
 - EPUB files must pass ZIP CRC, mimetype, container, package, manifest, and spine validation
 - PDF files must have a valid header, cross-reference structure, page tree, and EOF marker
 
