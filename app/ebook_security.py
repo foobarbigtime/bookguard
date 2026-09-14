@@ -209,8 +209,17 @@ def _epub_structure_check(path: Path, suffix: str, enabled: bool) -> dict[str, A
             if "mimetype" not in name_set:
                 raise ValueError("the required mimetype file is absent")
             mimetype_info = archive.getinfo("mimetype")
-            if archive.read("mimetype") != b"application/epub+zip":
-                raise ValueError("the mimetype file is not application/epub+zip")
+            expected_mimetype = b"application/epub+zip"
+            mimetype_value = archive.read("mimetype")
+            if mimetype_value != expected_mimetype:
+                normalized_mimetype = mimetype_value.removeprefix(b"\xef\xbb\xbf").strip(
+                    b" \t\r\n\v\f"
+                )
+                if normalized_mimetype != expected_mimetype:
+                    raise ValueError("the mimetype file is not application/epub+zip")
+                warnings.append(
+                    "The mimetype file contains a UTF-8 BOM or surrounding ASCII whitespace."
+                )
             if names[0] != "mimetype":
                 warnings.append("The mimetype file is not the first archive member.")
             if mimetype_info.compress_type != zipfile.ZIP_STORED:
