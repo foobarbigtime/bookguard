@@ -49,6 +49,7 @@
     noActiveAcquisition: "another BookGuard acquisition is active",
     coordinatorEnabled: "the supervised coordinator is disabled",
     explicitAdmissionRequired: "explicit admission approval is required",
+    registrationConflict: "Bindery assigned the admitted path to a different book",
   };
 
   const panel = document.getElementById("acquisitionPanel");
@@ -259,8 +260,18 @@
     const admission = (admissions.items || []).find(
       (item) => Number(item.id) === Number(acquisition.admission_id),
     );
+    const registrationConflict = admission?.status === "registration_conflict";
+    if (registrationConflict) {
+      showError(
+        errorBox,
+        admission.error || coordinator.lastError ||
+          "Bindery assigned the admitted path to a different book.",
+      );
+    }
     const needsReview = status === "review_required" || status === "failed";
-    const tone = status === "verified"
+    const tone = registrationConflict
+      ? "review"
+      : status === "verified"
       ? "ready"
       : needsReview
       ? "review"
@@ -268,8 +279,10 @@
       ? "complete"
       : "active";
 
-    setState(pretty(status), tone);
-    message.textContent = status === "verified"
+    setState(registrationConflict ? "Registration conflict" : pretty(status), tone);
+    message.textContent = registrationConflict
+      ? "BookGuard stopped registration scans because Bindery assigned the exact admitted path to another book. Correct that association, then recheck it here."
+      : status === "verified"
       ? "The staged ebook independently verified. BookGuard is paused for your explicit admission approval."
       : coordinator.enabled
       ? "The supervised coordinator is monitoring this operator-started replacement."
@@ -290,7 +303,10 @@
       const button = actionButton("Admit verified ebook", () => admitAcquisition(acquisition, button), "primary");
       controls.append(button);
     }
-    if (status === "admitted" && !coordinator.enabled && admission?.status !== "registered") {
+    if (status === "admitted" && registrationConflict) {
+      const button = actionButton("Recheck corrected association", () => reconcileAdmission(acquisition, button));
+      controls.append(button);
+    } else if (status === "admitted" && !coordinator.enabled && admission?.status !== "registered") {
       const button = actionButton("Check Bindery registration", () => reconcileAdmission(acquisition, button));
       controls.append(button);
     }
@@ -303,7 +319,7 @@
       controls.append(button);
     }
     controls.append(actionButton("Refresh status", refreshWorkflow));
-    scheduleRefresh(true);
+    if (!registrationConflict) scheduleRefresh(true);
   }
 
   async function refreshWorkflow() {

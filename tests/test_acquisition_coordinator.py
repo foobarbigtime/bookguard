@@ -188,6 +188,78 @@ def test_coordinator_waits_when_registration_is_not_complete(monkeypatch):
     assert status["action"] == "reconcile_admission"
 
 
+def test_coordinator_stops_on_existing_registration_conflict(monkeypatch):
+    worker = coordinator_module.SupervisedAcquisitionCoordinator()
+    monkeypatch.setattr(
+        coordinator_module,
+        "load_automation_settings",
+        lambda: _configured(),
+    )
+    monkeypatch.setattr(coordinator_module.settings, "allow_actions", True)
+    monkeypatch.setattr(
+        coordinator_module,
+        "active_ebook_acquisitions",
+        lambda: [_acquisition("admitted", admission_id=91)],
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "ebook_admission_by_id",
+        lambda admission_id: {
+            "id": admission_id,
+            "status": "registration_conflict",
+            "error": "Bindery assigned the path to book #77.",
+        },
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "reconcile_admission",
+        lambda *args: (_ for _ in ()).throw(AssertionError("scan loop resumed")),
+    )
+
+    status = worker.run_once(object())
+
+    assert status["state"] == "attention_required"
+    assert status["action"] is None
+    assert status["blockers"] == ["registrationConflict"]
+    assert "book #77" in status["lastError"]
+
+
+def test_coordinator_surfaces_new_registration_conflict(monkeypatch):
+    worker = coordinator_module.SupervisedAcquisitionCoordinator()
+    monkeypatch.setattr(
+        coordinator_module,
+        "load_automation_settings",
+        lambda: _configured(),
+    )
+    monkeypatch.setattr(coordinator_module.settings, "allow_actions", True)
+    monkeypatch.setattr(
+        coordinator_module,
+        "active_ebook_acquisitions",
+        lambda: [_acquisition("admitted", admission_id=91)],
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "ebook_admission_by_id",
+        lambda admission_id: {"id": admission_id, "status": "scan_requested"},
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "reconcile_admission",
+        lambda admission_id, client: {
+            "registered": False,
+            "status": "registration_conflict",
+            "message": "Bindery assigned the path to book #77.",
+        },
+    )
+
+    status = worker.run_once(object())
+
+    assert status["state"] == "attention_required"
+    assert status["action"] == "reconcile_admission"
+    assert status["blockers"] == ["registrationConflict"]
+    assert "book #77" in status["lastError"]
+
+
 def test_coordinator_fails_closed_for_multiple_active_acquisitions(monkeypatch):
     worker = coordinator_module.SupervisedAcquisitionCoordinator()
     monkeypatch.setattr(

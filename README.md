@@ -48,6 +48,7 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - One-at-a-time, explicitly selected Bindery acquisition with durable queue and staged-verification state.
 - An opt-in supervised coordinator that resumes operator-started work after restart and pauses for explicit admission.
 - A Triage-page replacement workflow for guarded preparation, candidate choice, progress, explicit admission, and finalization.
+- Exact-path registration-conflict detection that stops scan loops when Bindery assigns an admitted ebook to the wrong book.
 
 Unattended candidate selection remains disabled. Controlled acquisition and direct admission are separate opt-ins with separate confirmations. Admission repeats verification on a private copied snapshot at its own mutation boundary; a prior `safeToAdmit` response is never treated as authorization.
 
@@ -281,6 +282,13 @@ An explicitly finalized historical record may also adopt cleanup that an
 operator already completed, but only after proving the registered library hash,
 complete queue response, absent exact queue record, and safely absent staged
 path; that recovery changes the audit status only.
+
+Before requesting any follow-up library scan, reconciliation checks Bindery's
+read-only database for the exact admitted path. If a different book owns that
+path, the admission enters durable `registration_conflict` state, the
+coordinator stops polling it, and no additional scan is requested. Triage shows
+the conflicting state and provides an explicit recheck after the association is
+corrected; library and staged bytes remain untouched throughout.
 
 ## Metadata repair philosophy
 
