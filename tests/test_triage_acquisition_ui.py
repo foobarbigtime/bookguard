@@ -60,6 +60,13 @@ def test_review_required_workflow_offers_explicit_verification_retry():
     assert "Retry staged verification" in CONTROLLER
 
 
+def test_registration_conflict_is_visible_and_requires_explicit_recheck():
+    assert 'admission?.status === "registration_conflict"' in CONTROLLER
+    assert 'setState(registrationConflict ? "Registration conflict"' in CONTROLLER
+    assert "Recheck corrected association" in CONTROLLER
+    assert "if (!registrationConflict) scheduleRefresh(true)" in CONTROLLER
+
+
 def test_preflight_displays_separate_writable_action_alias():
     assert "Writable action alias" in CONTROLLER
     assert "ebookActionReady" in CONTROLLER

@@ -5,6 +5,7 @@ import errno
 import hashlib
 import os
 from pathlib import Path
+import sqlite3
 import stat
 import tempfile
 import threading
@@ -13,6 +14,7 @@ from typing import Any
 from .bindery_client import BinderyClient, BinderyClientError
 from .config import ConfigurationError, load_automation_settings, settings
 from .db import (
+    associations_inside_path,
     create_ebook_admission,
     ebook_admission_by_id,
     recent_ebook_admissions,
@@ -44,7 +46,13 @@ class PublishedSnapshotError(RuntimeError):
 
 
 _admission_lock = threading.Lock()
-_RECONCILABLE_STATUSES = {"verified", "published", "scan_requested", "registered"}
+_RECONCILABLE_STATUSES = {
+    "verified",
+    "published",
+    "scan_requested",
+    "registration_conflict",
+    "registered",
+}
 _BINDERY_SETTING_DEFAULTS = {
     "import.mode": "auto",
     "import.drop_folder": "",
@@ -656,6 +664,57 @@ def reconcile_admission(
     if registered:
         update_ebook_admission(admission_id, "registered")
     else:
+        expected_path = os.path.normpath(str(admission["stored_path"]))
+        expected_book_id = int(admission["book_id"])
+        try:
+            exact_associations = [
+                item
+                for item in associations_inside_path(str(admission["stored_path"]))
+                if str(item.get("format") or "").casefold() == "ebook"
+                and os.path.normpath(str(item.get("stored_path") or ""))
+                == expected_path
+            ]
+        except sqlite3.Error as exc:
+            raise AdmissionSafetyError(
+                "Bindery path ownership could not be confirmed; no library scan "
+                "was requested."
+            ) from exc
+
+        conflicting_associations = [
+            item
+            for item in exact_associations
+            if int(item.get("book_id") or 0) != expected_book_id
+        ]
+        if conflicting_associations:
+            owners = ", ".join(
+                f"book #{int(item.get('book_id') or 0)} "
+                f"({str(item.get('title') or 'unknown title')})"
+                for item in conflicting_associations
+            )
+            error = (
+                "Bindery registered the admitted ebook path to the wrong book: "
+                f"{owners}. No additional library scan was requested. Correct "
+                "the exact Bindery association, then explicitly recheck registration."
+            )
+            update_ebook_admission(
+                admission_id,
+                "registration_conflict",
+                error=error,
+            )
+            return {
+                "admissionId": admission_id,
+                "bookId": expected_book_id,
+                "registered": False,
+                "status": "registration_conflict",
+                "scanRequested": False,
+                "registrationConflict": {
+                    "expectedBookId": expected_book_id,
+                    "storedPath": str(admission["stored_path"]),
+                    "associations": conflicting_associations,
+                },
+                "stagingRetained": True,
+                "message": error,
+            }
         try:
             client.scan_library()
         except BinderyClientError as exc:
@@ -668,6 +727,8 @@ def reconcile_admission(
         "bookId": int(admission["book_id"]),
         "registered": registered,
         "status": "registered" if registered else "scan_requested",
+        "scanRequested": not registered,
+        "registrationConflict": None,
         "stagingRetained": True,
         "message": (
             "Bindery registration is confirmed; the staged source remains available for manual cleanup."

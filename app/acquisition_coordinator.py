@@ -274,9 +274,33 @@ class SupervisedAcquisitionCoordinator:
                     raise AcquisitionSafetyError(
                         "The admitted acquisition has no linked admission record."
                     )
-                if str(admission.get("status") or "") != "registered":
+                admission_status = str(admission.get("status") or "")
+                if admission_status == "registration_conflict":
+                    return self._replace_status(
+                        enabled=True,
+                        state="attention_required",
+                        action=None,
+                        acquisition=summary,
+                        blockers=["registrationConflict"],
+                        lastRunAt=now,
+                        lastError=(
+                            str(admission.get("error") or "")
+                            or "Bindery assigned the admitted path to a different book."
+                        ),
+                    )
+                if admission_status != "registered":
                     response = reconcile_admission(int(admission_id), client)
                     if not response.get("registered"):
+                        if response.get("status") == "registration_conflict":
+                            return self._replace_status(
+                                enabled=True,
+                                state="attention_required",
+                                action="reconcile_admission",
+                                acquisition=summary,
+                                blockers=["registrationConflict"],
+                                lastRunAt=now,
+                                lastError=str(response.get("message") or ""),
+                            )
                         return self._replace_status(
                             enabled=True,
                             state="awaiting_registration",

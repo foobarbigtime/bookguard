@@ -308,6 +308,105 @@ def test_reconcile_confirms_exact_bindery_path(admission_setup):
     assert ebook_admission_by_id(response["admissionId"])["status"] == "registered"
 
 
+def test_reconcile_stops_when_exact_path_belongs_to_wrong_book(
+    admission_setup,
+    monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+    scans_before_reconcile = client.scan_requests
+    monkeypatch.setattr(
+        admission,
+        "associations_inside_path",
+        lambda stored_path: [
+            {
+                "file_id": 91,
+                "book_id": 77,
+                "format": "ebook",
+                "stored_path": stored_path,
+                "title": "A Different Book",
+                "author": "Ann Patchett",
+            }
+        ],
+    )
+
+    reconciled = admission.reconcile_admission(response["admissionId"], client)
+
+    assert reconciled["registered"] is False
+    assert reconciled["status"] == "registration_conflict"
+    assert reconciled["scanRequested"] is False
+    assert reconciled["registrationConflict"]["expectedBookId"] == 42
+    assert reconciled["registrationConflict"]["associations"][0]["book_id"] == 77
+    assert client.scan_requests == scans_before_reconcile
+    record = ebook_admission_by_id(response["admissionId"])
+    assert record["status"] == "registration_conflict"
+    assert "wrong book" in record["error"]
+
+    repeated = admission.reconcile_admission(response["admissionId"], client)
+
+    assert repeated["status"] == "registration_conflict"
+    assert client.scan_requests == scans_before_reconcile
+
+
+def test_registration_conflict_can_be_explicitly_rechecked_after_correction(
+    admission_setup,
+):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+    update_ebook_admission(
+        response["admissionId"],
+        "registration_conflict",
+        error="wrong owner",
+    )
+    client.registered_path = setup["result"]["stored_path"]
+
+    reconciled = admission.reconcile_admission(response["admissionId"], client)
+
+    assert reconciled["registered"] is True
+    record = ebook_admission_by_id(response["admissionId"])
+    assert record["status"] == "registered"
+    assert record["error"] is None
+
+
+def test_reconcile_does_not_scan_when_path_ownership_is_unavailable(
+    admission_setup,
+    monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+    scans_before_reconcile = client.scan_requests
+    monkeypatch.setattr(
+        admission,
+        "associations_inside_path",
+        lambda stored_path: (_ for _ in ()).throw(
+            sqlite3.OperationalError("database unavailable")
+        ),
+    )
+
+    with pytest.raises(
+        admission.AdmissionSafetyError,
+        match="ownership could not be confirmed",
+    ):
+        admission.reconcile_admission(response["admissionId"], client)
+
+    assert client.scan_requests == scans_before_reconcile
+
+
 def test_reconcile_refuses_failed_admission_record(admission_setup):
     setup = admission_setup
     client = FakeClient()

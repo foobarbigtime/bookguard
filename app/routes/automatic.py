@@ -192,7 +192,7 @@ def api_automatic_reconcile_admission(
     admission_id: int,
     payload: ConfirmationRequest,
 ):
-    """Confirm registration or request another Bindery library scan."""
+    """Confirm registration, stop on a wrong owner, or request another scan."""
     require_confirmation(payload, "RECONCILE_ADMISSION")
     try:
         return reconcile_admission(admission_id)
