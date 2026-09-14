@@ -83,8 +83,8 @@
   </section>
 
   <div class="notice info triage-note">
-    <strong>Content verification:</strong>
-    Verification is read-only. BookGuard checks the ebook itself and separates verified books, repairable metadata errors, wrong content, and cases that still need human review.
+    <strong>Verification and security:</strong>
+    Verification is read-only. BookGuard validates file type and structure before separating verified books, repairable metadata errors, wrong content, unsafe files, and cases that still need human review.
   </div>
 
   <section id="acquisitionPanel" class="table-card acquisition-panel" aria-live="polite">
@@ -257,6 +257,7 @@ function verificationClass(verdict) {
   if (verdict === 'VERIFIED_CORRECT') return 'verification-correct';
   if (verdict === 'METADATA_ERROR') return 'verification-metadata';
   if (verdict === 'WRONG_CONTENT') return 'verification-wrong';
+  if (verdict === 'UNSAFE_FILE') return 'verification-wrong';
   return 'verification-unknown';
 }
 
@@ -302,7 +303,15 @@ function verificationDetailText(v) {
   const content = e.content || {};
   const ids = (embedded.identifiers || []).join(' | ') || '—';
   const yn = value => value ? 'FOUND' : 'not found';
-  return `Verdict: ${verificationLabel(v.verdict)}\nConfidence: ${v.confidence}%\nSource: ${v.source || '—'}\n\nExpected\nTitle: ${expected.title || '—'}\nAuthor: ${expected.author || '—'}\n\nEmbedded\nTitle: ${embedded.title || '—'}\nAuthor: ${embedded.author || '—'}\nIDs: ${ids}\n\nInternal content\nExpected title: ${yn(content.expected_title_found)}\nExpected author: ${yn(content.expected_author_found)}\nEmbedded title: ${yn(content.embedded_title_found)}\nEmbedded author: ${yn(content.embedded_author_found)}\nText examined: ${content.text_characters_examined || 0} characters\n\n${e.explanation || ''}`;
+  const security = e.security || {};
+  const securityChecks = security.checks || {};
+  const securityLines = Object.entries(securityChecks).map(([name, check]) =>
+    `${name}: ${String(check.status || 'unknown').replaceAll('_', ' ')} — ${check.message || ''}`
+  );
+  const securityText = securityLines.length
+    ? `\n\nDeterministic security\n${securityLines.join('\n')}`
+    : '';
+  return `Verdict: ${verificationLabel(v.verdict)}\nConfidence: ${v.confidence}%\nSource: ${v.source || '—'}\n\nExpected\nTitle: ${expected.title || '—'}\nAuthor: ${expected.author || '—'}\n\nEmbedded\nTitle: ${embedded.title || '—'}\nAuthor: ${embedded.author || '—'}\nIDs: ${ids}\n\nInternal content\nExpected title: ${yn(content.expected_title_found)}\nExpected author: ${yn(content.expected_author_found)}\nEmbedded title: ${yn(content.embedded_title_found)}\nEmbedded author: ${yn(content.embedded_author_found)}\nText examined: ${content.text_characters_examined || 0} characters${securityText}\n\n${e.explanation || ''}`;
 }
 
 function showVerification(id) {
@@ -380,7 +389,7 @@ async function pollVerificationJob() {
     const counts = job.counts || {};
     status.textContent = `Complete: ${job.processed || 0} verified`;
     await loadCachedVerifications();
-    alert(`Content verification complete.\n\nVerified correct: ${counts.VERIFIED_CORRECT || 0}\nMetadata errors: ${counts.METADATA_ERROR || 0}\nWrong content: ${counts.WRONG_CONTENT || 0}\nInsufficient evidence: ${counts.INSUFFICIENT_EVIDENCE || 0}`);
+    alert(`Content verification complete.\n\nVerified correct: ${counts.VERIFIED_CORRECT || 0}\nMetadata errors: ${counts.METADATA_ERROR || 0}\nWrong content: ${counts.WRONG_CONTENT || 0}\nUnsafe files: ${counts.UNSAFE_FILE || 0}\nInsufficient evidence: ${counts.INSUFFICIENT_EVIDENCE || 0}`);
   }
 }
 

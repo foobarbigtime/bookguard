@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import Any
 
 from .bindery_client import BinderyClient
-from .config import ConfigurationError, load_automation_settings
+from .config import ConfigurationError, load_automation_settings, settings
 from .ebook_extraction import extract_ebook_identity
+from .ebook_security import inspect_ebook_security
 from .file_safety import sha256_file
 from .verification_engine import classify_identity
 
@@ -122,21 +123,45 @@ def verify_ebook_file(
     expected_title, expected_author = book_identity(book)
     before_stat = path.stat()
     before_hash = sha256_file(path)
-    extracted = extract_ebook_identity(str(path))
-
     identity = {
         "book_id": int(book_id),
         "title": expected_title,
         "author": expected_author,
     }
-    verdict, confidence, evidence = classify_identity(
-        identity,
-        extracted.metadata,
-        extracted.text,
-        extracted.identifiers,
-        extracted.notes,
-        extracted.front_text,
+    security = inspect_ebook_security(
+        path,
+        check_file_signatures=settings.verification_file_signatures,
+        check_epub_structure=settings.verification_epub_structure,
+        check_pdf_integrity=settings.verification_pdf_integrity,
     )
+    if security["safe"]:
+        extracted = extract_ebook_identity(str(path))
+        verdict, confidence, evidence = classify_identity(
+            identity,
+            extracted.metadata,
+            extracted.text,
+            extracted.identifiers,
+            extracted.notes,
+            extracted.front_text,
+        )
+        evidence["security"] = security
+        source = extracted.source
+    else:
+        verdict = "UNSAFE_FILE"
+        confidence = 100
+        source = "deterministic-safety"
+        evidence = {
+            "expected": {"title": expected_title, "author": expected_author},
+            "embedded": {},
+            "content": {},
+            "metadata_matches_expected": False,
+            "security": security,
+            "notes": [security["message"]],
+            "explanation": (
+                "Book identity was not evaluated because deterministic file safety "
+                "or integrity validation failed."
+            ),
+        }
 
     after_stat = path.stat()
     after_hash = sha256_file(path)
@@ -159,6 +184,8 @@ def verify_ebook_file(
         blockers.append("stagedFileChangedDuringVerification")
     if verdict != "VERIFIED_CORRECT":
         blockers.append(f"verdict:{verdict}")
+    if not security["safe"]:
+        blockers.append("deterministicSecurityChecksFailed")
     if int(confidence) < MIN_ADMISSION_CONFIDENCE:
         blockers.append(f"confidenceBelow:{MIN_ADMISSION_CONFIDENCE}")
 
@@ -172,7 +199,7 @@ def verify_ebook_file(
         "expectedAuthor": expected_author,
         "verdict": verdict,
         "confidence": int(confidence),
-        "source": extracted.source,
+        "source": source,
         "evidence": evidence,
         "safeToAdmit": safe_to_admit,
         "admissionBlockers": blockers,

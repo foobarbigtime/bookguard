@@ -364,6 +364,16 @@ Bindery:    /data/bookguard-staging
 
 Most behavior can be changed at `/settings` and is persisted in `/config/bookguard.db`.
 
+Verification and security settings include three default-on, read-only checks:
+
+- the file signature must match the ebook extension when the format has a fixed signature
+- EPUB files must pass ZIP CRC, mimetype, container, package, manifest, and spine validation
+- PDF files must have a valid header, cross-reference structure, page tree, and EOF marker
+
+A deterministic failure produces an `UNSAFE_FILE` verdict before content identity is evaluated.
+Unsafe files cannot pass staged verification or controlled admission. Plain-text and legacy formats
+without a reliable fixed signature are reported as not applicable instead of being guessed.
+
 Metadata repair settings include:
 
 - repair mode: Off / Preview only / Safe repairs enabled
@@ -453,6 +463,7 @@ app/services/dashboard.py  Dashboard view-model assembly
 app/scanner.py              Library scan orchestration
 app/verifier.py             Verification jobs, persistence, and repairs
 app/ebook_extraction.py     Ebook metadata and text extraction
+app/ebook_security.py       Deterministic file-signature and structure validation
 app/verification_engine.py  Ebook identity classification and safety rules
 app/verification_constants.py Shared verification limits
 app/staging.py              Read-only staged-byte verification
