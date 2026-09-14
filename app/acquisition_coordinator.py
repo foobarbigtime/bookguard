@@ -275,17 +275,32 @@ class SupervisedAcquisitionCoordinator:
                         "The admitted acquisition has no linked admission record."
                     )
                 admission_status = str(admission.get("status") or "")
-                if admission_status == "registration_conflict":
+                if admission_status in {
+                    "registration_conflict",
+                    "registration_correcting",
+                }:
+                    correction_interrupted = (
+                        admission_status == "registration_correcting"
+                    )
                     return self._replace_status(
                         enabled=True,
                         state="attention_required",
                         action=None,
                         acquisition=summary,
-                        blockers=["registrationConflict"],
+                        blockers=[
+                            "registrationCorrectionInterrupted"
+                            if correction_interrupted
+                            else "registrationConflict"
+                        ],
                         lastRunAt=now,
                         lastError=(
                             str(admission.get("error") or "")
-                            or "Bindery assigned the admitted path to a different book."
+                            or (
+                                "An explicit Bindery registration correction must be "
+                                "resumed."
+                                if correction_interrupted
+                                else "Bindery assigned the admitted path to a different book."
+                            )
                         ),
                     )
                 if admission_status != "registered":

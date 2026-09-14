@@ -34,6 +34,7 @@ def test_controller_uses_existing_guarded_lifecycle_endpoints():
         "/acquisitions",
         "/reconcile",
         "/admit",
+        "/correct-registration",
         "/finalize",
     }
 
@@ -48,6 +49,7 @@ def test_controller_preserves_explicit_confirmation_contracts():
         "RECONCILE_EBOOK_ACQUISITION",
         "ADMIT_EBOOK_ACQUISITION",
         "RECONCILE_ADMISSION",
+        "CORRECT_BINDERY_REGISTRATION",
         "FINALIZE_EBOOK_ACQUISITION",
     }
 
@@ -60,11 +62,19 @@ def test_review_required_workflow_offers_explicit_verification_retry():
     assert "Retry staged verification" in CONTROLLER
 
 
-def test_registration_conflict_is_visible_and_requires_explicit_recheck():
+def test_registration_conflict_is_visible_and_requires_explicit_correction():
     assert 'admission?.status === "registration_conflict"' in CONTROLLER
-    assert 'setState(registrationConflict ? "Registration conflict"' in CONTROLLER
-    assert "Recheck corrected association" in CONTROLLER
-    assert "if (!registrationConflict) scheduleRefresh(true)" in CONTROLLER
+    assert 'admission?.status === "registration_correcting"' in CONTROLLER
+    assert "Correct Bindery association" in CONTROLLER
+    assert "Resume guarded association correction" in CONTROLLER
+    assert "Recheck external correction" in CONTROLLER
+    assert "if (!registrationAttention) scheduleRefresh(true)" in CONTROLLER
+
+
+def test_registration_correction_confirmation_promises_no_byte_changes():
+    assert "restore external import mode. No " in CONTROLLER
+    assert "library or staged bytes will be moved or deleted" in CONTROLLER
+    assert "without deleting download-client data" in CONTROLLER
 
 
 def test_preflight_displays_separate_writable_action_alias():

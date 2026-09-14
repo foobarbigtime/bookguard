@@ -46,6 +46,7 @@ EXPECTED_ROUTES = {
     ("GET", "/api/automatic/admissions"),
     ("POST", "/api/automatic/results/{result_id}/admit-staged-ebook"),
     ("POST", "/api/automatic/admissions/{admission_id}/reconcile"),
+    ("POST", "/api/automatic/admissions/{admission_id}/correct-registration"),
     ("GET", "/api/automatic/acquisition-readiness"),
     ("GET", "/api/automatic/acquisitions"),
     ("GET", "/api/automatic/acquisition-coordinator"),
