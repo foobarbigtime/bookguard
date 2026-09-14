@@ -14,6 +14,7 @@ def _write_epub(
     *,
     package_path: str = "OEBPS/content.opf",
     include_package: bool = True,
+    conforming_mimetype: bool = True,
 ) -> None:
     container = f"""<?xml version="1.0"?>
 <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -30,12 +31,19 @@ def _write_epub(
 </package>
 """
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr(
-            zipfile.ZipInfo("mimetype"),
-            "application/epub+zip",
-            compress_type=zipfile.ZIP_STORED,
-        )
+        if conforming_mimetype:
+            archive.writestr(
+                zipfile.ZipInfo("mimetype"),
+                "application/epub+zip",
+                compress_type=zipfile.ZIP_STORED,
+            )
         archive.writestr("META-INF/container.xml", container)
+        if not conforming_mimetype:
+            archive.writestr(
+                "mimetype",
+                "application/epub+zip",
+                compress_type=zipfile.ZIP_DEFLATED,
+            )
         if include_package:
             archive.writestr(package_path, package)
         archive.writestr("OEBPS/chapter.xhtml", "<html><body>Test</body></html>")
@@ -54,6 +62,47 @@ def test_valid_epub_passes_signature_and_structure(tmp_path):
     assert report["checks"]["archiveSafety"]["status"] == "passed"
     assert report["checks"]["epubStructure"]["status"] == "passed"
     assert report["checks"]["pdfIntegrity"]["status"] == "not_applicable"
+
+
+def test_nonconforming_mimetype_packaging_is_a_non_blocking_warning(tmp_path):
+    path = tmp_path / "legacy.epub"
+    _write_epub(path, conforming_mimetype=False)
+
+    report = inspect_ebook_security(path)
+
+    structure = report["checks"]["epubStructure"]
+    assert report["safe"] is True
+    assert report["failures"] == []
+    assert structure["status"] == "warning"
+    assert structure["warnings"] == [
+        "The mimetype file is not the first archive member.",
+        "The mimetype file is compressed instead of stored.",
+    ]
+
+
+def test_missing_mimetype_remains_a_blocking_failure(tmp_path):
+    path = tmp_path / "missing-mimetype.epub"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("META-INF/container.xml", "<container/>")
+
+    report = inspect_ebook_security(path)
+
+    assert report["safe"] is False
+    assert report["checks"]["epubStructure"]["status"] == "failed"
+    assert "mimetype file is absent" in report["checks"]["epubStructure"]["message"]
+
+
+def test_incorrect_mimetype_remains_a_blocking_failure(tmp_path):
+    path = tmp_path / "wrong-mimetype.epub"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(zipfile.ZipInfo("mimetype"), "application/zip")
+        archive.writestr("META-INF/container.xml", "<container/>")
+
+    report = inspect_ebook_security(path)
+
+    assert report["safe"] is False
+    assert report["checks"]["epubStructure"]["status"] == "failed"
+    assert "not application/epub+zip" in report["checks"]["epubStructure"]["message"]
 
 
 def test_pdf_renamed_as_epub_fails_closed(tmp_path):

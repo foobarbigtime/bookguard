@@ -21,7 +21,14 @@ class FakeClient:
         }
 
 
-def _write_epub(path, title: str, author: str, body: str) -> None:
+def _write_epub(
+    path,
+    title: str,
+    author: str,
+    body: str,
+    *,
+    conforming_mimetype: bool = True,
+) -> None:
     container = """<?xml version="1.0"?>
 <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
@@ -48,12 +55,19 @@ def _write_epub(path, title: str, author: str, body: str) -> None:
 <h1>{title}</h1><p>by {author}</p><p>{body}</p>
 </body></html>"""
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr(
-            zipfile.ZipInfo("mimetype"),
-            "application/epub+zip",
-            compress_type=zipfile.ZIP_STORED,
-        )
+        if conforming_mimetype:
+            archive.writestr(
+                zipfile.ZipInfo("mimetype"),
+                "application/epub+zip",
+                compress_type=zipfile.ZIP_STORED,
+            )
         archive.writestr("META-INF/container.xml", container)
+        if not conforming_mimetype:
+            archive.writestr(
+                "mimetype",
+                "application/epub+zip",
+                compress_type=zipfile.ZIP_DEFLATED,
+            )
         archive.writestr("OEBPS/content.opf", package)
         archive.writestr("OEBPS/chapter.xhtml", chapter)
 
@@ -108,6 +122,32 @@ def test_corrupt_staged_epub_is_blocked_before_identity_verification(tmp_path, m
     assert result["safeToAdmit"] is False
     assert "deterministicSecurityChecksFailed" in result["admissionBlockers"]
     assert result["evidence"]["security"]["safe"] is False
+
+
+def test_mimetype_packaging_warning_does_not_block_verified_admission(
+    tmp_path,
+    monkeypatch,
+):
+    root = _configure(tmp_path, monkeypatch)
+    path = root / "Bel Canto - Ann Patchett.epub"
+    _write_epub(
+        path,
+        "Bel Canto",
+        "Ann Patchett",
+        "Bel Canto by Ann Patchett. " + ("A fictional passage. " * 80),
+        conforming_mimetype=False,
+    )
+
+    result = staging.verify_staged_ebook(
+        42,
+        path.name,
+        FakeClient("Bel Canto", "Ann Patchett"),
+    )
+
+    assert result["verdict"] == "VERIFIED_CORRECT"
+    assert result["safeToAdmit"] is True
+    assert result["evidence"]["security"]["safe"] is True
+    assert result["evidence"]["security"]["checks"]["epubStructure"]["status"] == "warning"
 
 
 def test_wrong_staged_epub_is_never_eligible(tmp_path, monkeypatch):
