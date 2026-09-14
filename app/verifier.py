@@ -31,7 +31,7 @@ from .tika_client import test_connection
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "7"
+VERIFIER_VERSION = "8"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",

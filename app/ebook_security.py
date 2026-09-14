@@ -199,6 +199,7 @@ def _epub_structure_check(path: Path, suffix: str, enabled: bool) -> dict[str, A
 
     try:
         with zipfile.ZipFile(path) as archive:
+            warnings: list[str] = []
             names = archive.namelist()
             name_set = set(names)
             if len(names) != len(name_set):
@@ -208,10 +209,12 @@ def _epub_structure_check(path: Path, suffix: str, enabled: bool) -> dict[str, A
             if "mimetype" not in name_set:
                 raise ValueError("the required mimetype file is absent")
             mimetype_info = archive.getinfo("mimetype")
-            if names[0] != "mimetype" or mimetype_info.compress_type != zipfile.ZIP_STORED:
-                raise ValueError("the mimetype file is not first and uncompressed")
             if archive.read("mimetype") != b"application/epub+zip":
                 raise ValueError("the mimetype file is not application/epub+zip")
+            if names[0] != "mimetype":
+                warnings.append("The mimetype file is not the first archive member.")
+            if mimetype_info.compress_type != zipfile.ZIP_STORED:
+                warnings.append("The mimetype file is compressed instead of stored.")
             if "META-INF/container.xml" not in name_set:
                 raise ValueError("META-INF/container.xml is absent")
 
@@ -261,11 +264,18 @@ def _epub_structure_check(path: Path, suffix: str, enabled: bool) -> dict[str, A
         return _result("failed", f"EPUB structure is invalid: {exc}")
 
     return _result(
-        "passed",
-        "The EPUB ZIP, mimetype, container, package, manifest, spine, and CRC checks passed.",
+        "warning" if warnings else "passed",
+        (
+            "The EPUB structure and integrity checks passed with a non-blocking "
+            "packaging conformance warning."
+            if warnings
+            else "The EPUB ZIP, mimetype, container, package, manifest, spine, and CRC "
+            "checks passed."
+        ),
         packagePath=package_path,
         manifestItems=len(manifest),
         spineItems=len(spine_ids),
+        warnings=warnings,
     )
 
 
