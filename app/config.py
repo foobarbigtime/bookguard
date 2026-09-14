@@ -222,6 +222,9 @@ class Settings:
     verification_file_signatures: bool = _bool(
         "BOOKGUARD_VERIFICATION_FILE_SIGNATURES", True
     )
+    verification_archive_safety: bool = _bool(
+        "BOOKGUARD_VERIFICATION_ARCHIVE_SAFETY", True
+    )
     verification_epub_structure: bool = _bool(
         "BOOKGUARD_VERIFICATION_EPUB_STRUCTURE", True
     )
@@ -256,7 +259,8 @@ class Settings:
             "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
             "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
             "verification_enabled", "verification_use_tika",
-            "verification_file_signatures", "verification_epub_structure",
+            "verification_file_signatures", "verification_archive_safety",
+            "verification_epub_structure",
             "verification_pdf_integrity",
             "repair_audiobooks", "repair_ebooks", "repair_normalize_pass",
             "repair_audio_album", "repair_audio_album_artist", "repair_audio_genre",
@@ -341,6 +345,7 @@ class Settings:
             "verification_use_tika": self.verification_use_tika,
             "verification_tika_url": self.verification_tika_url,
             "verification_file_signatures": self.verification_file_signatures,
+            "verification_archive_safety": self.verification_archive_safety,
             "verification_epub_structure": self.verification_epub_structure,
             "verification_pdf_integrity": self.verification_pdf_integrity,
             "metadata_repair_mode": self.metadata_repair_mode,

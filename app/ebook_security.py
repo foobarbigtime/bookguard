@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
+import stat
 from typing import Any
 from urllib.parse import unquote
 import zipfile
@@ -11,6 +12,14 @@ from pypdf import PdfReader
 
 ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 RAR_SIGNATURES = (b"Rar!\x1a\x07\x00", b"Rar!\x1a\x07\x01\x00")
+ARCHIVE_SUFFIXES = {".epub", ".cbz"}
+MAX_ARCHIVE_MEMBERS = 10_000
+MAX_ARCHIVE_MEMBER_BYTES = 1024 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+MAX_ARCHIVE_MEMBER_RATIO = 1000
+MAX_ARCHIVE_TOTAL_RATIO = 500
+MIN_RATIO_CHECK_BYTES = 16 * 1024 * 1024
+MIN_TOTAL_RATIO_CHECK_BYTES = 64 * 1024 * 1024
 
 
 def _result(status: str, message: str, **details: Any) -> dict[str, Any]:
@@ -74,6 +83,108 @@ def _signature_check(path: Path, suffix: str, enabled: bool) -> dict[str, Any]:
 def _safe_archive_path(value: str) -> bool:
     path = PurePosixPath(value)
     return bool(value) and not path.is_absolute() and ".." not in path.parts
+
+
+def _archive_safety_check(path: Path, suffix: str, enabled: bool) -> dict[str, Any]:
+    if suffix not in ARCHIVE_SUFFIXES:
+        return _result("not_applicable", "Archive safety validation does not apply.")
+    if not enabled:
+        return _result("disabled", "Archive safety validation is disabled.")
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_ARCHIVE_MEMBERS:
+                raise ValueError(
+                    f"the archive has {len(members)} members; the limit is "
+                    f"{MAX_ARCHIVE_MEMBERS}"
+                )
+
+            exact_names: set[str] = set()
+            portable_names: dict[str, str] = {}
+            total_uncompressed = 0
+            total_compressed = 0
+            highest_ratio = 0.0
+
+            for member in members:
+                raw_name = member.filename
+                normalized = raw_name.replace("\\", "/")
+                parts = PurePosixPath(normalized).parts
+                if (
+                    not raw_name
+                    or "\\" in raw_name
+                    or normalized.startswith("/")
+                    or any(part in {".", ".."} for part in parts)
+                    or (parts and parts[0].endswith(":"))
+                ):
+                    raise ValueError(f"unsafe member path: {raw_name!r}")
+
+                if raw_name in exact_names:
+                    raise ValueError(f"duplicate member name: {raw_name!r}")
+                exact_names.add(raw_name)
+
+                portable_name = normalized.rstrip("/").casefold()
+                previous = portable_names.get(portable_name)
+                if previous is not None and previous != raw_name:
+                    raise ValueError(
+                        f"case-colliding member names: {previous!r} and {raw_name!r}"
+                    )
+                portable_names[portable_name] = raw_name
+
+                unix_mode = (member.external_attr >> 16) & 0xFFFF
+                if stat.S_ISLNK(unix_mode):
+                    raise ValueError(f"symbolic-link member: {raw_name!r}")
+                if member.flag_bits & 0x1:
+                    raise ValueError(f"encrypted member: {raw_name!r}")
+                if member.is_dir():
+                    continue
+                if member.file_size > MAX_ARCHIVE_MEMBER_BYTES:
+                    raise ValueError(
+                        f"member {raw_name!r} expands beyond the 1 GiB per-file limit"
+                    )
+
+                total_uncompressed += member.file_size
+                total_compressed += member.compress_size
+                if total_uncompressed > MAX_ARCHIVE_TOTAL_BYTES:
+                    raise ValueError("the archive expands beyond the 2 GiB total limit")
+
+                ratio = member.file_size / max(1, member.compress_size)
+                highest_ratio = max(highest_ratio, ratio)
+                if (
+                    member.file_size >= MIN_RATIO_CHECK_BYTES
+                    and ratio > MAX_ARCHIVE_MEMBER_RATIO
+                ):
+                    raise ValueError(
+                        f"member {raw_name!r} has a dangerous {ratio:.0f}:1 expansion ratio"
+                    )
+
+            total_ratio = total_uncompressed / max(1, total_compressed)
+            if (
+                total_uncompressed >= MIN_TOTAL_RATIO_CHECK_BYTES
+                and total_ratio > MAX_ARCHIVE_TOTAL_RATIO
+            ):
+                raise ValueError(
+                    f"the archive has a dangerous {total_ratio:.0f}:1 total expansion ratio"
+                )
+    except (OSError, ValueError, zipfile.BadZipFile, RuntimeError) as exc:
+        return _result("failed", f"Archive safety validation failed: {exc}")
+
+    return _result(
+        "passed",
+        "Archive paths, links, encryption, member counts, sizes, and expansion ratios passed.",
+        members=len(members),
+        uncompressedBytes=total_uncompressed,
+        compressedBytes=total_compressed,
+        totalExpansionRatio=round(total_ratio, 2),
+        highestMemberExpansionRatio=round(highest_ratio, 2),
+        limits={
+            "members": MAX_ARCHIVE_MEMBERS,
+            "memberBytes": MAX_ARCHIVE_MEMBER_BYTES,
+            "totalBytes": MAX_ARCHIVE_TOTAL_BYTES,
+            "memberExpansionRatio": MAX_ARCHIVE_MEMBER_RATIO,
+            "totalExpansionRatio": MAX_ARCHIVE_TOTAL_RATIO,
+        },
+    )
 
 
 def _local_name(tag: str) -> str:
@@ -194,15 +305,26 @@ def inspect_ebook_security(
     path: str | Path,
     *,
     check_file_signatures: bool = True,
+    check_archive_safety: bool = True,
     check_epub_structure: bool = True,
     check_pdf_integrity: bool = True,
 ) -> dict[str, Any]:
     """Run deterministic, read-only ebook type and integrity checks."""
     target = Path(path)
     suffix = target.suffix.lower()
+    archive_safety = _archive_safety_check(target, suffix, check_archive_safety)
+    epub_structure = (
+        _result(
+            "blocked",
+            "EPUB structure validation was not attempted because archive safety failed.",
+        )
+        if suffix == ".epub" and archive_safety["status"] == "failed"
+        else _epub_structure_check(target, suffix, check_epub_structure)
+    )
     checks = {
         "fileSignature": _signature_check(target, suffix, check_file_signatures),
-        "epubStructure": _epub_structure_check(target, suffix, check_epub_structure),
+        "archiveSafety": archive_safety,
+        "epubStructure": epub_structure,
         "pdfIntegrity": _pdf_integrity_check(target, suffix, check_pdf_integrity),
     }
     failures = [name for name, check in checks.items() if check["status"] == "failed"]
