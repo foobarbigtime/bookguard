@@ -72,7 +72,8 @@ def test_registration_conflict_is_visible_and_requires_explicit_correction():
 
 
 def test_registration_correction_confirmation_promises_no_byte_changes():
-    assert "No library or staged bytes will be moved or deleted" in CONTROLLER
+    assert "restore external import mode. No " in CONTROLLER
+    assert "library or staged bytes will be moved or deleted" in CONTROLLER
     assert "without deleting download-client data" in CONTROLLER
 
 
