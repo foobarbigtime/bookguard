@@ -200,6 +200,35 @@ def test_checks_api_database_agreement(setup_conflict):
     assert hardlinks.conflict_preview(3284, client)["safe"] is False
 
 
+@pytest.mark.parametrize("author_fields", [
+    {"author": {"id": 67, "authorName": "Daniel Silva"}},
+    {"author": {"name": "Daniel Silva"}},
+    {"authorName": "Daniel Silva", "author": None},
+])
+def test_author_api_shapes_preserve_exact_identity_check(setup_conflict, author_fields, monkeypatch):
+    client, _, _ = setup_conflict
+    original = client.get_book
+    client.get_book = lambda book_id: {**original(book_id), "authorId": 67, **author_fields}
+    proof = hardlinks.conflict_preview(3284, client)
+    assert proof["safe"] is True
+    assert proof["books"]["6495"]["authorName"] == "Daniel Silva"
+    monkeypatch.setattr(hardlinks.settings, "allow_actions", True)
+    assert hardlinks.correct_hardlink_conflict(3284, proof["token"], client)["ok"] is True
+
+
+@pytest.mark.parametrize("author_fields", [
+    {"author": {"authorName": "Someone Else"}},
+    {"author": None},
+    {"authorName": "Someone Else", "author": {"authorName": "Daniel Silva"}},
+])
+def test_wrong_or_missing_api_author_remains_blocked(setup_conflict, author_fields):
+    client, _, _ = setup_conflict
+    original = client.get_book
+    client.get_book = lambda book_id: {**original(book_id), **author_fields}
+    assert hardlinks.conflict_preview(3284, client)["safe"] is False
+    assert client.calls == []
+
+
 def test_uncertain_response_is_durable_and_blocks_retry(setup_conflict, monkeypatch):
     client, _, _ = setup_conflict
     proof = hardlinks.conflict_preview(3284, client)

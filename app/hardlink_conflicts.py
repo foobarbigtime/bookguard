@@ -22,7 +22,7 @@ _POLICY = (
     "verification_archive_safety", "verification_epub_structure",
     "verification_pdf_integrity",
 )
-_BOOK_FIELDS = ("id", "title", "ebookFilePath", "audiobookFilePath", "mediaType")
+_BOOK_FIELDS = ("id", "authorId", "title", "ebookFilePath", "audiobookFilePath", "mediaType")
 
 
 def _local_path(row: dict) -> Path:
@@ -56,8 +56,15 @@ def _fingerprint(path: Path) -> dict:
     }
 
 
+def _api_author_name(book: dict) -> str:
+    author = book.get("author")
+    nested = (author.get("authorName") or author.get("name")) if isinstance(author, dict) else ""
+    return str(book.get("authorName") or nested or "")
+
+
 def _book_snapshot(book: dict) -> dict:
     snapshot = {key: book.get(key) for key in _BOOK_FIELDS}
+    snapshot["authorName"] = _api_author_name(book)
     snapshot["files"] = sorted([
         {key: entry.get(key) for key in ("id", "bookId", "format", "path")}
         for entry in book.get("bookFiles") or []
@@ -72,10 +79,8 @@ def _check_book(row: dict, book: dict, rows: list[dict]) -> dict:
         for r in rows if r["book_id"] == row["book_id"]
     )
     actual = sorted((f["id"], f["format"], f["path"]) for f in snapshot["files"])
-    author = book.get("author") or {}
-    api_author = book.get("authorName") or (author.get("name") if isinstance(author, dict) else "")
     if (book.get("id") != row["book_id"] or book.get("title") != row["title"]
-            or api_author != row["author"] or actual != expected
+            or snapshot["authorName"] != row["author"] or actual != expected
             or book.get("ebookFilePath") != row["stored_path"]):
         raise ActionError("Bindery's API and database do not agree on the current identity and files.")
     return snapshot
@@ -261,6 +266,8 @@ def _verify_postconditions(snapshot: dict, client: BinderyClient) -> None:
             or after_wrong["files"] != expected_files
             or after_wrong["audiobookFilePath"] != expected_wrong["audiobookFilePath"]
             or after_wrong["title"] != expected_wrong["title"]
+            or after_wrong["authorId"] != expected_wrong["authorId"]
+            or after_wrong["authorName"] != expected_wrong["authorName"]
             or after_wrong["ebookFilePath"]):
         raise ActionError("Book or audiobook postconditions failed; review is required.")
     expected_db = {
