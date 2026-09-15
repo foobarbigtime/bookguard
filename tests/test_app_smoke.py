@@ -7,6 +7,10 @@ from app.services import dashboard
 
 
 EXPECTED_ROUTES = {
+    ("GET", "/api/hardlink-conflicts"),
+    ("GET", "/api/hardlink-conflicts/{file_id}/preview"),
+    ("POST", "/api/hardlink-conflicts/{file_id}/correct"),
+    ("POST", "/api/hardlink-conflicts/history/{correction_id}/reconcile"),
     ("GET", "/"),
     ("GET", "/triage"),
     ("GET", "/settings"),

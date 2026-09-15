@@ -2,6 +2,39 @@
 
 **BookGuard** is a conservative validation, quarantine, and metadata-repair companion for [Bindery](https://github.com/vavallee/bindery).
 
+### Shared-file registration conflicts
+
+Triage provides **Check shared files** to detect different Bindery books tracking
+hard links to the same ebook. Discovery and **Verify correction preview** are
+read-only and remain available with Bindery actions disabled.
+
+The first guarded correction supports a Bindery `.bindery-stage-` EPUB alias
+incorrectly owned by a different book while a final EPUB in the same folder is
+already correctly registered. It requires exactly two tracked paths and two
+physical hard links, all core deterministic checks enabled and passing, native
+title-page evidence verifying the retained book at 99% confidence, agreement
+between Bindery's API and database, disabled Bindery auto-grab, external import
+mode, and no active queue records. Equivalent catalog titles, competing primary
+title evidence, symlinks, extra hard links, and changed previews are blocked.
+
+**Remove wrong ebook association** requires enabled Bindery actions and explicit
+per-item confirmation. BookGuard uses Bindery's exact-path deregistration API;
+it does not reassign, delete, move, or rewrite media, request a scan, or start a
+download. Both filenames remain in place. A full proof is persisted before the
+request, then BookGuard verifies the retained ebook, both books' remaining file
+registrations, audiobook paths, hard-link identity, and SHA-256 after the request.
+No writable library alias, admission gate, or automatic-reacquisition gate is
+required for this database-only operation; the existing Bindery action gate
+still applies and stays off by default.
+
+Interrupted or uncertain operations remain visible in the panel's history and
+block further corrections. **Recheck interrupted correction** only observes
+current state: it records an already completed operation as applied when all
+postconditions pass, or cancels an unchanged operation when the original proof
+still matches. It never repeats the Bindery mutation. Changed or unprovable state
+continues to require review. Temporary-file cleanup is deliberately separate:
+the retained staging name must not be scanned back into a wrong registration.
+
 It answers two related questions:
 
 > Does the file Bindery imported actually look like the book Bindery thinks it is?
