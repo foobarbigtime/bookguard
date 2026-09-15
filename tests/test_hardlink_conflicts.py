@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import sqlite3
 import zipfile
 
@@ -330,3 +331,171 @@ def test_route_requires_exact_confirmation_and_defaults_block_mutation(setup_con
             "confirm": "REMOVE_WRONG_EBOOK_ASSOCIATION", "token": "bad",
         }).status_code == 422
     assert client.calls == []
+
+
+@pytest.fixture
+def completed_conflict(setup_conflict, monkeypatch):
+    client, final, stage = setup_conflict
+    proof = hardlinks.conflict_preview(3284, client)
+    monkeypatch.setattr(hardlinks.settings, "allow_actions", True)
+    result = hardlinks.correct_hardlink_conflict(3284, proof["token"], client)
+    monkeypatch.setattr(hardlinks.settings, "allow_actions", False)
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTIONS_ENABLED", "false")
+    return client, final, stage, result["correctionId"]
+
+
+def enable_cleanup_alias(monkeypatch, root):
+    """Use a temporary test directory instead of a privileged Docker bind mount.
+
+    Only the mount resolver is replaced; the journal, proof, dirfd/no-follow
+    unlink, and database/API/filesystem postchecks run normally.
+    """
+    import app.hardlink_cleanup as cleanup
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTION_ROOT", str(root))
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTIONS_ENABLED", "true")
+    monkeypatch.setattr(hardlinks.settings, "allow_actions", True)
+    def resolve(local, stored):
+        if not hardlinks.settings.allow_actions:
+            raise ActionError("Actions disabled")
+        if not cleanup.load_automation_settings().ebook_actions_enabled:
+            raise ActionError("Ebook actions disabled")
+        assert Path(local).parent == root
+        assert stored == "/data/books/.bindery-stage-123-English Girl.epub"
+        return Path(local)
+    monkeypatch.setattr(cleanup, "resolve_writable_ebook_path", resolve)
+    monkeypatch.setattr(cleanup, "ebook_action_preview", lambda local, stored: {
+        "ready": hardlinks.settings.allow_actions and cleanup.load_automation_settings().ebook_actions_enabled,
+        "blockers": [],
+    })
+
+
+def test_cleanup_preview_requires_no_write_permissions(completed_conflict):
+    import app.hardlink_cleanup as cleanup
+    client, final, stage, correction_id = completed_conflict
+    proof = cleanup.cleanup_preview(correction_id, client)
+    assert proof["safe"] is True
+    assert proof["ready"] is False
+    assert final.exists() and stage.exists()
+    with pytest.raises(ActionError, match="disabled"):
+        cleanup.cleanup_staging_alias(correction_id, proof["token"], client)
+
+
+def test_cleanup_requires_opt_in_action_alias(completed_conflict, monkeypatch):
+    import app.hardlink_cleanup as cleanup
+    client, final, stage, correction_id = completed_conflict
+    proof = cleanup.cleanup_preview(correction_id, client)
+    monkeypatch.setattr(hardlinks.settings, "allow_actions", True)
+    with pytest.raises(ActionError, match="preflight"):
+        cleanup.cleanup_staging_alias(correction_id, proof["token"], client)
+    assert final.exists() and stage.exists()
+
+
+def test_cleanup_unlinks_only_alias_preserves_final_bytes_and_all_registrations(completed_conflict, monkeypatch):
+    import app.hardlink_cleanup as cleanup
+    client, final, stage, correction_id = completed_conflict
+    enable_cleanup_alias(monkeypatch, final.parent)
+    proof = cleanup.cleanup_preview(correction_id, client)
+    original = final.read_bytes()
+    books = [client.get_book(i) for i in (6132, 6495)]
+    calls = list(client.calls)
+    result = cleanup.cleanup_staging_alias(correction_id, proof["token"], client)
+    assert result["aliasRemoved"] and not result["retainedBytesChanged"]
+    assert not stage.exists()
+    assert final.read_bytes() == original
+    assert final.stat().st_nlink == 1
+    assert books == [client.get_book(i) for i in (6132, 6495)]
+    assert client.calls == calls  # Cleanup must never mutate Bindery.
+    assert hardlinks.correction_history()[0]["cleanupStatus"] == "applied"
+
+
+@pytest.mark.parametrize("change", ["re_registered", "third_link", "symlink", "changed_bytes", "missing_final"])
+def test_cleanup_blocks_changed_or_registered_alias(completed_conflict, change):
+    import app.hardlink_cleanup as cleanup
+    client, final, stage, correction_id = completed_conflict
+    if change == "re_registered":
+        with sqlite3.connect(client.db) as conn:
+            conn.execute("INSERT INTO book_files VALUES(4000,6495,'ebook',?)",
+                         ("/data/books/.bindery-stage-123-English Girl.epub",))
+    elif change == "third_link":
+        os.link(final, final.parent / "third.epub")
+    elif change == "symlink":
+        stage.unlink()
+        stage.symlink_to(final)
+    elif change == "changed_bytes":
+        final.write_bytes(b"changed")
+    else:
+        final.unlink()
+    assert cleanup.cleanup_preview(correction_id, client)["safe"] is False
+
+
+def test_cleanup_without_applied_correction_is_blocked(setup_conflict):
+    import app.hardlink_cleanup as cleanup
+    client, _, _ = setup_conflict
+    assert cleanup.cleanup_preview(1, client)["safe"] is False
+
+
+def test_cleanup_stale_preview_does_not_remove_alias(completed_conflict, monkeypatch):
+    import app.hardlink_cleanup as cleanup
+    client, final, stage, correction_id = completed_conflict
+    enable_cleanup_alias(monkeypatch, final.parent)
+    proof = cleanup.cleanup_preview(correction_id, client)
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTION_ROOT", str(final.parent / "changed-root"))
+    with pytest.raises(ActionError, match="preview changed"):
+        cleanup.cleanup_staging_alias(correction_id, proof["token"], client)
+    assert stage.exists()
+
+
+@pytest.mark.parametrize("after_unlink", [False, True])
+def test_cleanup_interruption_reconciles_without_repeating_unlink(completed_conflict, monkeypatch, after_unlink):
+    import app.hardlink_cleanup as cleanup
+    client, final, stage, correction_id = completed_conflict
+    enable_cleanup_alias(monkeypatch, final.parent)
+    proof = cleanup.cleanup_preview(correction_id, client)
+    original = cleanup._unlink_exact_alias
+    calls = []
+    def interrupted(snapshot):
+        calls.append(1)
+        if after_unlink:
+            original(snapshot)
+        raise RuntimeError("interrupted")
+    monkeypatch.setattr(cleanup, "_unlink_exact_alias", interrupted)
+    with pytest.raises(ActionError, match="interrupted"):
+        cleanup.cleanup_staging_alias(correction_id, proof["token"], client)
+    assert hardlinks.correction_history()[0]["cleanupStatus"] == "needs_review"
+    result = cleanup.reconcile_alias_cleanup(correction_id, client)
+    assert result["status"] == ("applied" if after_unlink else "cancelled")
+    assert len(calls) == 1
+    assert final.exists()
+    assert stage.exists() is not after_unlink
+
+
+def test_cleanup_failed_postconditions_remain_unresolved(completed_conflict, monkeypatch):
+    import app.hardlink_cleanup as cleanup
+    client, final, _, correction_id = completed_conflict
+    enable_cleanup_alias(monkeypatch, final.parent)
+    proof = cleanup.cleanup_preview(correction_id, client)
+    original = cleanup._unlink_exact_alias
+    def damage_after_unlink(snapshot):
+        original(snapshot)
+        final.write_bytes(b"unexpected concurrent change")
+    monkeypatch.setattr(cleanup, "_unlink_exact_alias", damage_after_unlink)
+    with pytest.raises(ActionError, match="postconditions"):
+        cleanup.cleanup_staging_alias(correction_id, proof["token"], client)
+    with pytest.raises(ActionError, match="postconditions"):
+        cleanup.reconcile_alias_cleanup(correction_id, client)
+    assert hardlinks.correction_history()[0]["cleanupStatus"] == "needs_review"
+
+
+def test_cleanup_route_requires_exact_confirmation(completed_conflict):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.routes.hardlink_conflicts import router
+    _, _, stage, correction_id = completed_conflict
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as api:
+        response = api.post(f"/api/hardlink-conflicts/history/{correction_id}/cleanup", json={
+            "confirm": "REMOVE_FILE", "token": "0" * 64,
+        })
+    assert response.status_code == 400
+    assert stage.exists()

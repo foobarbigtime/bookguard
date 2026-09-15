@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import stat
 import threading
@@ -192,6 +193,14 @@ def _init_journal() -> None:
             completed_at TEXT,
             error TEXT
         )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS hardlink_alias_cleanups (
+            correction_id INTEGER PRIMARY KEY,
+            snapshot_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            error TEXT
+        )""")
         conn.commit()
 
 
@@ -199,8 +208,10 @@ def correction_history() -> list[dict]:
     _init_journal()
     with local_conn() as conn:
         return [dict(row) for row in conn.execute(
-            "SELECT id, file_id, status, created_at, completed_at, error "
-            "FROM hardlink_corrections ORDER BY id DESC LIMIT 100"
+            "SELECT c.id, c.file_id, c.status, c.created_at, c.completed_at, c.error, "
+            "a.status AS cleanupStatus, a.error AS cleanupError "
+            "FROM hardlink_corrections c LEFT JOIN hardlink_alias_cleanups a "
+            "ON a.correction_id=c.id ORDER BY c.id DESC LIMIT 100"
         )]
 
 
@@ -253,7 +264,8 @@ def hardlink_conflicts() -> dict:
             "history": correction_history()}
 
 
-def _verify_postconditions(snapshot: dict, client: BinderyClient) -> None:
+def _verify_postconditions(snapshot: dict, client: BinderyClient,
+                           removed_alias: bool = False) -> None:
     wrong, retained = snapshot["wrong"], snapshot["retained"]
     rows = load_bindery_files()
     if any(r["file_id"] == wrong["file_id"] or r["stored_path"] == wrong["stored_path"] for r in rows):
@@ -286,9 +298,24 @@ def _verify_postconditions(snapshot: dict, client: BinderyClient) -> None:
     }
     if actual_db != expected_db:
         raise ActionError("Database postconditions failed; review is required.")
-    for row, value in ((wrong, snapshot["source"]), (retained, snapshot["destination"])):
+    protected = ((wrong, snapshot["source"]), (retained, snapshot["destination"]))
+    if removed_alias:
+        source = Path(snapshot["source"])
+        if source.exists() or source.is_symlink():
+            raise ActionError("The staging alias is still present; cleanup needs review.")
+        protected = ((retained, snapshot["destination"]),)
+    for row, value in protected:
         path = _local_path(row)
-        if (str(path) != value or _fingerprint(path) != snapshot["fingerprint"]
+        current = _fingerprint(path)
+        original = snapshot["fingerprint"]
+        unchanged = current == original
+        if removed_alias:
+            # Unlink changes link count and ctime, but must not change identity,
+            # content size, or mtime of the retained file.
+            unchanged = (current["links"] == 1 and all(
+                current[key] == original[key] for key in ("device", "inode", "bytes", "mtimeNs")
+            ))
+        if (str(path) != value or not unchanged
                 or sha256_file(path) != snapshot["sha256"]):
             raise ActionError("Filesystem postconditions failed; review is required.")
 

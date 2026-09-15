@@ -57,6 +57,43 @@
     }
   }
 
+  async function previewCleanup(id, button) {
+    button.disabled = true;
+    try {
+      const proof = await request(`/api/hardlink-conflicts/history/${id}/cleanup-preview`);
+      line(results, proof.reason);
+      if (!proof.safe) return;
+      line(results, `Remove staging name: ${proof.alias}`);
+      line(results, `Keep final EPUB: ${proof.retained}`);
+      if (!proof.ready) {
+        line(results, `Action blockers: ${proof.action.blockers.join(", ")}`);
+        return;
+      }
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "Remove unregistered staging link";
+      remove.addEventListener("click", async () => {
+        if (!window.confirm(`Remove only this unregistered staging name?\n\n${proof.alias}\n\nKeep ${proof.retained}, its bytes, and all audiobook registrations.`)) return;
+        remove.disabled = true;
+        try {
+          const response = await request(`/api/hardlink-conflicts/history/${id}/cleanup`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ confirm: "REMOVE_UNREGISTERED_STAGING_LINK", token: proof.token }),
+          });
+          line(results, response.message);
+        } catch (error) {
+          line(results, error.message);
+          line(results, "Check shared files again to inspect cleanup history before any further action.");
+        }
+      });
+      results.append(remove);
+    } catch (error) {
+      line(results, error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   check.addEventListener("click", async () => {
     check.disabled = true;
     results.replaceChildren();
@@ -85,6 +122,33 @@
       }
       for (const entry of report.history) {
         line(results, `Correction ${entry.id}: ${entry.status}${entry.error ? ` — ${entry.error}` : ""}`);
+        if (entry.cleanupStatus) line(results, `Staging cleanup: ${entry.cleanupStatus}${entry.cleanupError ? ` — ${entry.cleanupError}` : ""}`);
+        if (entry.status === "applied" && (!entry.cleanupStatus || entry.cleanupStatus === "cancelled")) {
+          const cleanup = document.createElement("button");
+          cleanup.type = "button";
+          cleanup.textContent = "Verify staging-link cleanup";
+          cleanup.addEventListener("click", () => previewCleanup(entry.id, cleanup));
+          results.append(cleanup);
+        }
+        if (entry.cleanupStatus === "running" || entry.cleanupStatus === "needs_review") {
+          const recheck = document.createElement("button");
+          recheck.type = "button";
+          recheck.textContent = "Recheck interrupted staging cleanup";
+          recheck.addEventListener("click", async () => {
+            if (!window.confirm("Verify the interrupted cleanup state without removing or recreating files?")) return;
+            recheck.disabled = true;
+            try {
+              const response = await request(`/api/hardlink-conflicts/history/${entry.id}/reconcile-cleanup`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ confirm: "RECONCILE_STAGING_LINK_CLEANUP" }),
+              });
+              line(results, response.message);
+            } catch (error) {
+              line(results, error.message);
+            }
+          });
+          results.append(recheck);
+        }
         if (entry.status === "running" || entry.status === "needs_review") {
           const reconcile = document.createElement("button");
           reconcile.type = "button";
