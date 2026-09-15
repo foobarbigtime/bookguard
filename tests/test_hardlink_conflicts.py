@@ -159,7 +159,11 @@ def test_blocks_unsafe_or_ambiguous_files(setup_conflict, change):
 
 @pytest.mark.parametrize("queue", [
     {"items": [], "partial": True},
-    {"items": []},
+    {"items": [], "partial": None},
+    {"items": [], "partial": "false"},
+    {"items": [], "partial": 0},
+    {"items": [], "staleClients": [{"clientId": 1}]},
+    {"items": [], "staleClients": None},
     {"items": [{"status": "importexternal"}], "partial": False},
     {"items": [{}], "partial": False},
 ])
@@ -167,6 +171,19 @@ def test_blocks_partial_or_active_queue(setup_conflict, queue):
     client, _, _ = setup_conflict
     client.queue = queue
     assert hardlinks.conflict_preview(3284, client)["safe"] is False
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("queue", [
+    {"items": []},
+    {"items": [], "partial": False},
+    {"items": [], "staleClients": []},
+    {"items": [{"status": "imported"}, {"status": "failed"}, {"status": "importBlocked"}]},
+])
+def test_complete_queue_omits_false_partial_flag(setup_conflict, queue):
+    client, _, _ = setup_conflict
+    client.queue = queue
+    assert hardlinks.conflict_preview(3284, client)["safe"] is True
     assert client.calls == []
 
 

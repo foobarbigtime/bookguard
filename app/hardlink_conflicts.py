@@ -92,8 +92,13 @@ def _require_idle(client: BinderyClient) -> None:
     if str(client.get_setting("import.mode")).lower() != "external":
         raise ActionError("Bindery must be in external import mode before correction.")
     queue = client.list_queue()
-    if not isinstance(queue, dict) or queue.get("partial") is not False:
+    # Bindery declares partial as a bool with omitempty: a complete response
+    # omits the field. Explicit null, strings, and true remain invalid.
+    if not isinstance(queue, dict) or queue.get("partial", False) is not False:
         raise ActionError("A complete Bindery queue snapshot is required.")
+    stale_clients = queue.get("staleClients", [])
+    if not isinstance(stale_clients, list) or stale_clients:
+        raise ActionError("Stale download clients block hard-link correction.")
     items = queue.get("items")
     if not isinstance(items, list):
         raise ActionError("Bindery returned an invalid queue snapshot.")
