@@ -1,0 +1,101 @@
+from pathlib import Path
+
+from app.audiobook_verification import (
+    discover_audio_files,
+    summarize_audiobook_verification,
+)
+
+
+def _probe(path: str, **overrides):
+    value = {
+        "path": path,
+        "size_bytes": 1_000_000,
+        "format_name": "mp3",
+        "duration_seconds": 600.0,
+        "bit_rate": 128000,
+        "audio_stream_count": 1,
+        "codec": "mp3",
+        "sample_rate": 44100,
+        "channels": 2,
+        "chapter_count": 0,
+    }
+    value.update(overrides)
+    return value
+
+
+def test_discover_audio_files_returns_all_supported_files(tmp_path):
+    (tmp_path / "Disc 1").mkdir()
+    (tmp_path / "Disc 2").mkdir()
+    (tmp_path / "Disc 1" / "01.mp3").write_bytes(b"audio")
+    (tmp_path / "Disc 1" / "02.M4B").write_bytes(b"audio")
+    (tmp_path / "Disc 2" / "03.flac").write_bytes(b"audio")
+    (tmp_path / "cover.jpg").write_bytes(b"image")
+
+    found = discover_audio_files(str(tmp_path))
+
+    assert len(found) == 3
+    assert [Path(path).suffix.lower() for path in found] == [".mp3", ".m4b", ".flac"]
+
+
+def test_technical_verification_passes_consistent_readable_tracks():
+    result = summarize_audiobook_verification([
+        _probe("01.mp3", duration_seconds=300.0),
+        _probe("02.mp3", duration_seconds=450.0),
+    ])
+
+    assert result["verdict"] == "PASS"
+    assert result["reason_code"] == "AUDIO_TECHNICAL_PASS"
+    assert result["file_count"] == 2
+    assert result["readable_file_count"] == 2
+    assert result["total_duration_seconds"] == 750.0
+
+
+def test_technical_verification_fails_unreadable_track():
+    result = summarize_audiobook_verification([
+        _probe("01.mp3"),
+        _probe("02.mp3", probe_error="Invalid data found when processing input"),
+    ])
+
+    assert result["verdict"] == "FAIL"
+    assert result["reason_code"] == "AUDIO_INTEGRITY_FAILED"
+    assert result["readable_file_count"] == 1
+    assert any("ffprobe could not read" in reason for reason in result["reasons"])
+
+
+def test_technical_verification_fails_missing_audio_stream():
+    result = summarize_audiobook_verification([
+        _probe("book.m4b", audio_stream_count=0),
+    ])
+
+    assert result["verdict"] == "FAIL"
+    assert any("no audio stream" in reason for reason in result["reasons"])
+
+
+def test_technical_verification_warns_on_track_inconsistency():
+    result = summarize_audiobook_verification([
+        _probe("01.mp3", sample_rate=44100, channels=2),
+        _probe("02.mp3", sample_rate=48000, channels=1),
+    ])
+
+    assert result["verdict"] == "REVIEW"
+    assert result["reason_code"] == "AUDIO_TECHNICAL_WARNING"
+    assert any("multiple sample rates" in reason for reason in result["reasons"])
+    assert any("multiple channel" in reason for reason in result["reasons"])
+
+
+def test_single_m4b_without_chapters_is_warning_not_failure():
+    result = summarize_audiobook_verification([
+        _probe("book.m4b", format_name="mov,mp4,m4a,3gp,3g2,mj2", codec="aac", chapter_count=0),
+    ])
+
+    assert result["verdict"] == "REVIEW"
+    assert any("no chapter table" in reason for reason in result["reasons"])
+
+
+def test_zero_byte_file_is_failure():
+    result = summarize_audiobook_verification([
+        _probe("broken.mp3", size_bytes=0),
+    ])
+
+    assert result["verdict"] == "FAIL"
+    assert any("zero bytes" in reason for reason in result["reasons"])
