@@ -8,6 +8,7 @@ import uuid
 from .audiobook_verification import verify_audiobook
 from .config import settings
 from .db import add_result, create_scan, finish_scan, load_bindery_files, update_scan_progress
+from .language_detection import audiobook_languages, ebook_languages, explicit_non_english
 from .matcher import classify_audio, classify_ebook
 from .metadata import audio_files, audio_metadata_summary, ebook_metadata, ffprobe_metadata
 
@@ -50,6 +51,23 @@ def current_scan_detail(scan_id: str | None = None) -> dict[str, object]:
     return detail
 
 
+def _language_override(base: dict, language_result: dict) -> dict:
+    non_english = explicit_non_english(language_result)
+    if not non_english:
+        return base
+    labels = ", ".join(non_english)
+    base.update(
+        classification="REVIEW",
+        risk_score=max(int(base.get("risk_score") or 0), 90),
+        reason_code="NON_ENGLISH_LANGUAGE",
+        reasons=[
+            f"Embedded metadata explicitly identifies non-English language: {labels}. "
+            "Flagged for review/removal."
+        ],
+    )
+    return base
+
+
 def _scan_one(row: dict, audiobook_progress=None) -> dict:
     local_path = map_path(row["stored_path"], row["format"])
     base = {
@@ -73,6 +91,7 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
         samples = [ffprobe_metadata(path) for path in audio_files(local_path, settings.sample_files)]
         summary = audio_metadata_summary(samples)
         technical = verify_audiobook(local_path, progress_callback=audiobook_progress)
+        language = audiobook_languages(local_path, sample_limit=settings.sample_files)
         classification, score, reason_code, reasons = classify_audio(
             row["title"], row["author"], samples
         )
@@ -81,9 +100,14 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
             risk_score=score,
             reason_code=reason_code,
             reasons=reasons,
-            metadata={"samples": samples, **summary, "technical_verification": technical},
+            metadata={
+                "samples": samples,
+                **summary,
+                "technical_verification": technical,
+                "language_detection": language,
+            },
         )
-        return base
+        return _language_override(base, language)
 
     target = local_path
     if os.path.isdir(local_path):
@@ -95,6 +119,8 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
             target = str(sorted(candidates, key=lambda path: str(path).casefold())[0])
 
     md = ebook_metadata(target)
+    language = ebook_languages(target)
+    md["language_detection"] = language
     if "unsupported" in md:
         base.update(
             classification="REVIEW",
@@ -103,7 +129,7 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
             reasons=[f"Ebook format {md['unsupported']} is not inspected yet."],
             metadata=md,
         )
-        return base
+        return _language_override(base, language)
 
     classification, score, reason_code, reasons = classify_ebook(
         row["title"], row["author"], md
@@ -117,7 +143,7 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
         reasons=reasons,
         metadata=md,
     )
-    return base
+    return _language_override(base, language)
 
 
 def run_scan(scan_id: str, rows: list[dict]) -> None:
@@ -157,8 +183,6 @@ def run_scan(scan_id: str, rows: list[dict]) -> None:
                     audiobook_progress=audiobook_progress if row["format"] == "audiobook" else None,
                 ),
             )
-            # Update after every book so the dashboard never appears stuck for
-            # several items between progress checkpoints.
             update_scan_progress(scan_id, i)
 
         finish_scan(scan_id)
