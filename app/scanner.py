@@ -13,7 +13,9 @@ from .metadata import audio_files, audio_metadata_summary, ebook_metadata, ffpro
 
 
 _scan_lock = threading.Lock()
+_detail_lock = threading.Lock()
 _current_thread: threading.Thread | None = None
+_current_detail: dict[str, object] = {}
 
 EBOOK_CANDIDATE_SUFFIXES = {
     ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".rtf", ".txt",
@@ -35,7 +37,20 @@ def map_path(stored_path: str, fmt: str) -> str:
     return stored_path
 
 
-def _scan_one(row: dict) -> dict:
+def _set_detail(**values: object) -> None:
+    with _detail_lock:
+        _current_detail.update(values)
+
+
+def current_scan_detail(scan_id: str | None = None) -> dict[str, object]:
+    with _detail_lock:
+        detail = dict(_current_detail)
+    if scan_id and detail.get("scan_id") != scan_id:
+        return {}
+    return detail
+
+
+def _scan_one(row: dict, audiobook_progress=None) -> dict:
     local_path = map_path(row["stored_path"], row["format"])
     base = {
         **row,
@@ -57,7 +72,7 @@ def _scan_one(row: dict) -> dict:
     if row["format"] == "audiobook":
         samples = [ffprobe_metadata(path) for path in audio_files(local_path, settings.sample_files)]
         summary = audio_metadata_summary(samples)
-        technical = verify_audiobook(local_path)
+        technical = verify_audiobook(local_path, progress_callback=audiobook_progress)
         classification, score, reason_code, reasons = classify_audio(
             row["title"], row["author"], samples
         )
@@ -109,12 +124,55 @@ def run_scan(scan_id: str, rows: list[dict]) -> None:
     try:
         total = len(rows)
         for i, row in enumerate(rows, start=1):
-            add_result(scan_id, _scan_one(row))
-            if i == total or i % settings.progress_every == 0:
-                update_scan_progress(scan_id, i)
+            base_detail = {
+                "scan_id": scan_id,
+                "phase": "scanning",
+                "book_index": i,
+                "book_total": total,
+                "book_id": row.get("book_id"),
+                "title": row.get("title"),
+                "author": row.get("author"),
+                "format": row.get("format"),
+                "audio_file_index": None,
+                "audio_file_total": None,
+                "current_file": None,
+            }
+            _set_detail(**base_detail)
+
+            def audiobook_progress(event: dict) -> None:
+                path = str(event.get("path") or "")
+                _set_detail(
+                    **base_detail,
+                    phase=str(event.get("phase") or "scanning"),
+                    audio_file_index=event.get("file_index"),
+                    audio_file_total=event.get("file_total"),
+                    current_file=Path(path).name if path else None,
+                )
+
+            add_result(
+                scan_id,
+                _scan_one(
+                    row,
+                    audiobook_progress=audiobook_progress if row["format"] == "audiobook" else None,
+                ),
+            )
+            # Update after every book so the dashboard never appears stuck for
+            # several items between progress checkpoints.
+            update_scan_progress(scan_id, i)
+
         finish_scan(scan_id)
+        _set_detail(
+            scan_id=scan_id,
+            phase="complete",
+            book_index=total,
+            book_total=total,
+            audio_file_index=None,
+            audio_file_total=None,
+            current_file=None,
+        )
     except Exception as exc:
         finish_scan(scan_id, status="failed", error=str(exc)[:1000])
+        _set_detail(scan_id=scan_id, phase="failed", error=str(exc)[:500])
     finally:
         global _current_thread
         with _scan_lock:
@@ -134,6 +192,15 @@ def start_scan() -> str | None:
         ]
         scan_id = uuid.uuid4().hex
         create_scan(scan_id, len(rows))
+        _set_detail(
+            scan_id=scan_id,
+            phase="starting",
+            book_index=0,
+            book_total=len(rows),
+            audio_file_index=None,
+            audio_file_total=None,
+            current_file=None,
+        )
         thread = threading.Thread(
             target=run_scan,
             args=(scan_id, rows),
