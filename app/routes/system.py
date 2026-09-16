@@ -12,7 +12,7 @@ from ..db import (
     latest_scan,
     save_persisted_settings,
 )
-from ..scanner import start_scan
+from ..scanner import current_scan_detail, start_scan
 from ..services.dashboard import compact_result, scan_timing
 from .models import ConfirmationRequest, require_confirmation
 
@@ -34,7 +34,13 @@ def api_scan(payload: ConfirmationRequest):
         raise HTTPException(status_code=500, detail=str(exc))
     if not scan_id:
         raise HTTPException(status_code=409, detail="A scan is already running.")
-    return {"scan_id": scan_id}
+    return {
+        "scan_id": scan_id,
+        "message": (
+            "Library scanning can take a while, especially for multi-file audiobooks. "
+            "BookGuard reports live book and audio-file progress while it works."
+        ),
+    }
 
 
 @router.get("/api/status")
@@ -42,8 +48,10 @@ def api_status():
     scan = latest_scan()
     counts = latest_counts()
     recent = [compact_result(row) for row in latest_recent_results(settings.live_results_limit)]
+    scan_id = str(scan.get("id")) if scan and scan.get("id") else None
     return {
         "scan": scan,
+        "scan_detail": current_scan_detail(scan_id),
         "counts": counts,
         "review_reasons": latest_reason_counts("REVIEW"),
         "timing": scan_timing(scan),
