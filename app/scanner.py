@@ -5,6 +5,7 @@ from pathlib import Path
 import threading
 import uuid
 
+from .audiobook_verification import verify_audiobook
 from .config import settings
 from .db import add_result, create_scan, finish_scan, load_bindery_files, update_scan_progress
 from .matcher import classify_audio, classify_ebook
@@ -56,6 +57,7 @@ def _scan_one(row: dict) -> dict:
     if row["format"] == "audiobook":
         samples = [ffprobe_metadata(path) for path in audio_files(local_path, settings.sample_files)]
         summary = audio_metadata_summary(samples)
+        technical = verify_audiobook(local_path)
         classification, score, reason_code, reasons = classify_audio(
             row["title"], row["author"], samples
         )
@@ -64,7 +66,7 @@ def _scan_one(row: dict) -> dict:
             risk_score=score,
             reason_code=reason_code,
             reasons=reasons,
-            metadata={"samples": samples, **summary},
+            metadata={"samples": samples, **summary, "technical_verification": technical},
         )
         return base
 
