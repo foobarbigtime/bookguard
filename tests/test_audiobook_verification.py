@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import app.audiobook_verification as verification_module
 from app.audiobook_verification import (
     discover_audio_files,
     summarize_audiobook_verification,
+    verify_audiobook,
 )
 
 
@@ -151,3 +153,32 @@ def test_unrelated_numeric_filenames_do_not_trigger_sequence_heuristic():
     ])
 
     assert result["verdict"] == "PASS"
+
+
+def test_verify_audiobook_reports_file_progress(tmp_path, monkeypatch):
+    first = tmp_path / "01.mp3"
+    second = tmp_path / "02.mp3"
+    first.write_bytes(b"audio")
+    second.write_bytes(b"audio")
+
+    monkeypatch.setattr(
+        verification_module,
+        "probe_audio_file",
+        lambda path: _probe(path),
+    )
+    events: list[dict] = []
+
+    result = verify_audiobook(str(tmp_path), progress_callback=events.append)
+
+    assert result["verdict"] == "PASS"
+    assert events[0] == {
+        "phase": "discovered",
+        "file_index": 0,
+        "file_total": 2,
+        "path": None,
+    }
+    probing = [event for event in events if event["phase"] == "probing"]
+    assert [event["file_index"] for event in probing] == [1, 2]
+    assert all(event["file_total"] == 2 for event in probing)
+    assert Path(str(probing[0]["path"])).name == "01.mp3"
+    assert events[-1]["phase"] == "complete"
