@@ -141,13 +141,14 @@ def run_scan(scan_id: str, rows: list[dict]) -> None:
 
             def audiobook_progress(event: dict) -> None:
                 path = str(event.get("path") or "")
-                _set_detail(
+                detail = {
                     **base_detail,
-                    phase=str(event.get("phase") or "scanning"),
-                    audio_file_index=event.get("file_index"),
-                    audio_file_total=event.get("file_total"),
-                    current_file=Path(path).name if path else None,
-                )
+                    "phase": str(event.get("phase") or "scanning"),
+                    "audio_file_index": event.get("file_index"),
+                    "audio_file_total": event.get("file_total"),
+                    "current_file": Path(path).name if path else None,
+                }
+                _set_detail(**detail)
 
             add_result(
                 scan_id,
