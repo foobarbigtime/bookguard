@@ -50,7 +50,11 @@
           <div id="progressBar" class="progress-bar" style="width: {{ timing.percent }}%"></div>
         </div>
         <small id="scanTiming">{% if scan %}{{ timing.percent }}% · elapsed {{ timing.elapsed_seconds }}s{% endif %}</small>
-        <small class="scan-note">Full scans can take a while. Audiobook technical verification checks every discovered audio file, so large multi-file books may spend several minutes on one item while progress continues below.</small>
+        <div id="scanControls" hidden>
+          <button id="safeCancelButton" type="button">Cancel safely</button>
+          <button id="immediateStopButton" type="button" class="danger">Stop immediately</button>
+        </div>
+        <small class="scan-note">Full scans can take a while. Audiobook technical verification checks every discovered audio file, so large multi-file books may spend several minutes on one item while progress continues below. “Cancel safely” finishes the current book first; “Stop immediately” aborts active verification and does not save the interrupted book as complete.</small>
       </article>
     </section>
 
@@ -215,6 +219,9 @@
 
 <script>
 const scanButton = document.getElementById("scanButton");
+const scanControls = document.getElementById("scanControls");
+const safeCancelButton = document.getElementById("safeCancelButton");
+const immediateStopButton = document.getElementById("immediateStopButton");
 const classificationFilter = {{ classification|tojson }};
 const reasonFilter = {{ reason_code|tojson }};
 const allowActions = {{ allow_actions|tojson }};
@@ -243,6 +250,12 @@ function formatDuration(seconds) {
 
 function reasonLabel(code) {
   return String(code || "UNKNOWN").replaceAll("_", " ");
+}
+
+function setScanControls(running, stopRequested=false) {
+  scanControls.hidden = !running;
+  safeCancelButton.disabled = !running || stopRequested;
+  immediateStopButton.disabled = !running || stopRequested;
 }
 
 function resultRow(row) {
@@ -328,7 +341,34 @@ async function startScan() {
     scanButton.textContent = "Scan library";
     return;
   }
+  setScanControls(true, false);
   pollStatus(true);
+}
+
+async function requestScanControl(mode) {
+  const safe = mode === "safe";
+  const warning = safe
+    ? "Cancel this scan safely?\n\nBookGuard will finish the book currently being audited, save that completed result, and stop before starting the next book."
+    : "Stop this scan immediately?\n\nBookGuard will abort active verification as quickly as possible. The book currently being audited will NOT be saved as a completed result.";
+  if (!confirm(warning)) return;
+
+  setScanControls(true, true);
+  document.getElementById("scanDetail").textContent = safe
+    ? "Safe cancel requested — finishing the current book…"
+    : "Immediate stop requested — aborting active verification…";
+
+  const response = await fetch(safe ? "/api/scan/cancel-safe" : "/api/scan/stop-immediately", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({confirm: safe ? "CANCEL" : "STOP"}),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    alert(body.detail || "Unable to stop the scan.");
+    setScanControls(true, false);
+    return;
+  }
+  pollStatus(false);
 }
 
 async function pollStatus(reloadWhenDone=false) {
@@ -362,8 +402,15 @@ async function pollStatus(reloadWhenDone=false) {
     } else {
       detailText = "Preparing library scan…";
     }
+    if (detail.cancel_requested) {
+      detailText += detail.cancel_mode === "immediate"
+        ? " · immediate stop requested"
+        : " · safe cancel requested; finishing current book";
+    }
   } else if (scan.status === "failed") {
     detailText = detail.error || scan.error || "Scan failed.";
+  } else if (detail.message) {
+    detailText = detail.message;
   }
   document.getElementById("scanDetail").textContent = detailText;
 
@@ -385,11 +432,13 @@ async function pollStatus(reloadWhenDone=false) {
   if (scan.status === "running") {
     scanButton.disabled = true;
     scanButton.textContent = "Scanning…";
-    setTimeout(() => pollStatus(true), body.poll_ms || defaultPollMs);
+    setScanControls(true, Boolean(detail.cancel_requested));
+    setTimeout(() => pollStatus(reloadWhenDone), body.poll_ms || defaultPollMs);
   } else {
     scanButton.disabled = false;
     scanButton.textContent = "Scan library";
-    if (reloadWhenDone) window.location.reload();
+    setScanControls(false, false);
+    if (reloadWhenDone && scan.status === "complete") window.location.reload();
   }
 }
 
@@ -518,6 +567,8 @@ async function runAction(id, action) {
 }
 
 scanButton.addEventListener("click", startScan);
+safeCancelButton.addEventListener("click", () => requestScanControl("safe"));
+immediateStopButton.addEventListener("click", () => requestScanControl("immediate"));
 pollStatus(false);
 </script>
 </body>
