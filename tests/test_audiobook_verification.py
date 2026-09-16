@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 import app.audiobook_verification as verification_module
 from app.audiobook_verification import (
+    AudiobookVerificationCancelled,
     discover_audio_files,
     summarize_audiobook_verification,
     verify_audiobook,
@@ -164,7 +167,7 @@ def test_verify_audiobook_reports_file_progress(tmp_path, monkeypatch):
     monkeypatch.setattr(
         verification_module,
         "probe_audio_file",
-        lambda path: _probe(path),
+        lambda path, cancel_check=None: _probe(path),
     )
     events: list[dict] = []
 
@@ -182,3 +185,21 @@ def test_verify_audiobook_reports_file_progress(tmp_path, monkeypatch):
     assert all(event["file_total"] == 2 for event in probing)
     assert Path(str(probing[0]["path"])).name == "01.mp3"
     assert events[-1]["phase"] == "complete"
+
+
+def test_verify_audiobook_honors_immediate_cancel_before_probe(tmp_path, monkeypatch):
+    path = tmp_path / "01.mp3"
+    path.write_bytes(b"audio")
+    called = False
+
+    def fake_probe(path: str, cancel_check=None):
+        nonlocal called
+        called = True
+        return _probe(path)
+
+    monkeypatch.setattr(verification_module, "probe_audio_file", fake_probe)
+
+    with pytest.raises(AudiobookVerificationCancelled):
+        verify_audiobook(str(tmp_path), cancel_check=lambda: True)
+
+    assert called is False
