@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,8 @@ DISC_TRACK_SUFFIX = re.compile(
     r"^(?P<prefix>.*?)(?P<disc>\d{1,3})[-_](?P<track>\d{2,3})$",
     flags=re.IGNORECASE,
 )
+
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 def discover_audio_files(path: str) -> list[str]:
@@ -285,7 +288,64 @@ def summarize_audiobook_verification(probes: list[dict[str, Any]]) -> dict[str, 
     }
 
 
-def verify_audiobook(path: str) -> dict[str, Any]:
+def _emit_progress(
+    callback: ProgressCallback | None,
+    *,
+    phase: str,
+    file_index: int,
+    file_total: int,
+    path: str | None,
+) -> None:
+    if callback is None:
+        return
+    callback(
+        {
+            "phase": phase,
+            "file_index": file_index,
+            "file_total": file_total,
+            "path": path,
+        }
+    )
+
+
+def verify_audiobook(
+    path: str,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
     files = discover_audio_files(path)
-    probes = [probe_audio_file(candidate) for candidate in files]
-    return summarize_audiobook_verification(probes)
+    total = len(files)
+    _emit_progress(
+        progress_callback,
+        phase="discovered",
+        file_index=0,
+        file_total=total,
+        path=None,
+    )
+
+    probes: list[dict[str, Any]] = []
+    for index, candidate in enumerate(files, start=1):
+        _emit_progress(
+            progress_callback,
+            phase="probing",
+            file_index=index,
+            file_total=total,
+            path=candidate,
+        )
+        probes.append(probe_audio_file(candidate))
+
+    _emit_progress(
+        progress_callback,
+        phase="summarizing",
+        file_index=total,
+        file_total=total,
+        path=None,
+    )
+    result = summarize_audiobook_verification(probes)
+    _emit_progress(
+        progress_callback,
+        phase="complete",
+        file_index=total,
+        file_total=total,
+        path=None,
+    )
+    return result
