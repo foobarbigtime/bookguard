@@ -5,7 +5,7 @@ from pathlib import Path
 import threading
 import uuid
 
-from .audiobook_verification import verify_audiobook
+from .audiobook_verification import AudiobookVerificationCancelled, verify_audiobook
 from .config import settings
 from .db import add_result, create_scan, finish_scan, load_bindery_files, update_scan_progress
 from .language_detection import audiobook_languages, ebook_languages, explicit_non_english
@@ -17,6 +17,8 @@ _scan_lock = threading.Lock()
 _detail_lock = threading.Lock()
 _current_thread: threading.Thread | None = None
 _current_detail: dict[str, object] = {}
+_safe_cancel_event = threading.Event()
+_immediate_stop_event = threading.Event()
 
 EBOOK_CANDIDATE_SUFFIXES = {
     ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".rtf", ".txt",
@@ -51,6 +53,34 @@ def current_scan_detail(scan_id: str | None = None) -> dict[str, object]:
     return detail
 
 
+def scan_is_running() -> bool:
+    with _scan_lock:
+        return bool(_current_thread and _current_thread.is_alive())
+
+
+def request_safe_cancel() -> bool:
+    """Finish the current book, persist it, then stop before the next book."""
+    if not scan_is_running():
+        return False
+    _safe_cancel_event.set()
+    _set_detail(cancel_mode="safe", cancel_requested=True)
+    return True
+
+
+def request_immediate_stop() -> bool:
+    """Stop as quickly as possible and interrupt active audiobook ffprobe work."""
+    if not scan_is_running():
+        return False
+    _immediate_stop_event.set()
+    _set_detail(cancel_mode="immediate", cancel_requested=True, phase="stopping")
+    return True
+
+
+def _raise_if_immediate_stop() -> None:
+    if _immediate_stop_event.is_set():
+        raise AudiobookVerificationCancelled("Scan stopped immediately by user.")
+
+
 def _language_override(base: dict, language_result: dict) -> dict:
     non_english = explicit_non_english(language_result)
     if not non_english:
@@ -69,6 +99,7 @@ def _language_override(base: dict, language_result: dict) -> dict:
 
 
 def _scan_one(row: dict, audiobook_progress=None) -> dict:
+    _raise_if_immediate_stop()
     local_path = map_path(row["stored_path"], row["format"])
     base = {
         **row,
@@ -88,10 +119,19 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
         return base
 
     if row["format"] == "audiobook":
-        samples = [ffprobe_metadata(path) for path in audio_files(local_path, settings.sample_files)]
+        samples = []
+        for path in audio_files(local_path, settings.sample_files):
+            _raise_if_immediate_stop()
+            samples.append(ffprobe_metadata(path))
         summary = audio_metadata_summary(samples)
-        technical = verify_audiobook(local_path, progress_callback=audiobook_progress)
+        technical = verify_audiobook(
+            local_path,
+            progress_callback=audiobook_progress,
+            cancel_check=_immediate_stop_event.is_set,
+        )
+        _raise_if_immediate_stop()
         language = audiobook_languages(local_path, sample_limit=settings.sample_files)
+        _raise_if_immediate_stop()
         classification, score, reason_code, reasons = classify_audio(
             row["title"], row["author"], samples
         )
@@ -113,12 +153,15 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
     if os.path.isdir(local_path):
         candidates: list[Path] = []
         for candidate in Path(local_path).rglob("*"):
+            _raise_if_immediate_stop()
             if candidate.is_file() and candidate.suffix.lower() in EBOOK_CANDIDATE_SUFFIXES:
                 candidates.append(candidate)
         if candidates:
             target = str(sorted(candidates, key=lambda path: str(path).casefold())[0])
 
+    _raise_if_immediate_stop()
     md = ebook_metadata(target)
+    _raise_if_immediate_stop()
     language = ebook_languages(target)
     md["language_detection"] = language
     if "unsupported" in md:
@@ -146,10 +189,41 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
     return _language_override(base, language)
 
 
+def _mark_cancelled(scan_id: str, *, status: str, phase: str, message: str) -> None:
+    finish_scan(scan_id, status=status)
+    _set_detail(
+        scan_id=scan_id,
+        phase=phase,
+        cancel_requested=False,
+        cancel_mode=None,
+        message=message,
+        audio_file_index=None,
+        audio_file_total=None,
+        current_file=None,
+    )
+
+
 def run_scan(scan_id: str, rows: list[dict]) -> None:
     try:
         total = len(rows)
         for i, row in enumerate(rows, start=1):
+            if _immediate_stop_event.is_set():
+                _mark_cancelled(
+                    scan_id,
+                    status="stopped",
+                    phase="stopped",
+                    message="Scan stopped immediately by user.",
+                )
+                return
+            if _safe_cancel_event.is_set():
+                _mark_cancelled(
+                    scan_id,
+                    status="cancelled",
+                    phase="cancelled",
+                    message="Scan cancelled safely before starting the next book.",
+                )
+                return
+
             base_detail = {
                 "scan_id": scan_id,
                 "phase": "scanning",
@@ -162,6 +236,9 @@ def run_scan(scan_id: str, rows: list[dict]) -> None:
                 "audio_file_index": None,
                 "audio_file_total": None,
                 "current_file": None,
+                "cancel_requested": False,
+                "cancel_mode": None,
+                "message": None,
             }
             _set_detail(**base_detail)
 
@@ -173,17 +250,31 @@ def run_scan(scan_id: str, rows: list[dict]) -> None:
                     "audio_file_index": event.get("file_index"),
                     "audio_file_total": event.get("file_total"),
                     "current_file": Path(path).name if path else None,
+                    "cancel_requested": _safe_cancel_event.is_set() or _immediate_stop_event.is_set(),
+                    "cancel_mode": (
+                        "immediate" if _immediate_stop_event.is_set()
+                        else "safe" if _safe_cancel_event.is_set()
+                        else None
+                    ),
                 }
                 _set_detail(**detail)
 
-            add_result(
-                scan_id,
-                _scan_one(
-                    row,
-                    audiobook_progress=audiobook_progress if row["format"] == "audiobook" else None,
-                ),
+            result = _scan_one(
+                row,
+                audiobook_progress=audiobook_progress if row["format"] == "audiobook" else None,
             )
+            _raise_if_immediate_stop()
+            add_result(scan_id, result)
             update_scan_progress(scan_id, i)
+
+            if _safe_cancel_event.is_set():
+                _mark_cancelled(
+                    scan_id,
+                    status="cancelled",
+                    phase="cancelled",
+                    message="Safe cancel completed after finishing the current book.",
+                )
+                return
 
         finish_scan(scan_id)
         _set_detail(
@@ -194,11 +285,23 @@ def run_scan(scan_id: str, rows: list[dict]) -> None:
             audio_file_index=None,
             audio_file_total=None,
             current_file=None,
+            cancel_requested=False,
+            cancel_mode=None,
+            message="Scan completed.",
+        )
+    except AudiobookVerificationCancelled:
+        _mark_cancelled(
+            scan_id,
+            status="stopped",
+            phase="stopped",
+            message="Scan stopped immediately by user. The interrupted book was not saved as a completed result.",
         )
     except Exception as exc:
         finish_scan(scan_id, status="failed", error=str(exc)[:1000])
         _set_detail(scan_id=scan_id, phase="failed", error=str(exc)[:500])
     finally:
+        _safe_cancel_event.clear()
+        _immediate_stop_event.clear()
         global _current_thread
         with _scan_lock:
             _current_thread = None
@@ -209,6 +312,8 @@ def start_scan() -> str | None:
     with _scan_lock:
         if _current_thread and _current_thread.is_alive():
             return None
+        _safe_cancel_event.clear()
+        _immediate_stop_event.clear()
         rows = load_bindery_files()
         rows = [
             row for row in rows
@@ -225,6 +330,9 @@ def start_scan() -> str | None:
             audio_file_index=None,
             audio_file_total=None,
             current_file=None,
+            cancel_requested=False,
+            cancel_mode=None,
+            message=None,
         )
         thread = threading.Thread(
             target=run_scan,
