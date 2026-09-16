@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 from typing import Any
 
 from .metadata import AUDIO_EXTENSIONS
@@ -18,6 +19,11 @@ DISC_TRACK_SUFFIX = re.compile(
 )
 
 ProgressCallback = Callable[[dict[str, Any]], None]
+CancelCheck = Callable[[], bool]
+
+
+class AudiobookVerificationCancelled(RuntimeError):
+    """Raised when an in-progress audiobook verification is stopped by the user."""
 
 
 def discover_audio_files(path: str) -> list[str]:
@@ -53,7 +59,24 @@ def _integer(value: Any) -> int | None:
     return parsed if parsed >= 0 else None
 
 
-def probe_audio_file(path: str) -> dict[str, Any]:
+def _stop_process(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=1)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            proc.kill()
+            proc.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
+def probe_audio_file(
+    path: str,
+    cancel_check: CancelCheck | None = None,
+) -> dict[str, Any]:
     """Collect technical stream/container information without modifying the file."""
     source = Path(path)
     try:
@@ -74,18 +97,42 @@ def probe_audio_file(path: str) -> dict[str, Any]:
         path,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except OSError as exc:
         return {"path": path, "probe_error": str(exc)[:500], "size_bytes": size}
+
+    started = time.monotonic()
+    stdout = ""
+    stderr = ""
+    while True:
+        if cancel_check and cancel_check():
+            _stop_process(proc)
+            raise AudiobookVerificationCancelled("Audiobook verification stopped by user.")
+        try:
+            stdout, stderr = proc.communicate(timeout=0.25)
+            break
+        except subprocess.TimeoutExpired:
+            if time.monotonic() - started >= 60:
+                _stop_process(proc)
+                return {
+                    "path": path,
+                    "probe_error": "ffprobe timed out after 60 seconds",
+                    "size_bytes": size,
+                }
 
     if proc.returncode != 0:
         return {
             "path": path,
-            "probe_error": proc.stderr.strip()[:500] or f"ffprobe exited with {proc.returncode}",
+            "probe_error": stderr.strip()[:500] or f"ffprobe exited with {proc.returncode}",
             "size_bytes": size,
         }
     try:
-        payload = json.loads(proc.stdout or "{}")
+        payload = json.loads(stdout or "{}")
     except json.JSONDecodeError:
         return {"path": path, "probe_error": "ffprobe returned invalid JSON", "size_bytes": size}
 
@@ -308,10 +355,17 @@ def _emit_progress(
     )
 
 
+def _raise_if_cancelled(cancel_check: CancelCheck | None) -> None:
+    if cancel_check and cancel_check():
+        raise AudiobookVerificationCancelled("Audiobook verification stopped by user.")
+
+
 def verify_audiobook(
     path: str,
     progress_callback: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
+    _raise_if_cancelled(cancel_check)
     files = discover_audio_files(path)
     total = len(files)
     _emit_progress(
@@ -324,6 +378,7 @@ def verify_audiobook(
 
     probes: list[dict[str, Any]] = []
     for index, candidate in enumerate(files, start=1):
+        _raise_if_cancelled(cancel_check)
         _emit_progress(
             progress_callback,
             phase="probing",
@@ -331,8 +386,9 @@ def verify_audiobook(
             file_total=total,
             path=candidate,
         )
-        probes.append(probe_audio_file(candidate))
+        probes.append(probe_audio_file(candidate, cancel_check=cancel_check))
 
+    _raise_if_cancelled(cancel_check)
     _emit_progress(
         progress_callback,
         phase="summarizing",
