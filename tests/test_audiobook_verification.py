@@ -99,3 +99,55 @@ def test_zero_byte_file_is_failure():
 
     assert result["verdict"] == "FAIL"
     assert any("zero bytes" in reason for reason in result["reasons"])
+
+
+def test_disc_track_sequence_warns_when_only_later_disc_is_present():
+    probes = [
+        _probe(f"James Patterson - Woman Of God 7-{track:02d}.mp3")
+        for track in range(1, 16)
+    ]
+
+    result = summarize_audiobook_verification(probes)
+
+    assert result["verdict"] == "REVIEW"
+    assert any("starts at disc/part 7" in reason for reason in result["reasons"])
+
+
+def test_disc_track_sequence_warns_on_missing_track_number():
+    result = summarize_audiobook_verification([
+        _probe("Book 1-01.mp3"),
+        _probe("Book 1-03.mp3"),
+    ])
+
+    assert result["verdict"] == "REVIEW"
+    assert any("missing track numbers: 2" in reason for reason in result["reasons"])
+
+
+def test_disc_track_sequence_warns_on_missing_disc_number():
+    result = summarize_audiobook_verification([
+        _probe("Book 1-01.mp3"),
+        _probe("Book 3-01.mp3"),
+    ])
+
+    assert result["verdict"] == "REVIEW"
+    assert any("missing disc/part numbers: 2" in reason for reason in result["reasons"])
+
+
+def test_complete_disc_track_sequence_passes():
+    result = summarize_audiobook_verification([
+        _probe("Book 1-01.mp3"),
+        _probe("Book 1-02.mp3"),
+        _probe("Book 2-01.mp3"),
+        _probe("Book 2-02.mp3"),
+    ])
+
+    assert result["verdict"] == "PASS"
+
+
+def test_unrelated_numeric_filenames_do_not_trigger_sequence_heuristic():
+    result = summarize_audiobook_verification([
+        _probe("1984 chapter 01.mp3"),
+        _probe("1984 chapter 02.mp3"),
+    ])
+
+    assert result["verdict"] == "PASS"
