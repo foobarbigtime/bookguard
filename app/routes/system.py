@@ -12,7 +12,12 @@ from ..db import (
     latest_scan,
     save_persisted_settings,
 )
-from ..scanner import current_scan_detail, start_scan
+from ..scanner import (
+    current_scan_detail,
+    request_immediate_stop,
+    request_safe_cancel,
+    start_scan,
+)
 from ..services.dashboard import compact_result, scan_timing
 from .models import ConfirmationRequest, require_confirmation
 
@@ -39,6 +44,31 @@ def api_scan(payload: ConfirmationRequest):
         "message": (
             "Library scanning can take a while, especially for multi-file audiobooks. "
             "BookGuard reports live book and audio-file progress while it works."
+        ),
+    }
+
+
+@router.post("/api/scan/cancel-safe")
+def api_scan_cancel_safe(payload: ConfirmationRequest):
+    require_confirmation(payload, "CANCEL")
+    if not request_safe_cancel():
+        raise HTTPException(status_code=409, detail="There is no running scan to cancel.")
+    return {
+        "ok": True,
+        "message": "Safe cancel requested. BookGuard will finish the current book and stop before the next one.",
+    }
+
+
+@router.post("/api/scan/stop-immediately")
+def api_scan_stop_immediately(payload: ConfirmationRequest):
+    require_confirmation(payload, "STOP")
+    if not request_immediate_stop():
+        raise HTTPException(status_code=409, detail="There is no running scan to stop.")
+    return {
+        "ok": True,
+        "message": (
+            "Immediate stop requested. Active audiobook ffprobe work will be terminated and the "
+            "interrupted book will not be saved as a completed result."
         ),
     }
 
