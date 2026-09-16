@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from typing import Any
 
@@ -10,6 +11,10 @@ from .metadata import AUDIO_EXTENSIONS
 
 
 MIN_REASONABLE_AUDIO_BYTES = 4096
+DISC_TRACK_SUFFIX = re.compile(
+    r"^(?P<prefix>.*?)(?P<disc>\d{1,3})[-_](?P<track>\d{2,3})$",
+    flags=re.IGNORECASE,
+)
 
 
 def discover_audio_files(path: str) -> list[str]:
@@ -112,6 +117,77 @@ def _distinct(values: list[Any]) -> list[Any]:
     return sorted({value for value in values if value not in (None, "")}, key=str)
 
 
+def _missing_in_range(values: list[int]) -> list[int]:
+    if not values:
+        return []
+    present = set(values)
+    return [value for value in range(min(values), max(values) + 1) if value not in present]
+
+
+def disc_track_sequence_warnings(probes: list[dict[str, Any]]) -> list[str]:
+    """Detect strong filename evidence of missing audiobook disc/track parts.
+
+    The heuristic is deliberately conservative. It is used only when at least two
+    files all end in the same two-number pattern, for example "Title 7-01.mp3".
+    It never fails an audiobook; it only produces REVIEW warnings.
+    """
+    if len(probes) < 2:
+        return []
+
+    parsed: list[tuple[str, int, int]] = []
+    for probe in probes:
+        stem = Path(str(probe.get("path") or "")).stem
+        match = DISC_TRACK_SUFFIX.match(stem)
+        if not match:
+            return []
+        prefix = re.sub(r"[\s._-]+$", "", match.group("prefix")).casefold()
+        parsed.append((prefix, int(match.group("disc")), int(match.group("track"))))
+
+    prefixes = {prefix for prefix, _, _ in parsed}
+    if len(prefixes) != 1:
+        return []
+
+    groups: dict[int, list[int]] = {}
+    for _, disc, track in parsed:
+        groups.setdefault(disc, []).append(track)
+
+    warnings: list[str] = []
+    discs = sorted(groups)
+    first_disc = discs[0]
+    if first_disc > 1:
+        missing = ", ".join(str(value) for value in range(1, first_disc))
+        warnings.append(
+            f"Filename sequence starts at disc/part {first_disc}; earlier disc/part "
+            f"numbers are absent ({missing})."
+        )
+
+    missing_discs = _missing_in_range(discs)
+    if missing_discs:
+        warnings.append(
+            "Filename sequence has missing disc/part numbers: "
+            + ", ".join(map(str, missing_discs))
+            + "."
+        )
+
+    for disc in discs:
+        tracks = sorted(set(groups[disc]))
+        first_track = tracks[0]
+        if first_track > 1:
+            warnings.append(
+                f"Disc/part {disc} filename sequence starts at track {first_track}; "
+                "earlier track numbers are absent."
+            )
+        missing_tracks = _missing_in_range(tracks)
+        if missing_tracks:
+            warnings.append(
+                f"Disc/part {disc} filename sequence has missing track numbers: "
+                + ", ".join(map(str, missing_tracks))
+                + "."
+            )
+
+    return warnings
+
+
 def summarize_audiobook_verification(probes: list[dict[str, Any]]) -> dict[str, Any]:
     """Turn per-file probe results into a deterministic read-only verification result."""
     if not probes:
@@ -165,6 +241,8 @@ def summarize_audiobook_verification(probes: list[dict[str, Any]]) -> dict[str, 
             warnings.append(
                 f"Audiobook uses multiple channel layouts/counts: {', '.join(map(str, channels))}."
             )
+
+    warnings.extend(disc_track_sequence_warnings(probes))
 
     single_m4b = (
         len(probes) == 1
