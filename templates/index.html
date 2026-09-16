@@ -45,10 +45,12 @@
         <span class="label">Latest scan</span>
         <strong id="scanState">{{ scan.status if scan else "Never run" }}</strong>
         <small id="scanProgress">{% if scan %}{{ scan.processed }} / {{ scan.total }}{% else %}Start a scan to audit the library.{% endif %}</small>
+        <small id="scanDetail"></small>
         <div class="progress-track" aria-label="Scan progress">
           <div id="progressBar" class="progress-bar" style="width: {{ timing.percent }}%"></div>
         </div>
         <small id="scanTiming">{% if scan %}{{ timing.percent }}% · elapsed {{ timing.elapsed_seconds }}s{% endif %}</small>
+        <small class="scan-note">Full scans can take a while. Audiobook technical verification checks every discovered audio file, so large multi-file books may spend several minutes on one item while progress continues below.</small>
       </article>
     </section>
 
@@ -313,6 +315,7 @@ function renderLiveResults(rows) {
 async function startScan() {
   scanButton.disabled = true;
   scanButton.textContent = "Starting…";
+  document.getElementById("scanDetail").textContent = "Starting scan… This may take a while for large libraries or multi-file audiobooks.";
   const response = await fetch("/api/scan", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -335,10 +338,34 @@ async function pollStatus(reloadWhenDone=false) {
   if (!body.scan) return;
 
   const scan = body.scan;
+  const detail = body.scan_detail || {};
   const timing = body.timing || {};
   document.getElementById("scanState").textContent = scan.status;
-  document.getElementById("scanProgress").textContent = `${scan.processed} / ${scan.total}`;
+  document.getElementById("scanProgress").textContent = `Books complete: ${scan.processed} / ${scan.total}`;
   document.getElementById("progressBar").style.width = `${timing.percent || 0}%`;
+
+  let detailText = "";
+  if (scan.status === "running") {
+    if (detail.book_index) {
+      const format = detail.format === "audiobook" ? "audiobook" : "ebook";
+      detailText = `Book ${detail.book_index}/${detail.book_total}: ${detail.title || "Untitled"} (${format})`;
+      if (detail.format === "audiobook" && detail.audio_file_total !== null && detail.audio_file_total !== undefined) {
+        if (detail.phase === "probing" && detail.audio_file_index) {
+          detailText += ` · audio file ${detail.audio_file_index}/${detail.audio_file_total}`;
+          if (detail.current_file) detailText += ` · ${detail.current_file}`;
+        } else if (detail.phase === "discovered") {
+          detailText += ` · ${detail.audio_file_total} audio file(s) discovered`;
+        } else if (detail.phase === "summarizing") {
+          detailText += " · summarizing verification";
+        }
+      }
+    } else {
+      detailText = "Preparing library scan…";
+    }
+  } else if (scan.status === "failed") {
+    detailText = detail.error || scan.error || "Scan failed.";
+  }
+  document.getElementById("scanDetail").textContent = detailText;
 
   let timingText = `${timing.percent || 0}% · elapsed ${formatDuration(timing.elapsed_seconds)}`;
   if (scan.status === "running" && timing.eta_seconds !== null && timing.eta_seconds !== undefined) timingText += ` · ETA ${formatDuration(timing.eta_seconds)}`;
