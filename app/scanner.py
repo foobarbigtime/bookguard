@@ -10,6 +10,7 @@ from .config import settings
 from .db import add_result, create_scan, finish_scan, load_bindery_files, update_scan_progress
 from .language_detection import ebook_languages, explicit_non_english, normalize_language
 from .matcher import classify_audio, classify_ebook
+from .media_discovery import representative_items, resolve_ebook_target
 from .metadata import audio_metadata_summary, ebook_metadata
 
 
@@ -19,11 +20,6 @@ _current_thread: threading.Thread | None = None
 _current_detail: dict[str, object] = {}
 _safe_cancel_event = threading.Event()
 _immediate_stop_event = threading.Event()
-
-EBOOK_CANDIDATE_SUFFIXES = {
-    ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".rtf", ".txt",
-    ".cbr", ".lit",
-}
 
 
 def map_path(stored_path: str, fmt: str) -> str:
@@ -112,25 +108,8 @@ def _language_override(base: dict, language_result: dict) -> dict:
     return base
 
 
-def _representative_probe_samples(probes: list[dict], limit: int) -> list[dict]:
-    if not probes or limit <= 0:
-        return []
-    if len(probes) <= limit:
-        return probes
-    if limit == 1:
-        return [probes[len(probes) // 2]]
-    indexes = [round(i * (len(probes) - 1) / (limit - 1)) for i in range(limit)]
-    selected: list[dict] = []
-    seen: set[int] = set()
-    for index in indexes:
-        if index not in seen:
-            seen.add(index)
-            selected.append(probes[index])
-    return selected
-
-
 def _audiobook_language_from_probes(probes: list[dict], sample_limit: int) -> dict:
-    sampled = _representative_probe_samples(probes, max(1, sample_limit))
+    sampled = representative_items(probes, max(1, sample_limit))
     languages: set[str] = set()
     evidence: list[dict] = []
     for probe in sampled:
@@ -174,7 +153,7 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
         )
         _raise_if_immediate_stop()
         probes = list(technical.get("files") or [])
-        samples = _representative_probe_samples(probes, settings.sample_files)
+        samples = representative_items(probes, settings.sample_files)
         summary = audio_metadata_summary(samples)
         language = _audiobook_language_from_probes(probes, settings.sample_files)
         classification, score, reason_code, reasons = classify_audio(
@@ -194,15 +173,10 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
         )
         return _language_override(base, language)
 
-    target = local_path
-    if os.path.isdir(local_path):
-        candidates: list[Path] = []
-        for candidate in Path(local_path).rglob("*"):
-            _raise_if_immediate_stop()
-            if candidate.is_file() and candidate.suffix.lower() in EBOOK_CANDIDATE_SUFFIXES:
-                candidates.append(candidate)
-        if candidates:
-            target = str(sorted(candidates, key=lambda path: str(path).casefold())[0])
+    target = resolve_ebook_target(
+        local_path,
+        check=_raise_if_immediate_stop,
+    )
 
     _raise_if_immediate_stop()
     md = ebook_metadata(target)

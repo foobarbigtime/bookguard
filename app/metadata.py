@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections import Counter
 import json
-import os
 from pathlib import Path
 import re
 import struct
@@ -10,43 +9,12 @@ import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
 
-
-AUDIO_EXTENSIONS = {
-    ".mp3", ".flac", ".m4a", ".m4b", ".aac", ".ogg", ".opus", ".wav", ".mp4"
-}
-
-
-def _representative_paths(paths: list[str], limit: int) -> list[str]:
-    if not paths or limit <= 0:
-        return []
-    if len(paths) <= limit:
-        return paths
-    if limit == 1:
-        return [paths[len(paths) // 2]]
-    indexes = [round(i * (len(paths) - 1) / (limit - 1)) for i in range(limit)]
-    out: list[str] = []
-    seen: set[int] = set()
-    for index in indexes:
-        if index not in seen:
-            seen.add(index)
-            out.append(paths[index])
-    return out
+from .media_discovery import AUDIO_EXTENSIONS, representative_audio_files
 
 
 def audio_files(path: str, limit: int) -> list[str]:
-    p = Path(path)
-    if p.is_file():
-        return [str(p)] if p.suffix.lower() in AUDIO_EXTENSIONS else []
-    if not p.is_dir():
-        return []
-    found: list[str] = []
-    for root, _, names in os.walk(p):
-        for name in sorted(names):
-            candidate = Path(root) / name
-            if candidate.suffix.lower() in AUDIO_EXTENSIONS:
-                found.append(str(candidate))
-    found.sort(key=str.casefold)
-    return _representative_paths(found, limit)
+    """Return deterministic representative audiobook files for metadata sampling."""
+    return representative_audio_files(path, limit)
 
 
 def ffprobe_metadata(path: str) -> dict:
