@@ -9,6 +9,7 @@ import subprocess
 import time
 from typing import Any
 
+from .audiobook_probe_cache import cached_probe, save_probe
 from .metadata import AUDIO_EXTENSIONS
 
 
@@ -73,14 +74,21 @@ def _stop_process(proc: subprocess.Popen[str]) -> None:
             pass
 
 
+def _normalized_tags(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key).lower(): item for key, item in value.items()}
+
+
 def probe_audio_file(
     path: str,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
-    """Collect technical stream/container information without modifying the file."""
+    """Collect technical and embedded metadata without modifying the file."""
     source = Path(path)
     try:
-        size = source.stat().st_size
+        stat = source.stat()
+        size = stat.st_size
     except OSError as exc:
         return {"path": path, "probe_error": str(exc)[:500], "size_bytes": None}
 
@@ -90,7 +98,9 @@ def probe_audio_file(
         "-show_entries",
         (
             "format=format_name,duration,bit_rate:"
+            "format_tags=artist,album_artist,author,composer,album,title,genre,language:"
             "stream=index,codec_type,codec_name,sample_rate,channels,bit_rate,duration:"
+            "stream_tags=artist,album_artist,author,composer,album,title,genre,language:"
             "chapter=id,start_time,end_time"
         ),
         "-of", "json",
@@ -149,18 +159,57 @@ def probe_audio_file(
     if duration is None:
         duration = _number(primary.get("duration"))
 
+    fmt_tags = _normalized_tags(fmt.get("tags"))
+    stream_tags = _normalized_tags(primary.get("tags"))
+
+    def tag(name: str) -> str:
+        return str(fmt_tags.get(name) or stream_tags.get(name) or "")
+
     return {
         "path": path,
         "size_bytes": size,
+        "modified_ns": stat.st_mtime_ns,
         "format_name": str(fmt.get("format_name") or ""),
         "duration_seconds": duration,
+        "duration": str(duration) if duration is not None else "",
         "bit_rate": _integer(primary.get("bit_rate")) or _integer(fmt.get("bit_rate")),
         "audio_stream_count": len(audio_streams),
         "codec": str(primary.get("codec_name") or ""),
         "sample_rate": _integer(primary.get("sample_rate")),
         "channels": _integer(primary.get("channels")),
         "chapter_count": len(chapters),
+        "artist": tag("artist"),
+        "album_artist": tag("album_artist"),
+        "author": tag("author"),
+        "composer": tag("composer"),
+        "album": tag("album"),
+        "title": tag("title"),
+        "genre": tag("genre"),
+        "language": tag("language"),
     }
+
+
+def cached_or_probe_audio_file(
+    path: str,
+    cancel_check: CancelCheck | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Reuse a successful probe while path, size and mtime remain unchanged."""
+    source = Path(path)
+    try:
+        stat = source.stat()
+    except OSError:
+        return probe_audio_file(path, cancel_check=cancel_check), False
+
+    cached = cached_probe(path, stat.st_size, stat.st_mtime_ns)
+    if cached is not None:
+        cached["cache_hit"] = True
+        return cached, True
+
+    probe = probe_audio_file(path, cancel_check=cancel_check)
+    probe["cache_hit"] = False
+    if not probe.get("probe_error"):
+        save_probe(path, stat.st_size, stat.st_mtime_ns, probe)
+    return probe, False
 
 
 def _distinct(values: list[Any]) -> list[Any]:
@@ -175,12 +224,7 @@ def _missing_in_range(values: list[int]) -> list[int]:
 
 
 def disc_track_sequence_warnings(probes: list[dict[str, Any]]) -> list[str]:
-    """Detect strong filename evidence of missing audiobook disc/track parts.
-
-    The heuristic is deliberately conservative. It is used only when at least two
-    files all end in the same two-number pattern, for example "Title 7-01.mp3".
-    It never fails an audiobook; it only produces REVIEW warnings.
-    """
+    """Detect strong filename evidence of missing audiobook disc/track parts."""
     if len(probes) < 2:
         return []
 
@@ -248,6 +292,8 @@ def summarize_audiobook_verification(probes: list[dict[str, Any]]) -> dict[str, 
             "file_count": 0,
             "readable_file_count": 0,
             "total_duration_seconds": 0.0,
+            "cache_hits": 0,
+            "cache_misses": 0,
             "files": [],
         }
 
@@ -320,6 +366,7 @@ def summarize_audiobook_verification(probes: list[dict[str, Any]]) -> dict[str, 
         reason_code = "AUDIO_TECHNICAL_PASS"
         reasons = ["All discovered audio files passed structural technical checks."]
 
+    cache_hits = sum(1 for probe in probes if probe.get("cache_hit") is True)
     return {
         "verdict": verdict,
         "reason_code": reason_code,
@@ -331,6 +378,8 @@ def summarize_audiobook_verification(probes: list[dict[str, Any]]) -> dict[str, 
         "sample_rates": _distinct([probe.get("sample_rate") for probe in readable]),
         "channels": _distinct([probe.get("channels") for probe in readable]),
         "chapter_count": sum(int(probe.get("chapter_count") or 0) for probe in readable),
+        "cache_hits": cache_hits,
+        "cache_misses": len(probes) - cache_hits,
         "files": probes,
     }
 
@@ -342,6 +391,8 @@ def _emit_progress(
     file_index: int,
     file_total: int,
     path: str | None,
+    cache_hits: int = 0,
+    cache_misses: int = 0,
 ) -> None:
     if callback is None:
         return
@@ -351,6 +402,8 @@ def _emit_progress(
             "file_index": file_index,
             "file_total": file_total,
             "path": path,
+            "cache_hits": cache_hits,
+            "cache_misses": cache_misses,
         }
     )
 
@@ -377,16 +430,27 @@ def verify_audiobook(
     )
 
     probes: list[dict[str, Any]] = []
+    cache_hits = 0
+    cache_misses = 0
     for index, candidate in enumerate(files, start=1):
         _raise_if_cancelled(cancel_check)
+        probe, hit = cached_or_probe_audio_file(candidate, cancel_check=cancel_check)
+        if hit:
+            cache_hits += 1
+            phase = "cached"
+        else:
+            cache_misses += 1
+            phase = "probing"
+        probes.append(probe)
         _emit_progress(
             progress_callback,
-            phase="probing",
+            phase=phase,
             file_index=index,
             file_total=total,
             path=candidate,
+            cache_hits=cache_hits,
+            cache_misses=cache_misses,
         )
-        probes.append(probe_audio_file(candidate, cancel_check=cancel_check))
 
     _raise_if_cancelled(cancel_check)
     _emit_progress(
@@ -395,6 +459,8 @@ def verify_audiobook(
         file_index=total,
         file_total=total,
         path=None,
+        cache_hits=cache_hits,
+        cache_misses=cache_misses,
     )
     result = summarize_audiobook_verification(probes)
     _emit_progress(
@@ -403,5 +469,7 @@ def verify_audiobook(
         file_index=total,
         file_total=total,
         path=None,
+        cache_hits=cache_hits,
+        cache_misses=cache_misses,
     )
     return result
