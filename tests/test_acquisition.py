@@ -4,7 +4,7 @@ import zipfile
 
 import pytest
 
-from app import acquisition
+from app import acquisition, scan_guard
 from app.db import (
     ebook_acquisition_by_id,
     init_local_db,
@@ -170,7 +170,7 @@ def acquisition_setup(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(acquisition.settings, "config_dir", str(config))
     monkeypatch.setattr(
-        acquisition,
+        scan_guard,
         "latest_scan",
         lambda: {"id": "scan-1", "status": "complete"},
     )
@@ -198,6 +198,24 @@ def acquisition_setup(tmp_path, monkeypatch):
         "result": result,
         "client": FakeClient(),
     }
+
+
+def test_result_and_book_translates_stale_shared_scan_guard(
+    acquisition_setup,
+    monkeypatch,
+):
+    setup = acquisition_setup
+    monkeypatch.setattr(
+        scan_guard,
+        "latest_scan",
+        lambda: {"id": "newer-scan", "status": "complete"},
+    )
+
+    with pytest.raises(
+        acquisition.AcquisitionSafetyError,
+        match="acquisition result is not from the latest completed scan",
+    ):
+        acquisition._result_and_book(setup["result"], setup["client"])
 
 
 def test_readiness_requires_actions_and_automatic_opt_in(
