@@ -1,6 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
+import app.scan_guard as scan_guard
 from app.routes import dependencies
 from app.routes.models import ConfirmationRequest, require_confirmation
 
@@ -12,7 +13,7 @@ def test_current_result_rejects_stale_scan(monkeypatch):
         lambda result_id: {"id": result_id, "scan_id": "old-scan"},
     )
     monkeypatch.setattr(
-        dependencies,
+        scan_guard,
         "latest_scan",
         lambda: {"id": "current-scan", "status": "complete"},
     )
@@ -28,7 +29,7 @@ def test_current_result_accepts_latest_completed_scan(monkeypatch):
     expected = {"id": 42, "scan_id": "current-scan"}
     monkeypatch.setattr(dependencies, "result_by_id", lambda result_id: expected)
     monkeypatch.setattr(
-        dependencies,
+        scan_guard,
         "latest_scan",
         lambda: {"id": "current-scan", "status": "complete"},
     )
