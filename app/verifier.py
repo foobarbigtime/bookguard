@@ -19,6 +19,7 @@ from .db import (
 from .ebook_extraction import extract_ebook_identity
 from .ebook_security import inspect_ebook_security
 from .matcher import normalize
+from .media_discovery import resolve_ebook_target
 from .metadata import ebook_metadata
 from .repair import (
     RepairError,
@@ -38,9 +39,6 @@ VERDICTS = {
     "WRONG_CONTENT",
     "INSUFFICIENT_EVIDENCE",
     "UNSAFE_FILE",
-}
-EBOOK_SUFFIXES = {
-    ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".rtf", ".txt", ".cbr", ".lit"
 }
 
 _job_lock = threading.Lock()
@@ -100,23 +98,6 @@ def init_verification_db() -> None:
         conn.commit()
 
 
-def _resolve_target(local_path: str) -> str:
-    path = Path(local_path)
-    if path.is_file():
-        return str(path)
-    if not path.is_dir():
-        return str(path)
-    candidates = sorted(
-        (
-            candidate
-            for candidate in path.rglob("*")
-            if candidate.is_file() and candidate.suffix.lower() in EBOOK_SUFFIXES
-        ),
-        key=lambda candidate: str(candidate).casefold(),
-    )
-    return str(candidates[0]) if candidates else str(path)
-
-
 def _file_fingerprint(path: str) -> str:
     target = Path(path)
     if not target.is_file():
@@ -167,7 +148,7 @@ def _decode_row(row) -> dict:
 
 def verification_for_result(result: dict) -> dict | None:
     init_verification_db()
-    target = _resolve_target(result.get("local_path") or "")
+    target = resolve_ebook_target(result.get("local_path") or "")
     fingerprint = _file_fingerprint(target)
     signature = _verification_signature(result, target, fingerprint)
     with local_conn() as conn:
@@ -240,7 +221,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
     if not settings.verification_enabled:
         raise RuntimeError("Content verification is disabled in Settings.")
 
-    target = _resolve_target(result.get("local_path") or "")
+    target = resolve_ebook_target(result.get("local_path") or "")
     fingerprint = _file_fingerprint(target)
     if not force:
         cached = verification_for_result(result)
@@ -344,7 +325,7 @@ def verified_repair_preview(result: dict, verification: dict | None = None) -> d
             "after": {},
         }
 
-    target = _resolve_target(result.get("local_path") or "")
+    target = resolve_ebook_target(result.get("local_path") or "")
     if Path(target).suffix.lower() != ".epub":
         return {
             "eligible": False,

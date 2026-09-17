@@ -22,7 +22,8 @@ from .matcher import (
     author_mentioned_in_text,
     normalize,
 )
-from .metadata import AUDIO_EXTENSIONS, ebook_metadata
+from .media_discovery import discover_audio_files, resolve_ebook_target
+from .metadata import ebook_metadata
 
 
 class RepairError(RuntimeError):
@@ -41,9 +42,6 @@ def require_current_scan_result(result: dict) -> None:
 
 
 WRITABLE_AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".m4b", ".mp4", ".ogg", ".opus"}
-EBOOK_CANDIDATE_SUFFIXES = {
-    ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".rtf", ".txt", ".cbr", ".lit",
-}
 
 
 def _first(value) -> str:
@@ -76,38 +74,6 @@ def _repair_title_equivalent(expected: str | None, observed: str | None) -> bool
     e = normalize(expected)
     o = normalize(observed)
     return bool(e) and e == o
-
-
-def _resolve_ebook_target(local_path: str) -> str:
-    path = Path(local_path)
-    if path.is_file():
-        return str(path)
-    if not path.is_dir():
-        return local_path
-    candidates = sorted(
-        (
-            candidate
-            for candidate in path.rglob("*")
-            if candidate.is_file() and candidate.suffix.lower() in EBOOK_CANDIDATE_SUFFIXES
-        ),
-        key=lambda candidate: str(candidate).casefold(),
-    )
-    return str(candidates[0]) if candidates else local_path
-
-
-def _all_audio_paths(local_path: str) -> list[str]:
-    path = Path(local_path)
-    if path.is_file():
-        return [str(path)] if path.suffix.lower() in AUDIO_EXTENSIONS else []
-    if not path.is_dir():
-        return []
-    found: list[str] = []
-    for root, _, names in os.walk(path):
-        for name in names:
-            candidate = Path(root) / name
-            if candidate.suffix.lower() in AUDIO_EXTENSIONS:
-                found.append(str(candidate))
-    return sorted(found, key=str.casefold)
 
 
 def _audio_summary_safe(result: dict) -> bool:
@@ -167,7 +133,7 @@ def repair_candidate_summary(result: dict) -> dict:
     if not settings.repair_ebooks:
         return {"eligible": False, "safe": False, "kind": "", "reason": "Ebook repair is disabled."}
 
-    target = _resolve_ebook_target(result.get("local_path") or "")
+    target = resolve_ebook_target(result.get("local_path") or "")
     if Path(target).suffix.lower() != ".epub":
         return {
             "eligible": False,
@@ -247,7 +213,7 @@ def _write_audio_fields(path: str, values: dict) -> None:
 
 
 def _audio_preview(result: dict) -> dict:
-    paths = _all_audio_paths(result["local_path"])
+    paths = discover_audio_files(result["local_path"])
     if not paths:
         raise RepairError("No audio files were found under the tracked audiobook path.")
     unsupported = [path for path in paths if Path(path).suffix.lower() not in WRITABLE_AUDIO_EXTENSIONS]
@@ -354,7 +320,7 @@ def _rewrite_epub_metadata(path: str, title: str, author: str) -> None:
 
 
 def _epub_preview(result: dict) -> dict:
-    target = _resolve_ebook_target(result["local_path"])
+    target = resolve_ebook_target(result["local_path"])
     if Path(target).suffix.lower() != ".epub":
         return {
             "eligible": False,

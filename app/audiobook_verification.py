@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
@@ -10,7 +9,7 @@ import time
 from typing import Any
 
 from .audiobook_probe_cache import cached_probe, save_probe
-from .metadata import AUDIO_EXTENSIONS
+from .media_discovery import discover_audio_files
 
 
 MIN_REASONABLE_AUDIO_BYTES = 4096
@@ -25,23 +24,6 @@ CancelCheck = Callable[[], bool]
 
 class AudiobookVerificationCancelled(RuntimeError):
     """Raised when an in-progress audiobook verification is stopped by the user."""
-
-
-def discover_audio_files(path: str) -> list[str]:
-    """Return every supported audio file below path in deterministic order."""
-    root = Path(path)
-    if root.is_file():
-        return [str(root)] if root.suffix.lower() in AUDIO_EXTENSIONS else []
-    if not root.is_dir():
-        return []
-
-    found: list[str] = []
-    for current_root, _, names in os.walk(root):
-        for name in names:
-            candidate = Path(current_root) / name
-            if candidate.suffix.lower() in AUDIO_EXTENSIONS:
-                found.append(str(candidate))
-    return sorted(found, key=str.casefold)
 
 
 def _number(value: Any) -> float | None:

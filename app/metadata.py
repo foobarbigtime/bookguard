@@ -9,7 +9,7 @@ import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
 
-from .media_discovery import AUDIO_EXTENSIONS, representative_audio_files
+from .media_discovery import representative_audio_files
 
 
 def audio_files(path: str, limit: int) -> list[str]:
