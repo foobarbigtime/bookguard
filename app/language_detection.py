@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
-import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
-
-from .metadata import audio_files
 
 
 ENGLISH_CODES = {"en", "eng"}
@@ -70,60 +66,6 @@ def normalize_language(value: object) -> str:
     if len(primary) in {2, 3} and primary.isalpha():
         return primary
     return ""
-
-
-def _audio_file_languages(path: str) -> list[str]:
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-show_entries",
-        "format_tags=language:stream=codec_type:stream_tags=language",
-        "-of",
-        "json",
-        path,
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    if proc.returncode != 0:
-        return []
-    try:
-        payload = json.loads(proc.stdout or "{}")
-    except json.JSONDecodeError:
-        return []
-
-    values: list[object] = []
-    fmt = payload.get("format") if isinstance(payload.get("format"), dict) else {}
-    fmt_tags = fmt.get("tags") if isinstance(fmt.get("tags"), dict) else {}
-    values.append(fmt_tags.get("language"))
-
-    streams = payload.get("streams") if isinstance(payload.get("streams"), list) else []
-    for stream in streams:
-        if not isinstance(stream, dict) or stream.get("codec_type") != "audio":
-            continue
-        tags = stream.get("tags") if isinstance(stream.get("tags"), dict) else {}
-        values.append(tags.get("language"))
-
-    return sorted({language for value in values if (language := normalize_language(value))})
-
-
-def audiobook_languages(path: str, sample_limit: int = 3) -> dict:
-    sampled = audio_files(path, max(1, sample_limit))
-    languages: set[str] = set()
-    evidence: list[dict] = []
-    for candidate in sampled:
-        detected = _audio_file_languages(candidate)
-        if detected:
-            languages.update(detected)
-            evidence.append({"path": candidate, "languages": detected})
-    return {
-        "source": "embedded_audio_metadata",
-        "languages": sorted(languages),
-        "evidence": evidence,
-        "sampled_files": len(sampled),
-    }
 
 
 def epub_languages(path: str) -> dict:
