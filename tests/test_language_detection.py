@@ -1,6 +1,7 @@
 import zipfile
 
 from app.language_detection import epub_languages, explicit_non_english, normalize_language
+from app.scanner import _language_override
 
 
 def test_normalize_language_aliases():
@@ -17,6 +18,44 @@ def test_explicit_non_english_ignores_english():
 
 def test_explicit_non_english_returns_other_languages():
     assert explicit_non_english({"languages": ["eng", "deu", "fr"]}) == ["de", "fr"]
+
+
+def test_language_override_escalates_pass_to_review():
+    base = {
+        "classification": "PASS",
+        "risk_score": 0,
+        "reason_code": "MATCH",
+        "reasons": ["Expected title and author matched."],
+        "metadata": {},
+    }
+
+    result = _language_override(base, {"languages": ["deu"]})
+
+    assert result["classification"] == "REVIEW"
+    assert result["risk_score"] == 90
+    assert result["reason_code"] == "NON_ENGLISH_LANGUAGE"
+    assert result["metadata"]["policy_flags"] == ["NON_ENGLISH_LANGUAGE"]
+    assert result["reasons"][0] == "Expected title and author matched."
+    assert "non-English language: de" in result["reasons"][-1]
+
+
+def test_language_override_never_downgrades_reject():
+    base = {
+        "classification": "REJECT",
+        "risk_score": 100,
+        "reason_code": "STRONG_MISMATCH",
+        "reasons": ["Strong mismatch evidence."],
+        "metadata": {},
+    }
+
+    result = _language_override(base, {"languages": ["fra"]})
+
+    assert result["classification"] == "REJECT"
+    assert result["risk_score"] == 100
+    assert result["reason_code"] == "STRONG_MISMATCH"
+    assert result["metadata"]["policy_flags"] == ["NON_ENGLISH_LANGUAGE"]
+    assert result["reasons"][0] == "Strong mismatch evidence."
+    assert "non-English language: fr" in result["reasons"][-1]
 
 
 def test_epub_language_is_read_from_package_metadata(tmp_path):
