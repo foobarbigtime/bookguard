@@ -17,13 +17,17 @@ from .db import (
     create_ebook_acquisition,
     ebook_admission_by_id,
     ebook_acquisition_by_id,
-    latest_scan,
     recent_ebook_acquisitions,
     result_by_id,
     update_ebook_acquisition,
 )
 from .file_safety import sha256_file
 from .preimport import PreImportSafetyError, preimport_readiness
+from .scan_guard import (
+    CurrentScanError,
+    NO_COMPLETE_SCAN,
+    require_current_scan_result as require_guarded_scan_result,
+)
 from .staging import (
     StagingSafetyError,
     book_identity,
@@ -215,13 +219,14 @@ def _result_and_book(
     result: dict[str, Any],
     client: BinderyClient,
 ) -> tuple[dict[str, Any], str, str]:
-    scan = latest_scan()
-    if not scan or scan.get("status") != "complete":
-        raise AcquisitionSafetyError("A completed latest scan is required.")
-    if str(result.get("scan_id") or "") != str(scan.get("id") or ""):
+    try:
+        require_guarded_scan_result(result)
+    except CurrentScanError as exc:
+        if exc.code == NO_COMPLETE_SCAN:
+            raise AcquisitionSafetyError("A completed latest scan is required.") from exc
         raise AcquisitionSafetyError(
             "The acquisition result is not from the latest completed scan."
-        )
+        ) from exc
     if str(result.get("format") or "").casefold() != "ebook":
         raise AcquisitionSafetyError("Automatic acquisition currently supports ebooks only.")
 
@@ -525,7 +530,7 @@ def reconcile_ebook_acquisition(
         if len(matches) > 1:
             record = _mark_review_required(
                 acquisition_id,
-                "Multiple Bindery queue records matched this acquisition.",
+                "Multiple Bindery queue records matched this acquisition."
             )
             return {"ok": False, "acquisition": record}
 
