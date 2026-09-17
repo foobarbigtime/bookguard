@@ -130,8 +130,8 @@ def test_settings_clamp_and_lists():
     assert cfg.verification_epub_structure is False
     assert cfg.verification_pdf_integrity is False
     assert cfg.verification_tika_url == "http://tika:9998"
-    assert cfg.verification_max_text_chars == 1000
-    assert cfg.verification_pdf_pages == 200
+    assert cfg.verification_max_text_chars == 50000
+    assert cfg.verification_pdf_pages == 100
 
 
 def test_scan_timing_without_scan():
