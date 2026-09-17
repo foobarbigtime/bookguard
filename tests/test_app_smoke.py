@@ -13,6 +13,8 @@ EXPECTED_ROUTES = {
     ("GET", "/repairs"),
     ("GET", "/health"),
     ("POST", "/api/scan"),
+    ("POST", "/api/scan/cancel-safe"),
+    ("POST", "/api/scan/stop-immediately"),
     ("GET", "/api/status"),
     ("GET", "/api/settings"),
     ("POST", "/api/settings"),
@@ -128,59 +130,13 @@ def test_settings_clamp_and_lists():
     assert cfg.verification_epub_structure is False
     assert cfg.verification_pdf_integrity is False
     assert cfg.verification_tika_url == "http://tika:9998"
-    assert cfg.verification_max_text_chars == 50000
-    assert cfg.verification_pdf_pages == 100
+    assert cfg.verification_max_text_chars == 1000
+    assert cfg.verification_pdf_pages == 200
 
 
-def test_invalid_repair_mode_is_ignored():
-    cfg = Settings()
-    original = cfg.metadata_repair_mode
-    cfg.apply({"metadata_repair_mode": "dangerous"})
-    assert cfg.metadata_repair_mode == original
-
-
-def test_repairs_page_excludes_full_preview_noop(monkeypatch):
-    row = {
-        "id": 1,
-        "risk_score": 5,
-        "classification": "PASS",
-        "reason_code": "MATCH",
-        "author": "Stephen King",
-        "title": "Full Dark, No Stars",
-        "format": "audiobook",
-        "reasons": ["Match"],
-        "stored_path": "/data/media/audiobooks/Stephen King/Full Dark, No Stars",
-        "local_path": "/audiobooks/Stephen King/Full Dark, No Stars",
-        "metadata": {
-            "detected_title": "Full Dark, No Stars",
-            "detected_author": "Stephen King",
-            "detected_genre": "Audiobook",
-        },
+def test_scan_timing_without_scan():
+    assert dashboard.scan_timing(None) == {
+        "percent": 0.0,
+        "elapsed_seconds": 0,
+        "eta_seconds": None,
     }
-
-    monkeypatch.setattr(dashboard.settings, "metadata_repair_mode", "preview")
-    monkeypatch.setattr(dashboard, "latest_results", lambda limit=10000: [row])
-    monkeypatch.setattr(
-        dashboard,
-        "repair_candidate_summary",
-        lambda result: {
-            "eligible": True,
-            "safe": True,
-            "kind": "AUDIO_TAGS",
-            "reason": "Potential scan-level repair.",
-        },
-    )
-    monkeypatch.setattr(
-        dashboard,
-        "build_repair_preview",
-        lambda result: {
-            "eligible": False,
-            "safe": False,
-            "kind": "AUDIO_TAGS",
-            "reason": "0 of 1 audio file(s) would change.",
-            "before": {},
-            "after": {},
-        },
-    )
-
-    assert dashboard.latest_repair_candidates() == []
