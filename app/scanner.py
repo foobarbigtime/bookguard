@@ -85,16 +85,30 @@ def _language_override(base: dict, language_result: dict) -> dict:
     non_english = explicit_non_english(language_result)
     if not non_english:
         return base
+
     labels = ", ".join(non_english)
-    base.update(
-        classification="REVIEW",
-        risk_score=max(int(base.get("risk_score") or 0), 90),
-        reason_code="NON_ENGLISH_LANGUAGE",
-        reasons=[
-            f"Embedded metadata explicitly identifies non-English language: {labels}. "
-            "Flagged for review/removal."
-        ],
+    message = (
+        f"Embedded metadata explicitly identifies non-English language: {labels}. "
+        "Flagged for review/removal."
     )
+    metadata = dict(base.get("metadata") or {})
+    policy_flags = {
+        str(flag)
+        for flag in metadata.get("policy_flags", [])
+        if str(flag).strip()
+    }
+    policy_flags.add("NON_ENGLISH_LANGUAGE")
+    metadata["policy_flags"] = sorted(policy_flags)
+    base["metadata"] = metadata
+    base["risk_score"] = max(int(base.get("risk_score") or 0), 90)
+    base["reasons"] = [*list(base.get("reasons") or []), message]
+
+    # Language is an additional policy signal. It may escalate a PASS/REVIEW
+    # result to REVIEW, but it must never weaken a stronger integrity/identity
+    # finding such as REJECT by replacing its classification or reason code.
+    if base.get("classification") != "REJECT":
+        base["classification"] = "REVIEW"
+        base["reason_code"] = "NON_ENGLISH_LANGUAGE"
     return base
 
 
