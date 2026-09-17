@@ -8,9 +8,9 @@ import uuid
 from .audiobook_verification import AudiobookVerificationCancelled, verify_audiobook
 from .config import settings
 from .db import add_result, create_scan, finish_scan, load_bindery_files, update_scan_progress
-from .language_detection import audiobook_languages, ebook_languages, explicit_non_english
+from .language_detection import ebook_languages, explicit_non_english, normalize_language
 from .matcher import classify_audio, classify_ebook
-from .metadata import audio_files, audio_metadata_summary, ebook_metadata, ffprobe_metadata
+from .metadata import audio_metadata_summary, ebook_metadata
 
 
 _scan_lock = threading.Lock()
@@ -98,6 +98,40 @@ def _language_override(base: dict, language_result: dict) -> dict:
     return base
 
 
+def _representative_probe_samples(probes: list[dict], limit: int) -> list[dict]:
+    if not probes or limit <= 0:
+        return []
+    if len(probes) <= limit:
+        return probes
+    if limit == 1:
+        return [probes[len(probes) // 2]]
+    indexes = [round(i * (len(probes) - 1) / (limit - 1)) for i in range(limit)]
+    selected: list[dict] = []
+    seen: set[int] = set()
+    for index in indexes:
+        if index not in seen:
+            seen.add(index)
+            selected.append(probes[index])
+    return selected
+
+
+def _audiobook_language_from_probes(probes: list[dict], sample_limit: int) -> dict:
+    sampled = _representative_probe_samples(probes, max(1, sample_limit))
+    languages: set[str] = set()
+    evidence: list[dict] = []
+    for probe in sampled:
+        language = normalize_language(probe.get("language"))
+        if language:
+            languages.add(language)
+            evidence.append({"path": probe.get("path"), "languages": [language]})
+    return {
+        "source": "cached_embedded_audio_metadata",
+        "languages": sorted(languages),
+        "evidence": evidence,
+        "sampled_files": len(sampled),
+    }
+
+
 def _scan_one(row: dict, audiobook_progress=None) -> dict:
     _raise_if_immediate_stop()
     local_path = map_path(row["stored_path"], row["format"])
@@ -119,19 +153,16 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
         return base
 
     if row["format"] == "audiobook":
-        samples = []
-        for path in audio_files(local_path, settings.sample_files):
-            _raise_if_immediate_stop()
-            samples.append(ffprobe_metadata(path))
-        summary = audio_metadata_summary(samples)
         technical = verify_audiobook(
             local_path,
             progress_callback=audiobook_progress,
             cancel_check=_immediate_stop_event.is_set,
         )
         _raise_if_immediate_stop()
-        language = audiobook_languages(local_path, sample_limit=settings.sample_files)
-        _raise_if_immediate_stop()
+        probes = list(technical.get("files") or [])
+        samples = _representative_probe_samples(probes, settings.sample_files)
+        summary = audio_metadata_summary(samples)
+        language = _audiobook_language_from_probes(probes, settings.sample_files)
         classification, score, reason_code, reasons = classify_audio(
             row["title"], row["author"], samples
         )
@@ -236,6 +267,8 @@ def run_scan(scan_id: str, rows: list[dict]) -> None:
                 "audio_file_index": None,
                 "audio_file_total": None,
                 "current_file": None,
+                "cache_hits": 0,
+                "cache_misses": 0,
                 "cancel_requested": False,
                 "cancel_mode": None,
                 "message": None,
@@ -250,6 +283,8 @@ def run_scan(scan_id: str, rows: list[dict]) -> None:
                     "audio_file_index": event.get("file_index"),
                     "audio_file_total": event.get("file_total"),
                     "current_file": Path(path).name if path else None,
+                    "cache_hits": int(event.get("cache_hits") or 0),
+                    "cache_misses": int(event.get("cache_misses") or 0),
                     "cancel_requested": _safe_cancel_event.is_set() or _immediate_stop_event.is_set(),
                     "cancel_mode": (
                         "immediate" if _immediate_stop_event.is_set()
@@ -330,6 +365,8 @@ def start_scan() -> str | None:
             audio_file_index=None,
             audio_file_total=None,
             current_file=None,
+            cache_hits=0,
+            cache_misses=0,
             cancel_requested=False,
             cancel_mode=None,
             message=None,
