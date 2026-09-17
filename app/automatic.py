@@ -12,8 +12,9 @@ from .action_paths import (
 )
 from .bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from .config import settings
-from .db import associations_inside_path, bindery_file_by_id, latest_scan
+from .db import associations_inside_path, bindery_file_by_id
 from .file_safety import is_within, sha256_file
+from .scan_guard import CurrentScanError, require_current_scan_result
 from .verifier import verification_for_result, verify_result
 
 
@@ -85,17 +86,17 @@ def _quarantine_destination(result: dict[str, Any], source: Path) -> Path:
     raise AutomaticMaintenanceError("Unable to allocate a unique quarantine destination.")
 
 
-def _current_result_guard(result: dict[str, Any]) -> None:
-    scan = latest_scan()
-    if not scan or scan.get("status") != "complete":
-        raise AutomaticMaintenanceError("A completed latest scan is required.")
-    if result.get("scan_id") != scan.get("id"):
-        raise AutomaticMaintenanceError("The result is not from the latest completed scan.")
+def _require_current_scan_evidence(result: dict[str, Any]) -> None:
+    """Translate the shared scan guard into automatic-maintenance errors."""
+    try:
+        require_current_scan_result(result)
+    except CurrentScanError as exc:
+        raise AutomaticMaintenanceError(str(exc)) from exc
 
 
 def wrong_content_preview(result: dict[str, Any], client: BinderyClient | None = None) -> dict[str, Any]:
     client = client or BinderyClient()
-    _current_result_guard(result)
+    _require_current_scan_evidence(result)
 
     verification = verification_for_result(result)
     verdict = str((verification or {}).get("verdict") or "")
@@ -173,7 +174,7 @@ def remediate_wrong_content(result: dict[str, Any], client: BinderyClient | None
         raise AutomaticMaintenanceError("Automatic actions are disabled.")
 
     client = client or BinderyClient()
-    _current_result_guard(result)
+    _require_current_scan_evidence(result)
 
     # Immediate content re-verification is mandatory at the mutation boundary.
     verification = verify_result(result, force=True)

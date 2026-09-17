@@ -6,6 +6,7 @@ import app.automatic as automatic
 from app.automatic import AutomaticMaintenanceError, _source_grab_event
 from app.bindery_client import evaluate_replacement_candidate
 from app.config import settings
+from app.scan_guard import CurrentScanError, STALE_RESULT
 
 
 def test_source_grab_requires_exact_import_grab_title_pair():
@@ -69,6 +70,22 @@ def test_same_wrong_release_on_different_indexer_stays_blocked_by_bookguard_gate
     assert second_decision.safe is False
 
 
+def test_shared_scan_guard_error_is_translated_for_automatic_maintenance(monkeypatch):
+    def reject_result(result):
+        raise CurrentScanError(
+            STALE_RESULT,
+            "The result is not from the latest completed scan.",
+        )
+
+    monkeypatch.setattr(automatic, "require_current_scan_result", reject_result)
+
+    with pytest.raises(
+        AutomaticMaintenanceError,
+        match="not from the latest completed scan",
+    ):
+        automatic._require_current_scan_evidence({"scan_id": "old-scan"})
+
+
 def test_wrong_content_move_uses_separate_writable_alias(tmp_path, monkeypatch):
     source = tmp_path / "books" / "Book.epub"
     alias = tmp_path / "action-books" / "Book.epub"
@@ -89,7 +106,7 @@ def test_wrong_content_move_uses_separate_writable_alias(tmp_path, monkeypatch):
         "stored_path": "/data/media/books/Book.epub",
     }
     monkeypatch.setattr(settings, "allow_actions", True)
-    monkeypatch.setattr(automatic, "_current_result_guard", lambda item: None)
+    monkeypatch.setattr(automatic, "require_current_scan_result", lambda item: None)
     monkeypatch.setattr(
         automatic,
         "verify_result",
