@@ -17,12 +17,21 @@ def _probe(path: str, **overrides):
         "size_bytes": 1_000_000,
         "format_name": "mp3",
         "duration_seconds": 600.0,
+        "duration": "600.0",
         "bit_rate": 128000,
         "audio_stream_count": 1,
         "codec": "mp3",
         "sample_rate": 44100,
         "channels": 2,
         "chapter_count": 0,
+        "artist": "",
+        "album_artist": "",
+        "author": "",
+        "composer": "",
+        "album": "",
+        "title": "",
+        "genre": "",
+        "language": "",
     }
     value.update(overrides)
     return value
@@ -166,25 +175,40 @@ def test_verify_audiobook_reports_file_progress(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         verification_module,
-        "probe_audio_file",
-        lambda path, cancel_check=None: _probe(path),
+        "cached_or_probe_audio_file",
+        lambda path, cancel_check=None: (_probe(path, cache_hit=False), False),
     )
     events: list[dict] = []
 
     result = verify_audiobook(str(tmp_path), progress_callback=events.append)
 
     assert result["verdict"] == "PASS"
-    assert events[0] == {
-        "phase": "discovered",
-        "file_index": 0,
-        "file_total": 2,
-        "path": None,
-    }
+    assert events[0]["phase"] == "discovered"
+    assert events[0]["file_total"] == 2
     probing = [event for event in events if event["phase"] == "probing"]
     assert [event["file_index"] for event in probing] == [1, 2]
     assert all(event["file_total"] == 2 for event in probing)
     assert Path(str(probing[0]["path"])).name == "01.mp3"
+    assert result["cache_hits"] == 0
+    assert result["cache_misses"] == 2
     assert events[-1]["phase"] == "complete"
+
+
+def test_verify_audiobook_reports_cache_hits(tmp_path, monkeypatch):
+    path = tmp_path / "01.mp3"
+    path.write_bytes(b"audio")
+    monkeypatch.setattr(
+        verification_module,
+        "cached_or_probe_audio_file",
+        lambda path, cancel_check=None: (_probe(path, cache_hit=True), True),
+    )
+    events: list[dict] = []
+
+    result = verify_audiobook(str(tmp_path), progress_callback=events.append)
+
+    assert result["cache_hits"] == 1
+    assert result["cache_misses"] == 0
+    assert any(event["phase"] == "cached" for event in events)
 
 
 def test_verify_audiobook_honors_immediate_cancel_before_probe(tmp_path, monkeypatch):
@@ -192,12 +216,16 @@ def test_verify_audiobook_honors_immediate_cancel_before_probe(tmp_path, monkeyp
     path.write_bytes(b"audio")
     called = False
 
-    def fake_probe(path: str, cancel_check=None):
+    def fake_cached_or_probe(path: str, cancel_check=None):
         nonlocal called
         called = True
-        return _probe(path)
+        return _probe(path), False
 
-    monkeypatch.setattr(verification_module, "probe_audio_file", fake_probe)
+    monkeypatch.setattr(
+        verification_module,
+        "cached_or_probe_audio_file",
+        fake_cached_or_probe,
+    )
 
     with pytest.raises(AudiobookVerificationCancelled):
         verify_audiobook(str(tmp_path), cancel_check=lambda: True)
