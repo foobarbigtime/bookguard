@@ -13,7 +13,6 @@ from .config import settings
 from .db import (
     create_metadata_repair,
     finish_metadata_repair,
-    latest_scan,
     mark_metadata_repair_undone,
     metadata_repair_by_id,
 )
@@ -24,6 +23,11 @@ from .matcher import (
 )
 from .media_discovery import discover_audio_files, resolve_ebook_target
 from .metadata import ebook_metadata
+from .scan_guard import (
+    CurrentScanError,
+    NO_COMPLETE_SCAN,
+    require_current_scan_result as require_guarded_scan_result,
+)
 
 
 class RepairError(RuntimeError):
@@ -32,13 +36,16 @@ class RepairError(RuntimeError):
 
 def require_current_scan_result(result: dict) -> None:
     """Refuse a write based on stale or incomplete scan evidence."""
-    scan = latest_scan()
-    if not scan or scan.get("status") != "complete":
-        raise RepairError("A completed latest scan is required before metadata repair.")
-    if result.get("scan_id") != scan.get("id"):
+    try:
+        require_guarded_scan_result(result)
+    except CurrentScanError as exc:
+        if exc.code == NO_COMPLETE_SCAN:
+            raise RepairError(
+                "A completed latest scan is required before metadata repair."
+            ) from exc
         raise RepairError(
             "This result is not from the latest completed scan. Refresh before metadata repair."
-        )
+        ) from exc
 
 
 WRITABLE_AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".m4b", ".mp4", ".ogg", ".opus"}
