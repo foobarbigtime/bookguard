@@ -4,6 +4,7 @@ from pathlib import Path
 import zipfile
 import xml.etree.ElementTree as ET
 
+from . import pdf_probe
 from .archive_io import read_zip_member_bounded
 
 
@@ -100,22 +101,13 @@ def epub_languages(path: str) -> dict:
 
 
 def pdf_languages(path: str) -> dict:
-    languages: set[str] = set()
-    try:
-        from pypdf import PdfReader
-
-        reader = PdfReader(path)
-        root = reader.trailer.get("/Root")
-        if root:
-            language = normalize_language(root.get("/Lang"))
-            if language:
-                languages.add(language)
-    except Exception:
-        pass
+    payload = pdf_probe.probe_pdf(path)
+    language = normalize_language(payload.get("language"))
+    languages = [language] if language else []
     return {
         "source": "pdf_metadata",
-        "languages": sorted(languages),
-        "evidence": sorted(languages),
+        "languages": languages,
+        "evidence": languages,
     }
 
 
