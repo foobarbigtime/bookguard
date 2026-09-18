@@ -9,6 +9,9 @@ import sqlite3
 from .config import settings
 
 
+NON_PERSISTED_SETTING_KEYS = {"bindery_api_key"}
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -274,6 +277,10 @@ def init_local_db() -> None:
                 ON ebook_acquisitions(status);
             """
         )
+        conn.execute(
+            "DELETE FROM app_settings WHERE key IN (?)",
+            tuple(NON_PERSISTED_SETTING_KEYS),
+        )
         conn.commit()
 
 
@@ -282,8 +289,11 @@ def load_persisted_settings() -> dict:
         rows = conn.execute("SELECT key, value_json FROM app_settings").fetchall()
     out = {}
     for row in rows:
+        key = str(row["key"])
+        if key in NON_PERSISTED_SETTING_KEYS:
+            continue
         try:
-            out[row["key"]] = json.loads(row["value_json"])
+            out[key] = json.loads(row["value_json"])
         except json.JSONDecodeError:
             continue
     return out
@@ -292,7 +302,11 @@ def load_persisted_settings() -> dict:
 def save_persisted_settings(values: dict) -> None:
     now = utc_now()
     with local_conn() as conn:
+        for key in NON_PERSISTED_SETTING_KEYS:
+            conn.execute("DELETE FROM app_settings WHERE key=?", (key,))
         for key, value in values.items():
+            if key in NON_PERSISTED_SETTING_KEYS:
+                continue
             conn.execute(
                 """
                 INSERT INTO app_settings(key, value_json, updated_at)
