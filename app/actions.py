@@ -15,7 +15,7 @@ from .db import (
     finish_cleanup_action,
     latest_scan,
 )
-from .file_safety import is_within
+from .file_safety import is_within, roots_overlap
 
 
 class ActionError(RuntimeError):
@@ -161,6 +161,8 @@ def _safe_quarantine_destination(local_path: str) -> str:
         raise ActionError("Refusing to quarantine a path outside configured media roots.")
 
     qroot = Path(settings.quarantine_root).resolve()
+    if any(roots_overlap(qroot, root) for root in allowed):
+        raise ActionError("Quarantine root must be outside configured media roots.")
     qroot.mkdir(parents=True, exist_ok=True)
     dest = qroot / source.name
     if dest.exists():
