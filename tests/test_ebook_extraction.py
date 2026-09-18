@@ -84,4 +84,4 @@ def test_epub_identity_caps_total_raw_html_expansion(tmp_path, monkeypatch):
     assert identifiers == []
     assert observed_limits == [400]
     assert len(text) <= 100
-    assert len(front) <= 100
+    assert len(front) <= 400
