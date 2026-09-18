@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import shutil
 import time
 
 from .action_paths import EbookActionSafetyError, mount_is_writable, resolve_writable_ebook_path
@@ -16,6 +15,12 @@ from .db import (
     latest_scan,
 )
 from .file_safety import allocate_unique_destination, is_within, roots_overlap
+from .quarantine_fs import (
+    QuarantineCommitError,
+    QuarantineMoveError,
+    commit_quarantine_or_rollback,
+    move_to_quarantine,
+)
 
 
 class ActionError(RuntimeError):
@@ -193,27 +198,32 @@ def quarantine(book_id: int, stored_path: str, local_path: str) -> str:
         if not mount_is_writable(mutation_source):
             raise ActionError("The source media mount is read-only.")
 
+    destination_path = Path(destination)
     try:
-        shutil.move(str(mutation_source), destination)
-    except Exception as exc:
+        move_to_quarantine(
+            mutation_source,
+            read_source,
+            destination_path,
+        )
+    except QuarantineMoveError as exc:
         raise ActionError(
             f"Quarantine move failed before Bindery was changed: {exc}"
         ) from exc
 
     try:
-        if read_source.exists() or not Path(destination).exists():
-            raise ActionError("Quarantine move could not be verified.")
-        _delete_bindery_path(book_id, stored_path, api_key)
-    except Exception as exc:
-        rollback_error = ""
-        try:
-            if Path(destination).exists() and not mutation_source.exists():
-                shutil.move(destination, str(mutation_source))
-            if not read_source.exists():
-                raise ActionError("The original source did not reappear after rollback.")
-        except Exception as rollback_exc:
-            rollback_error = f" Rollback also failed: {rollback_exc}"
+        commit_quarantine_or_rollback(
+            lambda: _delete_bindery_path(book_id, stored_path, api_key),
+            mutation_source,
+            read_source,
+            destination_path,
+        )
+    except QuarantineCommitError as exc:
+        rollback_error = (
+            f" Rollback also failed: {exc.rollback_error}"
+            if exc.rollback_error is not None
+            else ""
+        )
         raise ActionError(
-            f"Bindery detach failed after quarantine: {exc}.{rollback_error}"
+            f"Bindery detach failed after quarantine: {exc.cause}.{rollback_error}"
         ) from exc
     return destination
