@@ -54,9 +54,12 @@ def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
     service = services.get("bookguard") or {}
     security_opt = service.get("security_opt") or []
     cap_drop = service.get("cap_drop") or []
+    cap_add = service.get("cap_add") or []
     checks = {
         "noNewPrivilegesEnabled": "no-new-privileges:true" in security_opt,
         "allCapabilitiesDropped": "ALL" in cap_drop,
+        "binderyReadCapabilityAdded": "DAC_READ_SEARCH" in cap_add,
+        "writeBypassCapabilityAbsent": "DAC_OVERRIDE" not in cap_add,
         "booksMountedReadOnly": bool(volumes.get("/books", {}).get("read_only")),
         "audiobooksMountedReadOnly": bool(
             volumes.get("/audiobooks", {}).get("read_only")

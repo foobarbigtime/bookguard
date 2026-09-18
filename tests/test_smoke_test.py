@@ -32,6 +32,7 @@ def _compose_payload(
             "bookguard": {
                 "security_opt": ["no-new-privileges:true"],
                 "cap_drop": ["ALL"],
+                "cap_add": ["DAC_READ_SEARCH"],
                 "volumes": volumes,
             }
         }
@@ -84,6 +85,22 @@ def test_compose_profile_requires_all_capabilities_dropped():
     payload["services"]["bookguard"].pop("cap_drop")
 
     with pytest.raises(SmokeTestFailure, match="allCapabilitiesDropped"):
+        validate_compose(payload, "base")
+
+
+def test_compose_profile_requires_bindery_read_capability():
+    payload = _compose_payload(False)
+    payload["services"]["bookguard"].pop("cap_add")
+
+    with pytest.raises(SmokeTestFailure, match="binderyReadCapabilityAdded"):
+        validate_compose(payload, "base")
+
+
+def test_compose_profile_rejects_dac_override_capability():
+    payload = _compose_payload(False)
+    payload["services"]["bookguard"]["cap_add"].append("DAC_OVERRIDE")
+
+    with pytest.raises(SmokeTestFailure, match="writeBypassCapabilityAbsent"):
         validate_compose(payload, "base")
 
 
