@@ -4,6 +4,15 @@ import hashlib
 from pathlib import Path
 
 
+def read_file_prefix(path: str | Path, *, max_bytes: int) -> bytes:
+    """Read at most max_bytes from the start of a regular file."""
+    limit = int(max_bytes)
+    if limit < 1:
+        raise ValueError("File prefix limit must be positive.")
+    with Path(path).open("rb") as handle:
+        return handle.read(limit)
+
+
 def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
     """Return a streaming SHA-256 digest without loading the file into memory."""
     digest = hashlib.sha256()

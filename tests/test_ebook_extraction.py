@@ -178,3 +178,37 @@ def test_pdf_content_extraction_rejects_unbounded_limits_before_worker(
     )
 
     assert "outside the allowed range" in payload["error"]
+
+
+
+def test_plain_identity_reads_only_configured_prefix(tmp_path, monkeypatch):
+    path = tmp_path / "book.txt"
+    path.write_bytes(
+        b"Title: Bel Canto\nAuthor: Ann Patchett\n"
+        + (b"story " * 200000)
+    )
+    monkeypatch.setattr(settings, "verification_max_text_chars", 1000)
+
+    observed = {}
+    real_reader = ebook_extraction.read_file_prefix
+
+    def tracked_reader(target, *, max_bytes):
+        observed["max_bytes"] = max_bytes
+        return real_reader(target, max_bytes=max_bytes)
+
+    monkeypatch.setattr(
+        ebook_extraction,
+        "read_file_prefix",
+        tracked_reader,
+    )
+
+    metadata, text, identifiers, front = ebook_extraction.extract_plain_identity(
+        str(path)
+    )
+
+    assert observed["max_bytes"] == 2000
+    assert metadata["title"] == "Bel Canto"
+    assert metadata["author"] == "Ann Patchett"
+    assert identifiers == []
+    assert len(text) <= 1000
+    assert len(front) <= 1000

@@ -9,6 +9,7 @@ import zipfile
 
 from .archive_io import read_zip_member_bounded, read_zip_member_prefix
 from .config import settings
+from .file_safety import read_file_prefix
 from .metadata import ebook_metadata
 from . import pdf_probe
 from .tika_client import extract_text as tika_text
@@ -152,7 +153,10 @@ def extract_pdf_identity(path: str) -> tuple[dict, str, list[str], str]:
 
 def extract_plain_identity(path: str) -> tuple[dict, str, list[str], str]:
     metadata = ebook_metadata(path)
-    raw = Path(path).read_bytes()[: settings.verification_max_text_chars * 2]
+    raw = read_file_prefix(
+        path,
+        max_bytes=settings.verification_max_text_chars * 2,
+    )
     text = raw.decode("utf-8", errors="replace")
     if "\ufffd" in text[:4096]:
         text = raw.decode("cp1252", errors="replace")

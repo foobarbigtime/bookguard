@@ -168,3 +168,51 @@ def test_mobi_metadata_refuses_oversized_record_zero(tmp_path, monkeypatch):
     assert md["source"] == "mobi"
     assert "error" in md
     assert "routine metadata limit" in md["error"]
+
+
+
+def test_txt_metadata_reads_only_bounded_prefix(tmp_path, monkeypatch):
+    path = tmp_path / "book.txt"
+    path.write_bytes(
+        b"Title: Real Book\nAuthor: Real Author\n"
+        + (b"x" * (1024 * 1024))
+    )
+
+    observed = {}
+    real_reader = metadata.read_file_prefix
+
+    def tracked_reader(target, *, max_bytes):
+        observed["max_bytes"] = max_bytes
+        return real_reader(target, max_bytes=max_bytes)
+
+    monkeypatch.setattr(metadata, "read_file_prefix", tracked_reader)
+
+    md = txt_metadata(str(path))
+
+    assert observed["max_bytes"] == 131072
+    assert md["title"] == "Real Book"
+    assert md["author"] == "Real Author"
+
+
+def test_rtf_metadata_reads_only_bounded_prefix(tmp_path, monkeypatch):
+    path = tmp_path / "book.rtf"
+    path.write_bytes(
+        rb"{\rtf1{\info{\title Test Book}{\author Test Author}} "
+        + (b"x" * (1024 * 1024))
+        + b"}"
+    )
+
+    observed = {}
+    real_reader = metadata.read_file_prefix
+
+    def tracked_reader(target, *, max_bytes):
+        observed["max_bytes"] = max_bytes
+        return real_reader(target, max_bytes=max_bytes)
+
+    monkeypatch.setattr(metadata, "read_file_prefix", tracked_reader)
+
+    md = rtf_metadata(str(path))
+
+    assert observed["max_bytes"] == 262144
+    assert md["title"] == "Test Book"
+    assert md["author"] == "Test Author"

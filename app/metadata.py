@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 
 from . import pdf_probe
 from .archive_io import read_zip_member_bounded
+from .file_safety import read_file_prefix
 from .media_discovery import representative_audio_files
 
 
@@ -270,7 +271,10 @@ def cbz_metadata(path: str) -> dict:
 
 def rtf_metadata(path: str) -> dict:
     try:
-        text = Path(path).read_bytes()[:262144].decode("latin-1", errors="replace")
+        text = read_file_prefix(path, max_bytes=262144).decode(
+            "latin-1",
+            errors="replace",
+        )
         title_match = re.search(r"\\title\s+([^{}\\]+)", text, flags=re.IGNORECASE)
         author_match = re.search(r"\\author\s+([^{}\\]+)", text, flags=re.IGNORECASE)
         return {
@@ -285,7 +289,7 @@ def rtf_metadata(path: str) -> dict:
 def txt_metadata(path: str) -> dict:
     """Use only explicit Title:/Author: headers; never trust the filename as content evidence."""
     try:
-        raw = Path(path).read_bytes()[:131072]
+        raw = read_file_prefix(path, max_bytes=131072)
         text = raw.decode("utf-8", errors="replace")
         if "\ufffd" in text[:4096]:
             text = raw.decode("cp1252", errors="replace")

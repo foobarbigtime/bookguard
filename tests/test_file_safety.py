@@ -1,6 +1,6 @@
 import pytest
 
-from app.file_safety import allocate_unique_destination, roots_overlap
+from app.file_safety import allocate_unique_destination, read_file_prefix, roots_overlap
 
 
 def test_roots_overlap_detects_nested_roots_both_directions(tmp_path):
@@ -56,3 +56,13 @@ def test_allocate_unique_destination_fails_closed_when_suffix_space_is_exhausted
 
     with pytest.raises(RuntimeError, match="Unable to allocate a unique destination"):
         allocate_unique_destination(destination_dir, source, max_suffix=3)
+
+
+
+def test_read_file_prefix_does_not_load_bytes_past_limit(tmp_path):
+    path = tmp_path / "large.txt"
+    path.write_bytes(b"A" * (1024 * 1024))
+
+    prefix = read_file_prefix(path, max_bytes=4096)
+
+    assert prefix == b"A" * 4096
