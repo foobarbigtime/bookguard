@@ -55,6 +55,8 @@ def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
     security_opt = service.get("security_opt") or []
     cap_drop = service.get("cap_drop") or []
     cap_add = service.get("cap_add") or []
+    runtime_user = str(service.get("user") or "").strip()
+    runtime_uid = runtime_user.split(":", 1)[0].strip() if runtime_user else ""
     tmpfs = [str(item) for item in (service.get("tmpfs") or [])]
     tmp_mount = next(
         (item for item in tmpfs if item == "/tmp" or item.startswith("/tmp:")),
@@ -69,7 +71,9 @@ def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
         "tmpfsSizeBounded": "size=" in tmp_mount,
         "noNewPrivilegesEnabled": "no-new-privileges:true" in security_opt,
         "allCapabilitiesDropped": "ALL" in cap_drop,
-        "binderyReadCapabilityAdded": "DAC_READ_SEARCH" in cap_add,
+        "runtimeUserConfigured": bool(runtime_user),
+        "runtimeUserNonRoot": runtime_uid not in {"", "0", "root"},
+        "noCapabilitiesAdded": not cap_add,
         "writeBypassCapabilityAbsent": "DAC_OVERRIDE" not in cap_add,
         "booksMountedReadOnly": bool(volumes.get("/books", {}).get("read_only")),
         "audiobooksMountedReadOnly": bool(
