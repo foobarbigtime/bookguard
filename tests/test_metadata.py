@@ -3,7 +3,9 @@ import zipfile
 from pathlib import Path
 
 import app.archive_io as archive_io
-from app.metadata import cbz_metadata, epub_metadata, mobi_metadata, rtf_metadata, txt_metadata
+import app.pdf_probe as pdf_probe
+from app.metadata import cbz_metadata, epub_metadata, mobi_metadata, pdf_metadata, rtf_metadata, txt_metadata
+from pypdf import PdfWriter
 
 
 def _u32(value: int) -> bytes:
@@ -126,3 +128,30 @@ def test_epub_metadata_rejects_oversized_package_xml(tmp_path, monkeypatch):
     assert md["source"] == "epub"
     assert "error" in md
     assert "exceeds the 512-byte metadata limit" in md["error"]
+
+
+def test_pdf_metadata_reads_in_isolated_probe(tmp_path):
+    path = tmp_path / "book.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.add_metadata({"/Title": "The English Girl", "/Author": "Daniel Silva"})
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+    md = pdf_metadata(str(path))
+
+    assert md["title"] == "The English Girl"
+    assert md["author"] == "Daniel Silva"
+    assert md["source"] == "pdf"
+
+
+def test_pdf_metadata_refuses_oversized_routine_parse(tmp_path, monkeypatch):
+    path = tmp_path / "oversized.pdf"
+    path.write_bytes(b"%PDF-1.7\n" + (b"x" * 128) + b"\n%%EOF\n")
+    monkeypatch.setattr(pdf_probe, "MAX_ROUTINE_PDF_BYTES", 64)
+
+    md = pdf_metadata(str(path))
+
+    assert md["source"] == "pdf"
+    assert "error" in md
+    assert "routine metadata limit" in md["error"]
