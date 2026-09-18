@@ -22,6 +22,8 @@ DEFAULT_AUTHOR_ALIASES = [
 REPAIR_MODES = {"off", "preview", "safe"}
 DEFAULT_MAX_STAGED_EBOOK_BYTES = 512 * 1024 * 1024
 DEFAULT_ACQUISITION_COORDINATOR_INTERVAL_SECONDS = 10
+DEFAULT_MALWARE_SCAN_TIMEOUT_SECONDS = 60
+DEFAULT_MALWARE_MAX_BYTES = 512 * 1024 * 1024
 
 
 class ConfigurationError(ValueError):
@@ -231,6 +233,26 @@ class Settings:
     verification_pdf_integrity: bool = _bool(
         "BOOKGUARD_VERIFICATION_PDF_INTEGRITY", True
     )
+    verification_malware_scan: bool = _bool(
+        "BOOKGUARD_VERIFICATION_MALWARE_SCAN", False
+    )
+    # The scanner endpoint is deployment-only so the web UI cannot turn this
+    # feature into an arbitrary network client.
+    verification_clamd_host: str = os.getenv("BOOKGUARD_CLAMD_HOST", "").strip()
+    verification_clamd_port: int = _clamp(_int("BOOKGUARD_CLAMD_PORT", 3310), 1, 65535)
+    verification_malware_timeout_seconds: int = _clamp(
+        _int(
+            "BOOKGUARD_MALWARE_SCAN_TIMEOUT_SECONDS",
+            DEFAULT_MALWARE_SCAN_TIMEOUT_SECONDS,
+        ),
+        1,
+        300,
+    )
+    verification_malware_max_bytes: int = _clamp(
+        _int("BOOKGUARD_MALWARE_MAX_BYTES", DEFAULT_MALWARE_MAX_BYTES),
+        1024 * 1024,
+        2 * 1024 * 1024 * 1024,
+    )
 
     # Metadata repair. Preview is intentionally the default; it never writes files.
     metadata_repair_mode: str = field(
@@ -261,7 +283,7 @@ class Settings:
             "verification_enabled", "verification_use_tika",
             "verification_file_signatures", "verification_archive_safety",
             "verification_epub_structure",
-            "verification_pdf_integrity",
+            "verification_pdf_integrity", "verification_malware_scan",
             "repair_audiobooks", "repair_ebooks", "repair_normalize_pass",
             "repair_audio_album", "repair_audio_album_artist", "repair_audio_genre",
         }
@@ -347,6 +369,7 @@ class Settings:
             "verification_archive_safety": self.verification_archive_safety,
             "verification_epub_structure": self.verification_epub_structure,
             "verification_pdf_integrity": self.verification_pdf_integrity,
+            "verification_malware_scan": self.verification_malware_scan,
             "metadata_repair_mode": self.metadata_repair_mode,
             "repair_audiobooks": self.repair_audiobooks,
             "repair_ebooks": self.repair_ebooks,

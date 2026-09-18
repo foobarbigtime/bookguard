@@ -90,6 +90,12 @@
             <label class="check-field"><input name="verification_pdf_integrity" type="checkbox" {% if settings.verification_pdf_integrity %}checked{% endif %}><span>Validate PDF structure and page tree</span></label>
             <small>These checks are read-only, enabled by default, and block unsafe or corrupt files from verified admission.</small>
           </div>
+          <div class="field checks-stack span-2 option-panel">
+            <span>Optional malware scanning</span>
+            <label class="check-field"><input name="verification_malware_scan" type="checkbox" {% if settings.verification_malware_scan %}checked{% endif %}><span>Require a clean ClamAV result before identity verification</span></label>
+            <small>Disabled by default. When enabled, a malware detection or unavailable scanner fails closed. The clamd endpoint is deployment-only: {% if settings.verification_clamd_host %}<code>{{ settings.verification_clamd_host }}:{{ settings.verification_clamd_port }}</code>{% else %}<strong>not configured</strong>{% endif %}.</small>
+          </div>
+          <div class="field span-2"><button id="testMalwareButton" type="button">Test malware scanner</button><small id="malwareStatus" class="muted"></small></div>
           <label class="field"><span>Maximum text examined per ebook</span><input name="verification_max_text_chars" type="number" min="50000" max="5000000" step="50000" value="{{ settings.verification_max_text_chars }}"><small>Default 1,500,000 characters. Verification is read-only.</small></label>
           <label class="field"><span>PDF pages examined</span><input name="verification_pdf_pages" type="number" min="1" max="100" value="{{ settings.verification_pdf_pages }}"><small>BookGuard starts with the front matter because title/author evidence is usually strongest there.</small></label>
           <div class="field checks-stack span-2 option-panel">
@@ -154,12 +160,14 @@ const resetButton = document.getElementById("resetButton");
 const saveStatus = document.getElementById("saveStatus");
 const testTikaButton = document.getElementById("testTikaButton");
 const tikaStatus = document.getElementById("tikaStatus");
+const testMalwareButton = document.getElementById("testMalwareButton");
+const malwareStatus = document.getElementById("malwareStatus");
 const booleanFields = [
   "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
   "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
   "verification_enabled", "verification_use_tika", "verification_file_signatures",
   "verification_archive_safety",
-  "verification_epub_structure", "verification_pdf_integrity",
+  "verification_epub_structure", "verification_pdf_integrity", "verification_malware_scan",
   "repair_audiobooks", "repair_ebooks", "repair_normalize_pass", "repair_audio_album",
   "repair_audio_album_artist", "repair_audio_genre", "clear_api_key"
 ];
@@ -210,6 +218,16 @@ if (testTikaButton) {
     const body = await response.json().catch(() => ({}));
     testTikaButton.disabled = false;
     tikaStatus.textContent = ` ${body.ok ? 'OK' : 'Not available'}: ${body.message || ''}`;
+  });
+}
+if (testMalwareButton) {
+  testMalwareButton.addEventListener("click", async () => {
+    testMalwareButton.disabled = true;
+    malwareStatus.textContent = " Testing…";
+    const response = await fetch("/api/verification/malware-test", {cache:"no-store"});
+    const body = await response.json().catch(() => ({}));
+    testMalwareButton.disabled = false;
+    malwareStatus.textContent = ` ${body.ok ? 'OK' : 'Not available'}: ${body.message || ''}`;
   });
 }
 </script>

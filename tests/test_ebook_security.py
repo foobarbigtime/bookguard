@@ -8,6 +8,7 @@ from pypdf import PdfWriter
 import app.archive_io as archive_io
 import app.archive_probe as archive_probe
 import app.ebook_security as ebook_security
+import app.malware_scan as malware_scan
 import app.pdf_probe as pdf_probe
 from app.ebook_security import inspect_ebook_security
 
@@ -431,3 +432,93 @@ def test_pdf_integrity_probe_runs_in_worker(tmp_path):
     assert "error" not in payload
     assert payload["pages"] == 1
     assert payload["encrypted"] is False
+
+
+
+def test_optional_malware_scan_clean_result_passes(tmp_path, monkeypatch):
+    path = tmp_path / "book.epub"
+    _write_epub(path)
+    monkeypatch.setattr(
+        malware_scan,
+        "scan_with_clamd",
+        lambda *args, **kwargs: {
+            "clean": True,
+            "infected": False,
+            "engine": "clamd",
+            "size": path.stat().st_size,
+        },
+    )
+
+    report = inspect_ebook_security(
+        path,
+        check_malware=True,
+        clamd_host="clamd",
+    )
+
+    assert report["safe"] is True
+    assert report["checks"]["malwareScan"]["status"] == "passed"
+
+
+def test_optional_malware_detection_fails_closed(tmp_path, monkeypatch):
+    path = tmp_path / "book.epub"
+    _write_epub(path)
+    monkeypatch.setattr(
+        malware_scan,
+        "scan_with_clamd",
+        lambda *args, **kwargs: {
+            "clean": False,
+            "infected": True,
+            "engine": "clamd",
+            "signature": "Eicar-Test-Signature",
+            "size": path.stat().st_size,
+        },
+    )
+
+    report = inspect_ebook_security(
+        path,
+        check_malware=True,
+        clamd_host="clamd",
+    )
+
+    assert report["safe"] is False
+    assert "malwareScan" in report["failures"]
+    assert report["checks"]["malwareScan"]["signature"] == "Eicar-Test-Signature"
+
+
+def test_optional_malware_scanner_error_fails_closed(tmp_path, monkeypatch):
+    path = tmp_path / "book.epub"
+    _write_epub(path)
+    monkeypatch.setattr(
+        malware_scan,
+        "scan_with_clamd",
+        lambda *args, **kwargs: {"error": "scanner unavailable"},
+    )
+
+    report = inspect_ebook_security(
+        path,
+        check_malware=True,
+        clamd_host="clamd",
+    )
+
+    assert report["safe"] is False
+    assert report["checks"]["malwareScan"]["status"] == "failed"
+    assert "scanner unavailable" in report["checks"]["malwareScan"]["message"]
+
+
+def test_malware_scanner_is_not_called_after_core_safety_failure(tmp_path, monkeypatch):
+    path = tmp_path / "broken.epub"
+    path.write_bytes(b"not an epub")
+
+    def unexpected_scan(*args, **kwargs):
+        raise AssertionError("malware scanner should not receive a core-unsafe file")
+
+    monkeypatch.setattr(malware_scan, "scan_with_clamd", unexpected_scan)
+
+    report = inspect_ebook_security(
+        path,
+        check_malware=True,
+        clamd_host="clamd",
+    )
+
+    assert report["safe"] is False
+    assert report["checks"]["malwareScan"]["status"] == "blocked"

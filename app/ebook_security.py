@@ -7,7 +7,7 @@ from urllib.parse import unquote
 import zipfile
 import xml.etree.ElementTree as ET
 
-from . import archive_probe, pdf_probe
+from . import archive_probe, malware_scan, pdf_probe
 from .archive_io import read_zip_member_bounded
 
 
@@ -328,6 +328,49 @@ def _pdf_integrity_check(path: Path, suffix: str, enabled: bool) -> dict[str, An
     )
 
 
+
+def _malware_scan_check(
+    path: Path,
+    *,
+    enabled: bool,
+    blocked: bool,
+    host: str,
+    port: int,
+    timeout_seconds: int,
+    max_bytes: int,
+) -> dict[str, Any]:
+    if not enabled:
+        return _result("disabled", "Malware scanning is disabled.")
+    if blocked:
+        return _result(
+            "blocked",
+            "Malware scanning was not attempted because an earlier deterministic safety check failed.",
+        )
+
+    payload = malware_scan.scan_with_clamd(
+        path,
+        host=host,
+        port=port,
+        timeout_seconds=timeout_seconds,
+        max_bytes=max_bytes,
+    )
+    if payload.get("error"):
+        return _result("failed", str(payload["error"])[:500], engine="clamd")
+    if payload.get("infected"):
+        return _result(
+            "failed",
+            "ClamAV identified the file as malware.",
+            engine="clamd",
+            signature=str(payload.get("signature") or "unknown")[:500],
+            scannedBytes=int(payload.get("size") or 0),
+        )
+    return _result(
+        "passed",
+        "ClamAV reported the file clean.",
+        engine="clamd",
+        scannedBytes=int(payload.get("size") or 0),
+    )
+
 def inspect_ebook_security(
     path: str | Path,
     *,
@@ -335,10 +378,16 @@ def inspect_ebook_security(
     check_archive_safety: bool = True,
     check_epub_structure: bool = True,
     check_pdf_integrity: bool = True,
+    check_malware: bool = False,
+    clamd_host: str = "",
+    clamd_port: int = 3310,
+    malware_timeout_seconds: int = 60,
+    malware_max_bytes: int = 512 * 1024 * 1024,
 ) -> dict[str, Any]:
-    """Run deterministic, read-only ebook type and integrity checks."""
+    """Run deterministic, read-only ebook type, integrity, and optional malware checks."""
     target = Path(path)
     suffix = target.suffix.lower()
+    file_signature = _signature_check(target, suffix, check_file_signatures)
     archive_safety = _archive_safety_check(target, suffix, check_archive_safety)
     epub_structure = (
         _result(
@@ -348,12 +397,24 @@ def inspect_ebook_security(
         if suffix == ".epub" and archive_safety["status"] == "failed"
         else _epub_structure_check(target, suffix, check_epub_structure)
     )
-    checks = {
-        "fileSignature": _signature_check(target, suffix, check_file_signatures),
+    pdf_integrity = _pdf_integrity_check(target, suffix, check_pdf_integrity)
+    core_checks = {
+        "fileSignature": file_signature,
         "archiveSafety": archive_safety,
         "epubStructure": epub_structure,
-        "pdfIntegrity": _pdf_integrity_check(target, suffix, check_pdf_integrity),
+        "pdfIntegrity": pdf_integrity,
     }
+    core_failed = any(check["status"] == "failed" for check in core_checks.values())
+    malware = _malware_scan_check(
+        target,
+        enabled=check_malware,
+        blocked=core_failed,
+        host=clamd_host,
+        port=clamd_port,
+        timeout_seconds=malware_timeout_seconds,
+        max_bytes=malware_max_bytes,
+    )
+    checks = {**core_checks, "malwareScan": malware}
     failures = [name for name, check in checks.items() if check["status"] == "failed"]
     safe = not failures
     return {
@@ -363,8 +424,8 @@ def inspect_ebook_security(
         "checks": checks,
         "failures": failures,
         "message": (
-            "All applicable deterministic ebook safety checks passed."
+            "All enabled ebook safety checks passed."
             if safe
-            else "One or more deterministic ebook safety checks failed."
+            else "One or more enabled ebook safety checks failed."
         ),
     }

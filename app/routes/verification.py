@@ -8,6 +8,7 @@ from ..repair import RepairError
 from ..verifier import (
     apply_verified_metadata_repair,
     start_verification_job,
+    test_malware_scanner,
     test_tika,
     verification_for_result,
     verification_job_status,
@@ -67,6 +68,11 @@ async def api_verification_start(request: Request):
 @router.get("/tika-test")
 def api_verification_tika_test():
     return test_tika()
+
+
+@router.get("/malware-test")
+def api_verification_malware_test():
+    return test_malware_scanner()
 
 
 @router.get("/{result_id}")

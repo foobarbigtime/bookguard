@@ -43,6 +43,7 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - Read-only staged ebook inventory and staged-byte verification against one explicit Bindery book.
 - SHA-256 and file-stat stability checks across verification.
 - Default-on archive safety checks before EPUB/CBZ extraction.
+- Optional fail-closed ClamAV malware scanning through a deployment-only clamd endpoint.
 - A staged file is marked `safeToAdmit` only for a stable `VERIFIED_CORRECT` result at 99% confidence.
 - Opt-in direct ebook admission to the exact former Bindery path, followed by Bindery library reconciliation.
 - Snapshot verification on the destination filesystem, atomic no-overwrite publication, and durable recovery state.
@@ -371,6 +372,14 @@ Verification and security settings include three default-on, read-only checks:
 - EPUB/CBZ archives reject traversal paths, symlinks, encryption, duplicate or case-colliding names, excessive member counts and sizes, and dangerous expansion ratios
 - EPUB files must pass ZIP CRC, mimetype, container, package, manifest, and spine validation
 - PDF files must have a valid header, cross-reference structure, page tree, and EOF marker
+- optional ClamAV malware scanning can require a clean result before identity verification
+
+The ClamAV check is disabled by default. When enabled, BookGuard streams the file bytes to a
+deployment-configured `clamd` endpoint with the INSTREAM protocol; it does not give ClamAV a
+host/library path. A malware detection, scanner error, timeout, missing scanner configuration, or
+file above the configured scan limit fails closed. BookGuard does not send a file to ClamAV after
+an earlier deterministic safety check has already failed, which avoids handing malformed or
+archive-bomb-like input to another parser.
 
 A deterministic failure produces an `UNSAFE_FILE` verdict before content identity is evaluated.
 Unsafe files cannot pass staged verification or controlled admission. Plain-text and legacy formats

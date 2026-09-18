@@ -71,3 +71,18 @@ def test_persistable_settings_exclude_secrets_and_deployment_only_tika_url():
     assert "bindery_api_key" not in persisted
     assert "bindery_api_key_set" not in persisted
     assert "verification_tika_url" not in persisted
+
+
+
+def test_malware_scanner_endpoint_is_deployment_only():
+    configured = Settings(
+        verification_malware_scan=True,
+        verification_clamd_host="clamd.internal",
+        verification_clamd_port=3310,
+    )
+
+    persisted = configured.persistable_dict()
+
+    assert persisted["verification_malware_scan"] is True
+    assert "verification_clamd_host" not in persisted
+    assert "verification_clamd_port" not in persisted

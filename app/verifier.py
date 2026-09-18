@@ -18,6 +18,7 @@ from .db import (
 )
 from .ebook_extraction import extract_ebook_identity
 from .ebook_security import inspect_ebook_security
+from .malware_scan import probe_clamd
 from .matcher import normalize
 from .media_discovery import resolve_ebook_target
 from .metadata import ebook_metadata
@@ -32,7 +33,7 @@ from .tika_client import test_connection
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "16"
+VERIFIER_VERSION = "17"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -62,6 +63,15 @@ def _utc_now() -> str:
 def test_tika() -> dict:
     """Expose the Tika connectivity check through the verifier service API."""
     return test_connection()
+
+
+def test_malware_scanner() -> dict:
+    """Probe the deployment-configured ClamAV daemon without sending media bytes."""
+    return probe_clamd(
+        host=settings.verification_clamd_host,
+        port=settings.verification_clamd_port,
+        timeout_seconds=min(10, settings.verification_malware_timeout_seconds),
+    )
 
 
 def init_verification_db() -> None:
@@ -126,6 +136,10 @@ def _verification_signature(result: dict, target_path: str, fingerprint: str) ->
             "archiveSafety": settings.verification_archive_safety,
             "epubStructure": settings.verification_epub_structure,
             "pdfIntegrity": settings.verification_pdf_integrity,
+            "malwareScan": settings.verification_malware_scan,
+            "clamdHost": settings.verification_clamd_host,
+            "clamdPort": settings.verification_clamd_port,
+            "malwareMaxBytes": settings.verification_malware_max_bytes,
             "maxTextChars": settings.verification_max_text_chars,
             "pdfPages": settings.verification_pdf_pages,
             "useTika": settings.verification_use_tika,
@@ -261,6 +275,11 @@ def verify_result(result: dict, force: bool = False) -> dict:
         check_archive_safety=settings.verification_archive_safety,
         check_epub_structure=settings.verification_epub_structure,
         check_pdf_integrity=settings.verification_pdf_integrity,
+        check_malware=settings.verification_malware_scan,
+        clamd_host=settings.verification_clamd_host,
+        clamd_port=settings.verification_clamd_port,
+        malware_timeout_seconds=settings.verification_malware_timeout_seconds,
+        malware_max_bytes=settings.verification_malware_max_bytes,
     )
     if not security["safe"]:
         evidence = {
