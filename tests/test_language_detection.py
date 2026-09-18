@@ -1,7 +1,9 @@
 import zipfile
 
 import app.archive_io as archive_io
-from app.language_detection import epub_languages, explicit_non_english, normalize_language
+from app.language_detection import epub_languages, explicit_non_english, normalize_language, pdf_languages
+from pypdf import PdfWriter
+from pypdf.generic import NameObject, TextStringObject
 from app.scanner import _language_override
 
 
@@ -103,3 +105,17 @@ def test_epub_language_read_is_bounded(tmp_path, monkeypatch):
     result = epub_languages(str(path))
 
     assert result["languages"] == []
+
+
+def test_pdf_language_is_read_in_isolated_probe(tmp_path):
+    path = tmp_path / "book.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer._root_object.update({NameObject("/Lang"): TextStringObject("de-DE")})
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+    result = pdf_languages(str(path))
+
+    assert result["languages"] == ["de"]
+    assert result["evidence"] == ["de"]
