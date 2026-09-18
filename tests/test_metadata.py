@@ -2,7 +2,8 @@ import struct
 import zipfile
 from pathlib import Path
 
-from app.metadata import cbz_metadata, mobi_metadata, rtf_metadata, txt_metadata
+import app.archive_io as archive_io
+from app.metadata import cbz_metadata, epub_metadata, mobi_metadata, rtf_metadata, txt_metadata
 
 
 def _u32(value: int) -> bytes:
@@ -75,3 +76,53 @@ def test_cbz_comicinfo(tmp_path):
     md = cbz_metadata(str(path))
     assert md["title"] == "Drama"
     assert md["author"] == "Raina Telgemeier"
+
+
+def test_epub_metadata_reads_title_and_author(tmp_path):
+    path = tmp_path / "book.epub"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(
+            "META-INF/container.xml",
+            """<?xml version='1.0'?>
+            <container xmlns='urn:oasis:names:tc:opendocument:xmlns:container'>
+              <rootfiles><rootfile full-path='OEBPS/content.opf'/></rootfiles>
+            </container>""",
+        )
+        zf.writestr(
+            "OEBPS/content.opf",
+            """<?xml version='1.0'?>
+            <package xmlns='http://www.idpf.org/2007/opf'
+                     xmlns:dc='http://purl.org/dc/elements/1.1/'>
+              <metadata>
+                <dc:title>The English Girl</dc:title>
+                <dc:creator>Daniel Silva</dc:creator>
+              </metadata>
+            </package>""",
+        )
+
+    md = epub_metadata(str(path))
+
+    assert md["title"] == "The English Girl"
+    assert md["author"] == "Daniel Silva"
+
+
+def test_epub_metadata_rejects_oversized_package_xml(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive_io, "DEFAULT_XML_MEMBER_LIMIT", 512)
+    path = tmp_path / "oversized.epub"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(
+            "META-INF/container.xml",
+            """<container>
+              <rootfiles><rootfile full-path='OEBPS/content.opf'/></rootfiles>
+            </container>""",
+        )
+        zf.writestr(
+            "OEBPS/content.opf",
+            "<package><metadata>" + ("x" * 2048) + "</metadata></package>",
+        )
+
+    md = epub_metadata(str(path))
+
+    assert md["source"] == "epub"
+    assert "error" in md
+    assert "exceeds the 512-byte metadata limit" in md["error"]
