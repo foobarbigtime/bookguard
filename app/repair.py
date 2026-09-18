@@ -317,8 +317,14 @@ def _rewrite_epub_metadata(path: str, title: str, author: str) -> None:
     try:
         with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(temp_name, "w") as dst:
             for info in src.infolist():
-                payload = replacement if info.filename == rootfile else src.read(info.filename)
-                dst.writestr(info, payload)
+                if info.filename == rootfile:
+                    dst.writestr(info, replacement)
+                    continue
+                if info.is_dir():
+                    dst.writestr(info, b"")
+                    continue
+                with src.open(info, "r") as source_member, dst.open(info, "w") as destination_member:
+                    shutil.copyfileobj(source_member, destination_member, length=1024 * 1024)
         shutil.copystat(source, temp_name)
         os.replace(temp_name, source)
     except Exception:

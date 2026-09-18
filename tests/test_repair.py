@@ -8,6 +8,7 @@ from app.db import create_scan, finish_scan, init_local_db, metadata_repair_by_i
 from app.metadata import ebook_metadata
 from app.repair import (
     RepairError,
+    _rewrite_epub_metadata,
     apply_metadata_repair,
     apply_repair_changes,
     build_repair_preview,
@@ -199,6 +200,30 @@ def test_reversed_literal_author_name_can_be_normalized(tmp_path):
     assert preview["before"]["author"] == "Pilkey, Dav"
     assert preview["after"]["author"] == "Dav Pilkey"
     assert preview["before"]["title"] == preview["after"]["title"]
+
+
+def test_epub_rewrite_streams_unrelated_members_without_zipfile_read(tmp_path, monkeypatch):
+    epub = tmp_path / "streaming-rewrite.epub"
+    _make_epub(epub, "Patchett, Ann", "Bel Canto")
+    payload = b"x" * (2 * 1024 * 1024 + 17)
+    with zipfile.ZipFile(epub, "a", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("OEBPS/large-resource.bin", payload)
+
+    def fail_full_member_read(*args, **kwargs):
+        raise AssertionError("EPUB rewrite must not call ZipFile.read() for archive members")
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", fail_full_member_read)
+
+    _rewrite_epub_metadata(str(epub), "Bel Canto", "Ann Patchett")
+
+    with zipfile.ZipFile(epub) as zf:
+        with zf.open("OEBPS/large-resource.bin", "r") as handle:
+            restored = handle.read()
+
+    assert restored == payload
+    current = ebook_metadata(str(epub))
+    assert current["title"] == "Bel Canto"
+    assert current["author"] == "Ann Patchett"
 
 
 def test_epub_repair_can_add_completely_missing_title_and_author(tmp_path):
