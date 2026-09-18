@@ -344,9 +344,11 @@ Open:
 http://<unraid-ip>:8788
 ```
 
-The supplied Compose file uses:
+The supplied Compose file keeps BookGuard's persistent database outside the
+Git checkout. By default it uses:
 
 ```text
+/mnt/cache/appdata/bookguard-config
 /mnt/cache/appdata/bindery
 /mnt/user/data/media/audiobooks
 /mnt/user/data/media/books
@@ -425,8 +427,13 @@ Repair history and Undo are available at `/repairs`.
 ## Updating
 
 Before deploying this security update, add the required access credentials to
-the existing `.env`. To retain direct LAN access, also set the bind address to
-the Unraid server's LAN IP:
+the existing `.env`. BookGuard's writable `/config` mount should point at a
+dedicated host directory rather than the Git checkout. Existing installations
+that still have `bookguard.db` in the repository root should stop BookGuard,
+copy `bookguard.db*` into the dedicated config directory, and preserve the old
+copy until the migrated container has started successfully.
+
+To retain direct LAN access, also set the bind address to the Unraid server's LAN IP:
 
 ```env
 BOOKGUARD_AUTH_USERNAME=bookguard
