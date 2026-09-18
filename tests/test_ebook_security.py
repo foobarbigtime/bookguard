@@ -6,6 +6,7 @@ import stat
 from pypdf import PdfWriter
 
 import app.archive_io as archive_io
+import app.archive_probe as archive_probe
 import app.ebook_security as ebook_security
 import app.pdf_probe as pdf_probe
 from app.ebook_security import inspect_ebook_security
@@ -197,6 +198,42 @@ def test_epub_structure_bounds_package_xml_read(tmp_path, monkeypatch):
     assert structure["status"] == "failed"
     assert "OEBPS/content.opf" in structure["message"]
     assert "512-byte metadata limit" in structure["message"]
+
+
+def test_epub_structure_routes_crc_through_isolated_probe(tmp_path, monkeypatch):
+    path = tmp_path / "book.epub"
+    _write_epub(path)
+    observed = {}
+
+    def fake_crc(target):
+        observed["path"] = target
+        return {"badMember": None}
+
+    monkeypatch.setattr(archive_probe, "inspect_zip_crc", fake_crc)
+
+    report = inspect_ebook_security(path)
+
+    assert observed["path"] == path
+    assert report["safe"] is True
+    assert report["checks"]["epubStructure"]["status"] == "passed"
+
+
+def test_epub_crc_worker_failure_fails_closed(tmp_path, monkeypatch):
+    path = tmp_path / "book.epub"
+    _write_epub(path)
+
+    monkeypatch.setattr(
+        archive_probe,
+        "inspect_zip_crc",
+        lambda target: {"error": "isolated CRC worker failed"},
+    )
+
+    report = inspect_ebook_security(path)
+
+    structure = report["checks"]["epubStructure"]
+    assert report["safe"] is False
+    assert structure["status"] == "failed"
+    assert "isolated CRC worker failed" in structure["message"]
 
 
 def test_valid_pdf_passes_signature_and_integrity(tmp_path):

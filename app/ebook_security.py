@@ -7,7 +7,7 @@ from urllib.parse import unquote
 import zipfile
 import xml.etree.ElementTree as ET
 
-from . import pdf_probe
+from . import archive_probe, pdf_probe
 from .archive_io import read_zip_member_bounded
 
 
@@ -206,7 +206,13 @@ def _epub_structure_check(path: Path, suffix: str, enabled: bool) -> dict[str, A
             name_set = set(names)
             if len(names) != len(name_set):
                 raise ValueError("the archive contains duplicate member names")
-            if archive.testzip() is not None:
+            crc_result = archive_probe.inspect_zip_crc(path)
+            if crc_result.get("error"):
+                raise ValueError(
+                    "the ZIP CRC integrity check could not complete: "
+                    f"{str(crc_result['error'])[:500]}"
+                )
+            if crc_result.get("badMember") is not None:
                 raise ValueError("a ZIP member failed its CRC integrity check")
             if "mimetype" not in name_set:
                 raise ValueError("the required mimetype file is absent")
