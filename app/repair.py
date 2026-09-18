@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 
 from mutagen import File as MutagenFile
 
+from .archive_io import read_zip_member_bounded
 from .config import settings
 from .db import (
     create_metadata_repair,
@@ -268,7 +269,9 @@ def _audio_preview(result: dict) -> dict:
 
 def _epub_package(path: str) -> tuple[str, bytes]:
     with zipfile.ZipFile(path) as zf:
-        container = ET.fromstring(zf.read("META-INF/container.xml"))
+        container = ET.fromstring(
+            read_zip_member_bounded(zf, "META-INF/container.xml")
+        )
         rootfile = ""
         for elem in container.iter():
             if elem.tag.endswith("rootfile"):
@@ -277,7 +280,7 @@ def _epub_package(path: str) -> tuple[str, bytes]:
                     break
         if not rootfile:
             raise RepairError("EPUB container does not declare an OPF package.")
-        return rootfile, zf.read(rootfile)
+        return rootfile, read_zip_member_bounded(zf, rootfile)
 
 
 def _rewrite_epub_metadata(path: str, title: str, author: str) -> None:
