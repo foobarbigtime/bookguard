@@ -23,7 +23,7 @@ from .db import (
     result_by_id,
     update_ebook_admission,
 )
-from .file_safety import is_within, sha256_file
+from .file_safety import roots_overlap, sha256_file
 from .staging import (
     MIN_ADMISSION_CONFIDENCE,
     StagingSafetyError,
@@ -145,13 +145,13 @@ def admission_readiness(client: BinderyClient | None = None) -> dict[str, Any]:
             configured.admission_bindery_root
             and configured.admission_bindery_root == expected_bindery_root
         ),
-        "stagingOutsideAdmissionRoot": not (
-            is_within(resolved_staging, resolved_admission)
-            or is_within(resolved_admission, resolved_staging)
+        "stagingOutsideAdmissionRoot": not roots_overlap(
+            resolved_staging,
+            resolved_admission,
         ),
-        "quarantineOutsideAdmissionRoot": not (
-            is_within(quarantine_root, resolved_admission)
-            or is_within(resolved_admission, quarantine_root)
+        "quarantineOutsideAdmissionRoot": not roots_overlap(
+            quarantine_root,
+            resolved_admission,
         ),
     }
     blockers = [name for name, passed in checks.items() if not passed]
