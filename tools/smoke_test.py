@@ -55,7 +55,18 @@ def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
     security_opt = service.get("security_opt") or []
     cap_drop = service.get("cap_drop") or []
     cap_add = service.get("cap_add") or []
+    tmpfs = [str(item) for item in (service.get("tmpfs") or [])]
+    tmp_mount = next(
+        (item for item in tmpfs if item == "/tmp" or item.startswith("/tmp:")),
+        "",
+    )
     checks = {
+        "rootFilesystemReadOnly": bool(service.get("read_only")),
+        "tmpfsPresent": bool(tmp_mount),
+        "tmpfsNoExec": "noexec" in tmp_mount.split(","),
+        "tmpfsNoSuid": "nosuid" in tmp_mount.split(","),
+        "tmpfsNoDev": "nodev" in tmp_mount.split(","),
+        "tmpfsSizeBounded": "size=" in tmp_mount,
         "noNewPrivilegesEnabled": "no-new-privileges:true" in security_opt,
         "allCapabilitiesDropped": "ALL" in cap_drop,
         "binderyReadCapabilityAdded": "DAC_READ_SEARCH" in cap_add,
@@ -457,6 +468,35 @@ def run_workflow_smoke_test() -> dict[str, Any]:
         }
 
 
+def validate_runtime_rootfs() -> dict[str, bool]:
+    """Prove the image root is immutable while the temporary workspace is writable."""
+    root_probe = Path("/app/.bookguard-rootfs-write-test")
+    tmp_probe = Path("/tmp/bookguard-tmp-write-test")
+
+    root_blocked = False
+    try:
+        root_probe.write_text("must not be writable", encoding="utf-8")
+    except OSError:
+        root_blocked = True
+    else:
+        root_probe.unlink(missing_ok=True)
+
+    tmp_probe.write_text("temporary writes are allowed", encoding="utf-8")
+    tmp_writable = tmp_probe.read_text(encoding="utf-8") == "temporary writes are allowed"
+    tmp_probe.unlink()
+
+    checks = {
+        "applicationRootWriteBlocked": root_blocked,
+        "temporaryWorkspaceWritable": tmp_writable,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise SmokeTestFailure(
+            f"Runtime root-filesystem checks failed: {', '.join(failed)}"
+        )
+    return checks
+
+
 def _read_json_stdin() -> dict[str, Any]:
     try:
         payload = json.load(sys.stdin)
@@ -476,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=("base", "actions", "admission", "malware", "full"),
     )
     subparsers.add_parser("workflow")
+    subparsers.add_parser("rootfs")
     args = parser.parse_args(argv)
 
     try:
@@ -484,6 +525,11 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": True,
                 "profile": args.profile,
                 "checks": validate_compose(_read_json_stdin(), args.profile),
+            }
+        elif args.command == "rootfs":
+            result = {
+                "ok": True,
+                "checks": validate_runtime_rootfs(),
             }
         else:
             result = run_workflow_smoke_test()

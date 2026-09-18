@@ -43,6 +43,7 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - Read-only staged ebook inventory and staged-byte verification against one explicit Bindery book.
 - SHA-256 and file-stat stability checks across verification.
 - Default-on archive safety checks before EPUB/CBZ extraction.
+- The normal BookGuard container uses a read-only root filesystem; only explicit data mounts and a bounded no-exec /tmp tmpfs are writable.
 - Optional fail-closed ClamAV malware scanning through a deployment-only clamd endpoint.
 - A staged file is marked `safeToAdmit` only for a stable `VERIFIED_CORRECT` result at 99% confidence.
 - Opt-in direct ebook admission to the exact former Bindery path, followed by Bindery library reconciliation.
@@ -453,8 +454,14 @@ workflow—acquisition, external-handoff enforcement, staged-byte verification,
 atomic admission, registration, and finalization—against a fake Bindery client
 and temporary files.
 
+The production Compose service also uses a read-only root filesystem. Writable
+state is limited to the explicit `/config`, `/staging`, and `/quarantine`
+mounts plus any deliberately enabled action/admission alias. `/tmp` is a
+bounded tmpfs mounted with `nosuid`, `nodev`, and `noexec`; application code,
+Python packages, and system binaries remain immutable at runtime.
+
 The workflow container uses `--network none`, a read-only root filesystem, and
-an isolated temporary filesystem. It does not mount `/config`, `/books`,
+the same bounded no-exec temporary filesystem. It does not mount `/config`, `/books`,
 `/staging`, the Bindery database, the download client, or any other live host
 path. The temporary library and audit database are removed when the command
 finishes. A successful run therefore replaces most of the long manual CLI

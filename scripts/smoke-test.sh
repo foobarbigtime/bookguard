@@ -32,6 +32,16 @@ check_compose_profile() {
 }
 
 echo
+echo "=== READ-ONLY ROOT FILESYSTEM ==="
+docker run \
+  --rm \
+  --network none \
+  --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+  "${SMOKE_IMAGE}" \
+  python -m tools.smoke_test rootfs
+
+echo
 echo "=== BASE COMPOSE SAFETY ==="
 check_compose_profile base --file compose.yaml
 
@@ -70,7 +80,7 @@ docker run \
   --rm \
   --network none \
   --read-only \
-  --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
   "${SMOKE_IMAGE}" \
   python -m tools.smoke_test workflow
 

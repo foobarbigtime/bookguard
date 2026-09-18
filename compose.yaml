@@ -3,6 +3,11 @@ services:
     build: .
     container_name: bookguard
     restart: unless-stopped
+    # Keep the application image immutable at runtime. Only explicit bind
+    # mounts/volumes below remain writable.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
     security_opt:
       - no-new-privileges:true
     cap_drop:
