@@ -142,22 +142,51 @@ def _decode_mobi_text(raw: bytes, encoding_id: int) -> str:
     return raw.decode(codec, errors="replace").replace("\x00", "").strip()
 
 
+MAX_MOBI_RECORD0_BYTES = 16 * 1024 * 1024
+
+
+def _read_mobi_record0(path: str) -> bytes:
+    """Read only PalmDB record 0, with a hard cap for routine metadata inspection."""
+    target = Path(path)
+    size = target.stat().st_size
+    if size < 86:
+        raise ValueError("File is too small to contain a MOBI header")
+
+    with target.open("rb") as handle:
+        header = handle.read(90)
+        record_count = struct.unpack(">H", header[76:78])[0]
+        if record_count < 1:
+            raise ValueError("MOBI file has no PalmDB records")
+
+        record0_offset = _u32(header, 78)
+        if record_count > 1:
+            if len(header) < 90:
+                raise ValueError("MOBI record table is truncated")
+            record0_end = _u32(header, 86)
+        else:
+            record0_end = size
+
+        if not (0 <= record0_offset < record0_end <= size):
+            raise ValueError("Invalid MOBI record offsets")
+
+        record_size = record0_end - record0_offset
+        if record_size > MAX_MOBI_RECORD0_BYTES:
+            raise ValueError(
+                f"MOBI metadata record exceeds the {MAX_MOBI_RECORD0_BYTES}-byte "
+                "routine metadata limit"
+            )
+
+        handle.seek(record0_offset)
+        record = handle.read(record_size + 1)
+        if len(record) != record_size:
+            raise ValueError("MOBI metadata record is truncated")
+        return record
+
+
 def mobi_metadata(path: str) -> dict:
     """Read title/author from MOBI/AZW/AZW3 PalmDB/EXTH metadata."""
     try:
-        data = Path(path).read_bytes()
-        if len(data) < 86:
-            raise ValueError("File is too small to contain a MOBI header")
-        record_count = struct.unpack(">H", data[76:78])[0]
-        if record_count < 1:
-            raise ValueError("MOBI file has no PalmDB records")
-        record0_offset = _u32(data, 78)
-        record0_end = len(data)
-        if record_count > 1 and len(data) >= 90:
-            record0_end = _u32(data, 86)
-        if not (0 <= record0_offset < record0_end <= len(data)):
-            raise ValueError("Invalid MOBI record offsets")
-        record = data[record0_offset:record0_end]
+        record = _read_mobi_record0(path)
 
         mobi_start = record.find(b"MOBI", 8, min(len(record), 128))
         if mobi_start < 0:
