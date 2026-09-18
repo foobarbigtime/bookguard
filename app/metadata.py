@@ -9,6 +9,7 @@ import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
 
+from .archive_io import read_zip_member_bounded
 from .media_discovery import representative_audio_files
 
 
@@ -95,7 +96,7 @@ def audio_metadata_summary(samples: list[dict]) -> dict:
 def epub_metadata(path: str) -> dict:
     try:
         with zipfile.ZipFile(path) as zf:
-            container = ET.fromstring(zf.read("META-INF/container.xml"))
+            container = ET.fromstring(read_zip_member_bounded(zf, "META-INF/container.xml"))
             rootfile = None
             for elem in container.iter():
                 if elem.tag.endswith("rootfile"):
@@ -104,7 +105,7 @@ def epub_metadata(path: str) -> dict:
                         break
             if not rootfile:
                 return {"error": "EPUB container does not declare an OPF package."}
-            package = ET.fromstring(zf.read(rootfile))
+            package = ET.fromstring(read_zip_member_bounded(zf, rootfile))
             title = ""
             creators: list[str] = []
             for elem in package.iter():
@@ -228,7 +229,7 @@ def cbz_metadata(path: str) -> dict:
             comic_info_name = names.get("comicinfo.xml")
             if not comic_info_name:
                 return {"title": "", "author": "", "source": "cbz"}
-            root = ET.fromstring(zf.read(comic_info_name))
+            root = ET.fromstring(read_zip_member_bounded(zf, comic_info_name))
             values = {child.tag.casefold(): (child.text or "").strip() for child in root}
             author = values.get("writer", "") or values.get("creator", "")
             return {
