@@ -58,6 +58,13 @@ check_compose_profile \
   --file compose.admission.yaml
 
 echo
+echo "=== OPTIONAL MALWARE OVERLAY SAFETY ==="
+check_compose_profile \
+  malware \
+  --file compose.yaml \
+  --file compose.clamav.yaml
+
+echo
 echo "=== ISOLATED WORKFLOW ==="
 docker run \
   --rm \

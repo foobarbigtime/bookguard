@@ -381,6 +381,28 @@ file above the configured scan limit fails closed. BookGuard does not send a fil
 an earlier deterministic safety check has already failed, which avoids handing malformed or
 archive-bomb-like input to another parser.
 
+For the optional private ClamAV topology, start BookGuard with the malware
+overlay. The scanner has no library mounts and port 3310 is not published to
+the host:
+
+```bash
+docker compose -f compose.yaml -f compose.clamav.yaml up -d --build
+```
+
+On first start ClamAV may need time to initialize its signature database. Once
+the containers are up, run the live acceptance test:
+
+```bash
+docker compose -f compose.yaml -f compose.clamav.yaml \
+  exec -T bookguard python -m tools.clamav_acceptance
+```
+
+The acceptance test creates temporary clean and EICAR antivirus-test files
+inside the BookGuard container, proves the clean control is accepted, proves
+ClamAV detects EICAR, and proves BookGuard converts that detection into a
+fail-closed security result. The temporary files are deleted automatically and
+no test file is written to the ebook library, staging, or quarantine paths.
+
 A deterministic failure produces an `UNSAFE_FILE` verdict before content identity is evaluated.
 Unsafe files cannot pass staged verification or controlled admission. Plain-text and legacy formats
 without a reliable fixed signature are reported as not applicable instead of being guessed.
@@ -488,7 +510,9 @@ app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery
 app/file_safety.py          Shared filesystem hashing/safety helpers
 tools/smoke_test.py         Isolated workflow and Compose safety harness
+tools/clamav_acceptance.py  Live ClamAV clean/EICAR acceptance test
 scripts/smoke-test.sh       One-command containerized smoke-test runner
+compose.clamav.yaml         Optional private ClamAV deployment overlay
 static/triage-acquisition.js Supervised replacement UI controller
 ```
 

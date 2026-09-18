@@ -46,7 +46,7 @@ def _volume_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
     """Validate base and opt-in writable-alias storage topologies."""
-    if profile not in {"base", "actions", "admission", "full"}:
+    if profile not in {"base", "actions", "admission", "malware", "full"}:
         raise SmokeTestFailure(f"Unknown Compose profile: {profile}.")
 
     volumes = _volume_map(payload)
@@ -116,6 +116,33 @@ def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
             "admissionAliasMapsLibrary": (
                 admission is not None
                 and admission.get("source") == volumes.get("/books", {}).get("source")
+            ),
+        })
+
+    if profile == "malware":
+        clamav = services.get("clamav")
+        environment = service.get("environment") or {}
+        clamav_volumes = (clamav or {}).get("volumes") or []
+        allowed_targets = {"/var/lib/clamav"}
+        checks.update({
+            "clamavServicePresent": isinstance(clamav, dict),
+            "malwareScanEnabledByOverlay": (
+                str(environment.get("BOOKGUARD_VERIFICATION_MALWARE_SCAN", "")).lower()
+                == "true"
+            ),
+            "clamdHostUsesPrivateServiceName": (
+                environment.get("BOOKGUARD_CLAMD_HOST") == "clamav"
+            ),
+            "clamavNoPublishedPorts": not bool((clamav or {}).get("ports")),
+            "clamavNotPrivileged": not bool((clamav or {}).get("privileged")),
+            "clamavNoNewPrivileges": (
+                "no-new-privileges:true" in ((clamav or {}).get("security_opt") or [])
+            ),
+            "clamavHasNoMediaMounts": all(
+                isinstance(volume, dict)
+                and volume.get("type") == "volume"
+                and volume.get("target") in allowed_targets
+                for volume in clamav_volumes
             ),
         })
 
@@ -446,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
     compose_parser = subparsers.add_parser("compose")
     compose_parser.add_argument(
         "profile",
-        choices=("base", "actions", "admission", "full"),
+        choices=("base", "actions", "admission", "malware", "full"),
     )
     subparsers.add_parser("workflow")
     args = parser.parse_args(argv)

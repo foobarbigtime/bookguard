@@ -1,0 +1,23 @@
+services:
+  bookguard:
+    depends_on:
+      - clamav
+    environment:
+      # Including this overlay is the explicit malware-scanning opt-in.
+      BOOKGUARD_VERIFICATION_MALWARE_SCAN: "true"
+      BOOKGUARD_CLAMD_HOST: clamav
+      BOOKGUARD_CLAMD_PORT: "3310"
+
+  clamav:
+    image: ${BOOKGUARD_CLAMAV_IMAGE:-clamav/clamav:1.5.4}
+    container_name: bookguard-clamav
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # Deliberately no host-published ports and no media mounts. BookGuard
+    # streams bytes to clamd over the private Compose network.
+    volumes:
+      - bookguard-clamav-db:/var/lib/clamav
+
+volumes:
+  bookguard-clamav-db:
