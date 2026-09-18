@@ -439,6 +439,9 @@ To retain direct LAN access, also set the bind address to the Unraid server's LA
 BOOKGUARD_AUTH_USERNAME=bookguard
 BOOKGUARD_AUTH_PASSWORD=replace-with-a-long-random-password
 BOOKGUARD_BIND_ADDRESS=192.168.1.10
+BOOKGUARD_UID=99
+BOOKGUARD_GID=100
+BOOKGUARD_CONFIG_HOST_PATH=/mnt/cache/appdata/bookguard-config
 ```
 
 ```bash
@@ -461,8 +464,13 @@ workflow—acquisition, external-handoff enforcement, staged-byte verification,
 atomic admission, registration, and finalization—against a fake Bindery client
 and temporary files.
 
-The production Compose service also uses a read-only root filesystem. Writable
-state is limited to the explicit `/config`, `/staging`, and `/quarantine`
+The production Compose service runs BookGuard as a non-root UID/GID
+(default `99:100` on Unraid), drops all Linux capabilities, and uses a read-only
+root filesystem. Bindery's read-only database and BookGuard's writable host
+directories therefore need normal filesystem ownership/permissions for that
+runtime identity; BookGuard does not bypass DAC permissions with capabilities.
+
+Writable state is limited to the explicit `/config`, `/staging`, and `/quarantine`
 mounts plus any deliberately enabled action/admission alias. `/tmp` is a
 bounded tmpfs mounted with `nosuid`, `nodev`, and `noexec`; application code,
 Python packages, and system binaries remain immutable at runtime.
