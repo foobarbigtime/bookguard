@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigurationError, load_automation_settings, settings
-from .file_safety import is_within
+from .file_safety import roots_overlap
 
 
 class EbookActionSafetyError(RuntimeError):
@@ -124,9 +124,9 @@ def ebook_action_preview(
         and mount_is_writable(resolved_action_root),
         "actionAliasExists": alias_exists,
         "actionAliasSameFile": same_file,
-        "quarantineOutsideActionRoot": not (
-            is_within(quarantine_root, resolved_action_root)
-            or is_within(resolved_action_root, quarantine_root)
+        "quarantineOutsideActionRoot": not roots_overlap(
+            quarantine_root,
+            resolved_action_root,
         ),
     }
     blockers = [name for name, passed in checks.items() if not passed]
