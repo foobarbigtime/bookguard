@@ -237,7 +237,7 @@ def verification_snapshot(
         root = Path(temp_root)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         root_info = root.lstat()
-        if root_info.is_symlink() or not root_info.is_dir():
+        if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
             raise SnapshotError(
                 "snapshot_root",
                 "The private verification snapshot directory is not a normal directory.",
