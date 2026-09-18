@@ -47,7 +47,8 @@ def _probe_cached(
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "app.pdf_probe", "--worker", path_text],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
             timeout=PDF_PROBE_TIMEOUT_SECONDS,
             check=False,
