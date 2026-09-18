@@ -34,7 +34,7 @@ def _compose_payload(
                 "tmpfs": ["/tmp:rw,nosuid,nodev,noexec,size=67108864"],
                 "security_opt": ["no-new-privileges:true"],
                 "cap_drop": ["ALL"],
-                "cap_add": ["DAC_READ_SEARCH"],
+                "user": "99:100",
                 "volumes": volumes,
             }
         }
@@ -90,19 +90,27 @@ def test_compose_profile_requires_all_capabilities_dropped():
         validate_compose(payload, "base")
 
 
-def test_compose_profile_requires_bindery_read_capability():
+def test_compose_profile_requires_non_root_runtime_user():
     payload = _compose_payload(False)
-    payload["services"]["bookguard"].pop("cap_add")
+    payload["services"]["bookguard"]["user"] = "0:0"
 
-    with pytest.raises(SmokeTestFailure, match="binderyReadCapabilityAdded"):
+    with pytest.raises(SmokeTestFailure, match="runtimeUserNonRoot"):
+        validate_compose(payload, "base")
+
+
+def test_compose_profile_rejects_added_capabilities():
+    payload = _compose_payload(False)
+    payload["services"]["bookguard"]["cap_add"] = ["DAC_READ_SEARCH"]
+
+    with pytest.raises(SmokeTestFailure, match="noCapabilitiesAdded"):
         validate_compose(payload, "base")
 
 
 def test_compose_profile_rejects_dac_override_capability():
     payload = _compose_payload(False)
-    payload["services"]["bookguard"]["cap_add"].append("DAC_OVERRIDE")
+    payload["services"]["bookguard"]["cap_add"] = ["DAC_OVERRIDE"]
 
-    with pytest.raises(SmokeTestFailure, match="writeBypassCapabilityAbsent"):
+    with pytest.raises(SmokeTestFailure, match="noCapabilitiesAdded"):
         validate_compose(payload, "base")
 
 
