@@ -315,7 +315,10 @@ def verified_repair_preview(result: dict, verification: dict | None = None) -> d
             "before": {},
             "after": {},
         }
-    if verification.get("verdict") != "METADATA_ERROR" or int(verification.get("confidence") or 0) < 90:
+
+    verdict = str(verification.get("verdict") or "")
+    confidence = int(verification.get("confidence") or 0)
+    if verdict != "METADATA_ERROR" or confidence < 90:
         return {
             "eligible": False,
             "safe": False,
@@ -337,17 +340,80 @@ def verified_repair_preview(result: dict, verification: dict | None = None) -> d
         }
 
     current = ebook_metadata(target)
+    if current.get("error"):
+        return {
+            "eligible": False,
+            "safe": False,
+            "kind": "EPUB_METADATA",
+            "reason": "The current EPUB metadata could not be read safely.",
+            "before": {},
+            "after": {},
+        }
+
     before = {
         "path": target,
         "title": str(current.get("title") or ""),
         "author": str(current.get("author") or ""),
     }
+    missing_metadata = not normalize(before["title"]) and not normalize(before["author"])
+
+    if missing_metadata:
+        evidence = verification.get("evidence") or {}
+        embedded = evidence.get("embedded") or {}
+        expected_signal = (evidence.get("content") or {}).get("expected_signal") or {}
+        independently_verified = all(
+            (
+                confidence >= 97,
+                bool(expected_signal.get("strong_identity")),
+                bool(expected_signal.get("front_proximity")),
+                not normalize(str(embedded.get("title") or "")),
+                not normalize(str(embedded.get("author") or "")),
+            )
+        )
+        if result.get("reason_code") != "NO_METADATA" or not independently_verified:
+            return {
+                "eligible": False,
+                "safe": False,
+                "kind": "EPUB_METADATA",
+                "reason": (
+                    "Missing EPUB metadata is filled only when the latest scan recorded "
+                    "NO_METADATA and title-page-like content independently verifies the "
+                    "expected title and author at 97% confidence or higher."
+                ),
+                "before": before,
+                "after": {},
+            }
+
+        after = {
+            "path": target,
+            "title": result["title"],
+            "author": result["author"],
+        }
+        return {
+            "eligible": True,
+            "safe": True,
+            "kind": "EPUB_METADATA",
+            "repair_reason_code": "MISSING_METADATA",
+            "missing_metadata": True,
+            "reason": (
+                "The EPUB has no usable embedded title or author. Title-page-like "
+                "content independently verifies the Bindery identity, so BookGuard "
+                "can add the missing title and author."
+            ),
+            "before": before,
+            "after": after,
+            "verification_id": verification.get("id"),
+            "verification_confidence": confidence,
+        }
+
     after = {"path": target, "title": result["title"], "author": result["author"]}
     changed = normalize(before["title"]) != normalize(after["title"]) or normalize(before["author"]) != normalize(after["author"])
     return {
         "eligible": changed,
         "safe": changed,
         "kind": "EPUB_METADATA",
+        "repair_reason_code": "CONFLICTING_METADATA",
+        "missing_metadata": False,
         "reason": (
             "Internal book content independently verifies the expected title and author; only the conflicting EPUB metadata will be rewritten."
             if changed
@@ -356,7 +422,7 @@ def verified_repair_preview(result: dict, verification: dict | None = None) -> d
         "before": before,
         "after": after,
         "verification_id": verification.get("id"),
-        "verification_confidence": verification.get("confidence"),
+        "verification_confidence": confidence,
     }
 
 
