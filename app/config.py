@@ -362,9 +362,9 @@ class Settings:
         }
 
     def persistable_dict(self) -> dict:
+        """Return UI settings that are safe to store in BookGuard's database."""
         data = self.public_dict()
         data.pop("bindery_api_key_set", None)
-        data["bindery_api_key"] = self.bindery_api_key
         return data
 
 
