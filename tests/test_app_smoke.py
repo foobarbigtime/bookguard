@@ -36,6 +36,7 @@ EXPECTED_ROUTES = {
     ("GET", "/api/verification/cached"),
     ("POST", "/api/verification/start"),
     ("GET", "/api/verification/tika-test"),
+    ("GET", "/api/verification/malware-test"),
     ("GET", "/api/verification/{result_id}"),
     ("POST", "/api/verification/{result_id}/run"),
     ("GET", "/api/verification/{result_id}/repair-preview"),
@@ -110,6 +111,7 @@ def test_settings_clamp_and_lists():
         "verification_archive_safety": False,
         "verification_epub_structure": False,
         "verification_pdf_integrity": False,
+        "verification_malware_scan": True,
         "verification_tika_url": "https://untrusted.example/upload",
         "verification_max_text_chars": 1,
         "verification_pdf_pages": 999,
@@ -129,6 +131,7 @@ def test_settings_clamp_and_lists():
     assert cfg.verification_archive_safety is False
     assert cfg.verification_epub_structure is False
     assert cfg.verification_pdf_integrity is False
+    assert cfg.verification_malware_scan is True
     assert cfg.verification_tika_url == "http://trusted-tika:9998"
     assert cfg.verification_max_text_chars == 50000
     assert cfg.verification_pdf_pages == 100
