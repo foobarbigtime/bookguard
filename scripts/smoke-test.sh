@@ -36,6 +36,7 @@ echo "=== READ-ONLY ROOT FILESYSTEM ==="
 docker run \
   --rm \
   --network none \
+  --user 99:100 \
   --read-only \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
   "${SMOKE_IMAGE}" \
@@ -79,6 +80,7 @@ echo "=== ISOLATED WORKFLOW ==="
 docker run \
   --rm \
   --network none \
+  --user 99:100 \
   --read-only \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
   "${SMOKE_IMAGE}" \
