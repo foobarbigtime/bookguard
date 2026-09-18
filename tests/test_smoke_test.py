@@ -27,7 +27,14 @@ def _compose_payload(
             "target": "/action-books",
             "read_only": False,
         })
-    return {"services": {"bookguard": {"volumes": volumes}}}
+    return {
+        "services": {
+            "bookguard": {
+                "security_opt": ["no-new-privileges:true"],
+                "volumes": volumes,
+            }
+        }
+    }
 
 
 def test_base_compose_profile_has_no_writable_admission_alias():
@@ -61,6 +68,14 @@ def test_full_profile_maps_distinct_action_and_admission_aliases():
 
     assert checks["actionAliasMapsLibrary"] is True
     assert checks["admissionAliasMapsLibrary"] is True
+
+
+def test_compose_profile_requires_no_new_privileges():
+    payload = _compose_payload(False)
+    payload["services"]["bookguard"].pop("security_opt")
+
+    with pytest.raises(SmokeTestFailure, match="noNewPrivilegesEnabled"):
+        validate_compose(payload, "base")
 
 
 def test_compose_profile_rejects_writable_books_mount():
