@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from app.file_safety import sha256_file
