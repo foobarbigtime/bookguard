@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from app.file_safety import roots_overlap
 
 
