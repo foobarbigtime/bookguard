@@ -13,7 +13,7 @@ from .action_paths import (
 from .bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from .config import settings
 from .db import associations_inside_path, bindery_file_by_id
-from .file_safety import is_within, sha256_file
+from .file_safety import roots_overlap, sha256_file
 from .scan_guard import CurrentScanError, require_current_scan_result
 from .verifier import verification_for_result, verify_result
 
@@ -71,7 +71,7 @@ def _source_grab_event(items: list[dict[str, Any]]) -> dict[str, Any] | None:
 def _quarantine_destination(result: dict[str, Any], source: Path) -> Path:
     root = Path(settings.quarantine_root).resolve()
     media_roots = [Path(settings.ebook_root).resolve(), Path(settings.audiobook_root).resolve()]
-    if any(is_within(root, media) for media in media_roots):
+    if any(roots_overlap(root, media) for media in media_roots):
         raise AutomaticMaintenanceError("Quarantine root must be outside configured media roots.")
 
     destination_dir = root / str(int(result["book_id"]))
