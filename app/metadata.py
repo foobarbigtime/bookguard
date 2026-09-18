@@ -9,6 +9,7 @@ import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
 
+from . import pdf_probe
 from .archive_io import read_zip_member_bounded
 from .media_discovery import representative_audio_files
 
@@ -120,17 +121,14 @@ def epub_metadata(path: str) -> dict:
 
 
 def pdf_metadata(path: str) -> dict:
-    try:
-        from pypdf import PdfReader
-        reader = PdfReader(path)
-        md = reader.metadata or {}
-        return {
-            "title": str(md.get("/Title") or "").strip(),
-            "author": str(md.get("/Author") or "").strip(),
-            "source": "pdf",
-        }
-    except Exception as exc:
-        return {"error": str(exc)[:500], "source": "pdf"}
+    payload = pdf_probe.probe_pdf(path)
+    if payload.get("error"):
+        return {"error": str(payload["error"])[:500], "source": "pdf"}
+    return {
+        "title": str(payload.get("title") or "").strip(),
+        "author": str(payload.get("author") or "").strip(),
+        "source": "pdf",
+    }
 
 
 def _u32(data: bytes, offset: int) -> int:
