@@ -1,5 +1,6 @@
 import zipfile
 
+import app.archive_io as archive_io
 from app.language_detection import epub_languages, explicit_non_english, normalize_language
 from app.scanner import _language_override
 
@@ -80,3 +81,25 @@ def test_epub_language_is_read_from_package_metadata(tmp_path):
     result = epub_languages(str(path))
     assert result["languages"] == ["de"]
     assert explicit_non_english(result) == ["de"]
+
+
+def test_epub_language_read_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive_io, "DEFAULT_XML_MEMBER_LIMIT", 512)
+    path = tmp_path / "oversized-language.epub"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(
+            "META-INF/container.xml",
+            """<container>
+              <rootfiles><rootfile full-path='OEBPS/content.opf'/></rootfiles>
+            </container>""",
+        )
+        zf.writestr(
+            "OEBPS/content.opf",
+            "<package><metadata><language>de</language>"
+            + ("x" * 2048)
+            + "</metadata></package>",
+        )
+
+    result = epub_languages(str(path))
+
+    assert result["languages"] == []
