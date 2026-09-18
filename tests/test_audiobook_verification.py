@@ -231,3 +231,33 @@ def test_verify_audiobook_honors_immediate_cancel_before_probe(tmp_path, monkeyp
         verify_audiobook(str(tmp_path), cancel_check=lambda: True)
 
     assert called is False
+
+def test_probe_audio_file_rejects_oversized_ffprobe_output(tmp_path, monkeypatch):
+    path = tmp_path / "book.m4b"
+    path.write_bytes(b"audio")
+
+    def oversized(*args, **kwargs):
+        raise verification_module.ProcessOutputLimitExceeded("stdout", 4096)
+
+    monkeypatch.setattr(verification_module, "run_bounded_process", oversized)
+
+    result = verification_module.probe_audio_file(str(path))
+
+    assert result["size_bytes"] == 5
+    assert result["probe_error"] == "ffprobe stdout exceeded the 4096-byte output limit"
+
+
+def test_probe_audio_file_preserves_cancellation(tmp_path, monkeypatch):
+    path = tmp_path / "book.m4b"
+    path.write_bytes(b"audio")
+
+    def cancelled(*args, **kwargs):
+        assert kwargs["cancel_check"] is not None
+        assert kwargs["cancel_check"]() is True
+        raise verification_module.ProcessCancelled("subprocess cancelled by caller")
+
+    monkeypatch.setattr(verification_module, "run_bounded_process", cancelled)
+
+    with pytest.raises(AudiobookVerificationCancelled):
+        verification_module.probe_audio_file(str(path), cancel_check=lambda: True)
+

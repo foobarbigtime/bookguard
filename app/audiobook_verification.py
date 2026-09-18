@@ -5,14 +5,17 @@ import json
 from pathlib import Path
 import re
 import subprocess
-import time
 from typing import Any
 
 from .audiobook_probe_cache import cached_probe, save_probe
 from .media_discovery import discover_audio_files
+from .subprocess_capture import ProcessCancelled, ProcessOutputLimitExceeded, run_bounded_process
 
 
 MIN_REASONABLE_AUDIO_BYTES = 4096
+FFPROBE_TIMEOUT_SECONDS = 60
+FFPROBE_STDOUT_LIMIT_BYTES = 1024 * 1024
+FFPROBE_STDERR_LIMIT_BYTES = 64 * 1024
 DISC_TRACK_SUFFIX = re.compile(
     r"^(?P<prefix>.*?)(?P<disc>\d{1,3})[-_](?P<track>\d{2,3})$",
     flags=re.IGNORECASE,
@@ -40,20 +43,6 @@ def _integer(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
-
-
-def _stop_process(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
-        return
-    try:
-        proc.terminate()
-        proc.wait(timeout=1)
-    except (OSError, subprocess.TimeoutExpired):
-        try:
-            proc.kill()
-            proc.wait(timeout=1)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
 
 
 def _normalized_tags(value: object) -> dict[str, object]:
@@ -89,33 +78,32 @@ def probe_audio_file(
         path,
     ]
     try:
-        proc = subprocess.Popen(
+        proc = run_bounded_process(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            timeout=FFPROBE_TIMEOUT_SECONDS,
+            stdout_limit=FFPROBE_STDOUT_LIMIT_BYTES,
+            stderr_limit=FFPROBE_STDERR_LIMIT_BYTES,
+            cancel_check=cancel_check,
         )
+    except ProcessCancelled:
+        raise AudiobookVerificationCancelled("Audiobook verification stopped by user.")
+    except subprocess.TimeoutExpired:
+        return {
+            "path": path,
+            "probe_error": f"ffprobe timed out after {FFPROBE_TIMEOUT_SECONDS} seconds",
+            "size_bytes": size,
+        }
+    except ProcessOutputLimitExceeded as exc:
+        return {
+            "path": path,
+            "probe_error": f"ffprobe {exc.stream} exceeded the {exc.limit}-byte output limit",
+            "size_bytes": size,
+        }
     except OSError as exc:
         return {"path": path, "probe_error": str(exc)[:500], "size_bytes": size}
 
-    started = time.monotonic()
-    stdout = ""
-    stderr = ""
-    while True:
-        if cancel_check and cancel_check():
-            _stop_process(proc)
-            raise AudiobookVerificationCancelled("Audiobook verification stopped by user.")
-        try:
-            stdout, stderr = proc.communicate(timeout=0.25)
-            break
-        except subprocess.TimeoutExpired:
-            if time.monotonic() - started >= 60:
-                _stop_process(proc)
-                return {
-                    "path": path,
-                    "probe_error": "ffprobe timed out after 60 seconds",
-                    "size_bytes": size,
-                }
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace")
 
     if proc.returncode != 0:
         return {

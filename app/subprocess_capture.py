@@ -5,7 +5,7 @@ import os
 import selectors
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 
 _READ_CHUNK_BYTES = 64 * 1024
@@ -25,12 +25,17 @@ class ProcessOutputLimitExceeded(RuntimeError):
         super().__init__(f"{stream} exceeded the {limit}-byte output limit")
 
 
+class ProcessCancelled(RuntimeError):
+    """Raised when a caller-requested subprocess cancellation is observed."""
+
+
 def run_bounded_process(
     cmd: Sequence[str],
     *,
     timeout: float,
     stdout_limit: int,
     stderr_limit: int,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> BoundedProcessResult:
     """Run a child while enforcing wall-clock and captured-output limits."""
     if timeout <= 0:
@@ -64,6 +69,9 @@ def run_bounded_process(
             selector.register(stream, selectors.EVENT_READ, data=name)
 
         while selector.get_map():
+            if cancel_check and cancel_check():
+                raise ProcessCancelled("subprocess cancelled by caller")
+
             remaining = timeout - (time.monotonic() - started)
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(list(cmd), timeout)
