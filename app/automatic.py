@@ -13,7 +13,7 @@ from .action_paths import (
 from .bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from .config import settings
 from .db import associations_inside_path, bindery_file_by_id
-from .file_safety import roots_overlap, sha256_file
+from .file_safety import allocate_unique_destination, roots_overlap, sha256_file
 from .scan_guard import CurrentScanError, require_current_scan_result
 from .verifier import verification_for_result, verify_result
 
@@ -75,15 +75,12 @@ def _quarantine_destination(result: dict[str, Any], source: Path) -> Path:
         raise AutomaticMaintenanceError("Quarantine root must be outside configured media roots.")
 
     destination_dir = root / str(int(result["book_id"]))
-    destination_dir.mkdir(parents=True, exist_ok=True)
-    destination = destination_dir / source.name
-    if not destination.exists():
-        return destination
-    for index in range(2, 10000):
-        candidate = destination_dir / f"{source.stem}-{index}{source.suffix}"
-        if not candidate.exists():
-            return candidate
-    raise AutomaticMaintenanceError("Unable to allocate a unique quarantine destination.")
+    try:
+        return allocate_unique_destination(destination_dir, source)
+    except RuntimeError as exc:
+        raise AutomaticMaintenanceError(
+            "Unable to allocate a unique quarantine destination."
+        ) from exc
 
 
 def _require_current_scan_evidence(result: dict[str, Any]) -> None:
