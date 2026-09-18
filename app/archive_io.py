@@ -36,3 +36,26 @@ def read_zip_member_bounded(
             f"ZIP member {name!r} exceeds the {limit}-byte metadata limit."
         )
     return payload
+
+
+def read_zip_member_prefix(
+    archive: zipfile.ZipFile,
+    name: str,
+    *,
+    max_bytes: int,
+) -> bytes:
+    """Read at most max_bytes of one ZIP member without expanding it fully."""
+    limit = int(max_bytes)
+    if limit < 1:
+        raise ValueError("ZIP member prefix limit must be positive.")
+
+    try:
+        info = archive.getinfo(name)
+    except KeyError as exc:
+        raise ValueError(f"ZIP member is missing: {name}") from exc
+
+    if info.is_dir():
+        raise ValueError(f"ZIP member {name!r} is a directory, not a file.")
+
+    with archive.open(info, "r") as handle:
+        return handle.read(limit)

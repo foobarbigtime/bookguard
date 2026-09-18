@@ -7,6 +7,7 @@ import re
 import xml.etree.ElementTree as ET
 import zipfile
 
+from .archive_io import read_zip_member_bounded, read_zip_member_prefix
 from .config import settings
 from .metadata import ebook_metadata
 from .tika_client import extract_text as tika_text
@@ -41,7 +42,9 @@ def extract_epub_identity(path: str) -> tuple[dict, str, list[str], str]:
     front_parts: list[str] = []
 
     with zipfile.ZipFile(path) as archive:
-        container = ET.fromstring(archive.read("META-INF/container.xml"))
+        container = ET.fromstring(
+            read_zip_member_bounded(archive, "META-INF/container.xml")
+        )
         rootfile = ""
         for element in container.iter():
             if element.tag.endswith("rootfile"):
@@ -51,7 +54,7 @@ def extract_epub_identity(path: str) -> tuple[dict, str, list[str], str]:
         if not rootfile:
             raise ValueError("EPUB package file not found")
 
-        package = ET.fromstring(archive.read(rootfile))
+        package = ET.fromstring(read_zip_member_bounded(archive, rootfile))
         creators: list[str] = []
         manifest: dict[str, str] = {}
         spine_ids: list[str] = []
@@ -96,11 +99,20 @@ def extract_epub_identity(path: str) -> tuple[dict, str, list[str], str]:
 
         total = 0
         front_total = 0
+        raw_budget = max_chars * 4
+        raw_total = 0
         for name in ordered_names:
-            if total >= max_chars:
+            if total >= max_chars or raw_total >= raw_budget:
                 break
             try:
-                part = _strip_html_bytes(archive.read(name))
+                remaining_raw = raw_budget - raw_total
+                raw = read_zip_member_prefix(
+                    archive,
+                    name,
+                    max_bytes=remaining_raw,
+                )
+                raw_total += len(raw)
+                part = _strip_html_bytes(raw)
             except Exception:
                 continue
             if not part:
