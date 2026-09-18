@@ -3,6 +3,7 @@ import pytest
 from app.config import (
     DEFAULT_MAX_STAGED_EBOOK_BYTES,
     ConfigurationError,
+    Settings,
     load_auth_settings,
     load_automation_settings,
 )
@@ -57,3 +58,12 @@ def test_auth_username_cannot_contain_basic_auth_separator(monkeypatch):
 
     with pytest.raises(ConfigurationError, match="must not contain a colon"):
         load_auth_settings()
+
+
+def test_persistable_settings_exclude_bindery_api_key():
+    configured = Settings(bindery_api_key="super-secret")
+
+    persisted = configured.persistable_dict()
+
+    assert "bindery_api_key" not in persisted
+    assert "bindery_api_key_set" not in persisted
