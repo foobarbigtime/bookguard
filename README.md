@@ -43,6 +43,7 @@ The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequ
 - Read-only staged ebook inventory and staged-byte verification against one explicit Bindery book.
 - SHA-256 and file-stat stability checks across verification.
 - Default-on archive safety checks before EPUB/CBZ extraction.
+- Ebook verification opens sources with no-follow semantics, snapshots stable bytes into private /config storage, runs every parser and ClamAV against that same snapshot, then re-checks the original path before accepting the verdict.
 - The normal BookGuard container uses a read-only root filesystem; only explicit data mounts and a bounded no-exec /tmp tmpfs are writable.
 - Optional fail-closed ClamAV malware scanning through a deployment-only clamd endpoint.
 - A staged file is marked `safeToAdmit` only for a stable `VERIFIED_CORRECT` result at 99% confidence.

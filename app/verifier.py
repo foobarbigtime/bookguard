@@ -18,6 +18,12 @@ from .db import (
 )
 from .ebook_extraction import extract_ebook_identity
 from .ebook_security import inspect_ebook_security
+from .file_snapshot import (
+    SnapshotError,
+    assert_snapshot_source_current,
+    stable_file_fingerprint,
+    verification_snapshot,
+)
 from .malware_scan import probe_clamd
 from .matcher import normalize
 from .media_discovery import resolve_ebook_target
@@ -33,7 +39,7 @@ from .tika_client import test_connection
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "17"
+VERIFIER_VERSION = "18"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -109,23 +115,13 @@ def init_verification_db() -> None:
 
 
 def _file_fingerprint(path: str) -> str:
-    target = Path(path)
-    if not target.is_file():
-        return "missing"
-    stat = target.stat()
-    digest = hashlib.sha256()
-    digest.update(str(target).encode("utf-8", errors="replace"))
-    digest.update(str(stat.st_size).encode())
-    digest.update(str(stat.st_mtime_ns).encode())
     try:
-        with target.open("rb") as fh:
-            digest.update(fh.read(65536))
-            if stat.st_size > 65536:
-                fh.seek(max(0, stat.st_size - 65536))
-                digest.update(fh.read(65536))
-    except OSError:
-        pass
-    return digest.hexdigest()
+        return stable_file_fingerprint(
+            path,
+            max_bytes=settings.verification_snapshot_max_bytes,
+        )
+    except SnapshotError as exc:
+        return f"unsafe:{exc.code}"
 
 
 def _verification_signature(result: dict, target_path: str, fingerprint: str) -> str:
@@ -140,6 +136,7 @@ def _verification_signature(result: dict, target_path: str, fingerprint: str) ->
             "clamdHost": settings.verification_clamd_host,
             "clamdPort": settings.verification_clamd_port,
             "malwareMaxBytes": settings.verification_malware_max_bytes,
+            "snapshotMaxBytes": settings.verification_snapshot_max_bytes,
             "maxTextChars": settings.verification_max_text_chars,
             "pdfPages": settings.verification_pdf_pages,
             "useTika": settings.verification_use_tika,
@@ -160,10 +157,12 @@ def _decode_row(row) -> dict:
     return item
 
 
-def verification_for_result(result: dict) -> dict | None:
+def _verification_for_fingerprint(
+    result: dict,
+    target: str,
+    fingerprint: str,
+) -> dict | None:
     init_verification_db()
-    target = resolve_ebook_target(result.get("local_path") or "")
-    fingerprint = _file_fingerprint(target)
     signature = _verification_signature(result, target, fingerprint)
     with local_conn() as conn:
         row = conn.execute(
@@ -171,6 +170,12 @@ def verification_for_result(result: dict) -> dict | None:
             (signature,),
         ).fetchone()
     return _decode_row(row) if row else None
+
+
+def verification_for_result(result: dict) -> dict | None:
+    target = resolve_ebook_target(result.get("local_path") or "")
+    fingerprint = _file_fingerprint(target)
+    return _verification_for_fingerprint(result, target, fingerprint)
 
 
 def _save_verification(
@@ -231,18 +236,75 @@ def _save_verification(
     return item
 
 
+def _snapshot_failure_result(
+    result: dict,
+    target: str,
+    exc: SnapshotError,
+) -> dict:
+    unsafe_codes = {
+        "symlink",
+        "non_regular",
+        "changed",
+        "no_nofollow_support",
+        "snapshot_root",
+        "snapshot_write",
+    }
+    unsafe = exc.code in unsafe_codes
+    verdict = "UNSAFE_FILE" if unsafe else "INSUFFICIENT_EVIDENCE"
+    confidence = 100 if unsafe else 0
+    fingerprint = f"unsafe:{exc.code}"
+    security = {
+        "safe": False,
+        "message": str(exc),
+        "failures": ["sourceStability"] if unsafe else [],
+        "checks": {
+            "sourceStability": {
+                "status": "failed",
+                "code": exc.code,
+                "message": str(exc),
+            }
+        },
+    }
+    evidence = {
+        "expected": {
+            "title": result.get("title", ""),
+            "author": result.get("author", ""),
+        },
+        "embedded": {},
+        "content": {},
+        "metadata_matches_expected": False,
+        "security": security,
+        "notes": [str(exc)],
+        "explanation": (
+            "Book identity was not accepted because the tracked source could not "
+            "be held stable as one regular file."
+            if unsafe
+            else "Book identity could not be evaluated because no stable readable source snapshot was available."
+        ),
+    }
+    return _save_verification(
+        result,
+        target,
+        fingerprint,
+        verdict,
+        confidence,
+        "source-snapshot",
+        evidence,
+    )
+
+
 def verify_result(result: dict, force: bool = False) -> dict:
     if not settings.verification_enabled:
         raise RuntimeError("Content verification is disabled in Settings.")
 
     target = resolve_ebook_target(result.get("local_path") or "")
-    fingerprint = _file_fingerprint(target)
-    if not force:
-        cached = verification_for_result(result)
-        if cached:
-            return cached
 
     if result.get("format") != "ebook":
+        fingerprint = _file_fingerprint(target)
+        if not force:
+            cached = _verification_for_fingerprint(result, target, fingerprint)
+            if cached:
+                return cached
         evidence = {
             "expected": {"title": result.get("title", ""), "author": result.get("author", "")},
             "embedded": {},
@@ -255,72 +317,86 @@ def verify_result(result: dict, force: bool = False) -> dict:
             result, target, fingerprint, "INSUFFICIENT_EVIDENCE", 0, "unsupported-audiobook", evidence
         )
 
-    path = Path(target)
-    if not path.is_file():
-        evidence = {
-            "expected": {"title": result.get("title", ""), "author": result.get("author", "")},
-            "embedded": {},
-            "content": {},
-            "metadata_matches_expected": False,
-            "notes": ["The tracked ebook target could not be opened as a file."],
-            "explanation": "No readable ebook file was available for content verification.",
-        }
-        return _save_verification(
-            result, target, fingerprint, "INSUFFICIENT_EVIDENCE", 0, "missing", evidence
-        )
+    snapshot_root = Path(settings.config_dir) / ".verification-snapshots"
+    try:
+        with verification_snapshot(
+            target,
+            temp_root=snapshot_root,
+            max_bytes=settings.verification_snapshot_max_bytes,
+        ) as snapshot:
+            fingerprint = snapshot.fingerprint
+            if not force:
+                cached = _verification_for_fingerprint(result, target, fingerprint)
+                if cached:
+                    assert_snapshot_source_current(snapshot)
+                    return cached
 
-    security = inspect_ebook_security(
-        path,
-        check_file_signatures=settings.verification_file_signatures,
-        check_archive_safety=settings.verification_archive_safety,
-        check_epub_structure=settings.verification_epub_structure,
-        check_pdf_integrity=settings.verification_pdf_integrity,
-        check_malware=settings.verification_malware_scan,
-        clamd_host=settings.verification_clamd_host,
-        clamd_port=settings.verification_clamd_port,
-        malware_timeout_seconds=settings.verification_malware_timeout_seconds,
-        malware_max_bytes=settings.verification_malware_max_bytes,
-    )
-    if not security["safe"]:
-        evidence = {
-            "expected": {
-                "title": result.get("title", ""),
-                "author": result.get("author", ""),
-            },
-            "embedded": {},
-            "content": {},
-            "metadata_matches_expected": False,
-            "security": security,
-            "notes": [security["message"]],
-            "explanation": (
-                "Book identity was not evaluated because deterministic file safety "
-                "or integrity validation failed."
-            ),
-        }
-        return _save_verification(
-            result,
-            str(path),
-            fingerprint,
-            "UNSAFE_FILE",
-            100,
-            "deterministic-safety",
-            evidence,
-        )
+            security = inspect_ebook_security(
+                snapshot.path,
+                check_file_signatures=settings.verification_file_signatures,
+                check_archive_safety=settings.verification_archive_safety,
+                check_epub_structure=settings.verification_epub_structure,
+                check_pdf_integrity=settings.verification_pdf_integrity,
+                check_malware=settings.verification_malware_scan,
+                clamd_host=settings.verification_clamd_host,
+                clamd_port=settings.verification_clamd_port,
+                malware_timeout_seconds=settings.verification_malware_timeout_seconds,
+                malware_max_bytes=settings.verification_malware_max_bytes,
+            )
+            security["sourceSnapshot"] = {
+                "sha256": snapshot.sha256,
+                "size": snapshot.size,
+                "sourceStable": True,
+            }
+            if not security["safe"]:
+                assert_snapshot_source_current(snapshot)
+                evidence = {
+                    "expected": {
+                        "title": result.get("title", ""),
+                        "author": result.get("author", ""),
+                    },
+                    "embedded": {},
+                    "content": {},
+                    "metadata_matches_expected": False,
+                    "security": security,
+                    "notes": [security["message"]],
+                    "explanation": (
+                        "Book identity was not evaluated because deterministic file safety "
+                        "or integrity validation failed."
+                    ),
+                }
+                return _save_verification(
+                    result,
+                    target,
+                    fingerprint,
+                    "UNSAFE_FILE",
+                    100,
+                    "deterministic-safety",
+                    evidence,
+                )
 
-    extracted = extract_ebook_identity(str(path))
-
-    verdict, confidence, evidence = classify_identity(
-        result,
-        extracted.metadata,
-        extracted.text,
-        extracted.identifiers,
-        extracted.notes,
-        extracted.front_text,
-    )
-    evidence["security"] = security
-    return _save_verification(
-        result, str(path), fingerprint, verdict, confidence, extracted.source, evidence
-    )
+            extracted = extract_ebook_identity(str(snapshot.path))
+            verdict, confidence, evidence = classify_identity(
+                result,
+                extracted.metadata,
+                extracted.text,
+                extracted.identifiers,
+                extracted.notes,
+                extracted.front_text,
+            )
+            assert_snapshot_source_current(snapshot)
+            evidence["security"] = security
+            return _save_verification(
+                result,
+                target,
+                fingerprint,
+                verdict,
+                confidence,
+                extracted.source,
+                evidence,
+            )
+    except SnapshotError as exc:
+        return _snapshot_failure_result(result, target, exc)
 
 
 def verified_repair_preview(result: dict, verification: dict | None = None) -> dict:

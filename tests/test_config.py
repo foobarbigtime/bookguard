@@ -86,3 +86,12 @@ def test_malware_scanner_endpoint_is_deployment_only():
     assert persisted["verification_malware_scan"] is True
     assert "verification_clamd_host" not in persisted
     assert "verification_clamd_port" not in persisted
+
+
+
+def test_verification_snapshot_limit_is_deployment_only():
+    configured = Settings(verification_snapshot_max_bytes=123456789)
+
+    persisted = configured.persistable_dict()
+
+    assert "verification_snapshot_max_bytes" not in persisted

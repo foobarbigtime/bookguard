@@ -24,6 +24,7 @@ DEFAULT_MAX_STAGED_EBOOK_BYTES = 512 * 1024 * 1024
 DEFAULT_ACQUISITION_COORDINATOR_INTERVAL_SECONDS = 10
 DEFAULT_MALWARE_SCAN_TIMEOUT_SECONDS = 60
 DEFAULT_MALWARE_MAX_BYTES = 512 * 1024 * 1024
+DEFAULT_VERIFICATION_SNAPSHOT_MAX_BYTES = 512 * 1024 * 1024
 
 
 class ConfigurationError(ValueError):
@@ -250,6 +251,15 @@ class Settings:
     )
     verification_malware_max_bytes: int = _clamp(
         _int("BOOKGUARD_MALWARE_MAX_BYTES", DEFAULT_MALWARE_MAX_BYTES),
+        1024 * 1024,
+        2 * 1024 * 1024 * 1024,
+    )
+    # Deployment-only bound for the private, disk-backed verification snapshot.
+    verification_snapshot_max_bytes: int = _clamp(
+        _int(
+            "BOOKGUARD_VERIFICATION_SNAPSHOT_MAX_BYTES",
+            DEFAULT_VERIFICATION_SNAPSHOT_MAX_BYTES,
+        ),
         1024 * 1024,
         2 * 1024 * 1024 * 1024,
     )
