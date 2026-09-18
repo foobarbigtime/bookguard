@@ -96,7 +96,7 @@
             <span>Optional Apache Tika fallback</span>
             <label class="check-field"><input name="verification_use_tika" type="checkbox" {% if settings.verification_use_tika %}checked{% endif %}><span>Use Tika when native extraction does not produce useful text</span></label>
           </div>
-          <label class="field span-2"><span>Tika URL</span><input name="verification_tika_url" type="text" value="{{ settings.verification_tika_url }}" placeholder="http://tika:9998"><small>Optional. Leave blank to run BookGuard with native verification only.</small></label>
+          <label class="field span-2"><span>Tika URL</span><input type="text" value="{{ settings.verification_tika_url }}" placeholder="Not configured" readonly><small>Deployment-only for safety. Set <code>BOOKGUARD_TIKA_URL</code> and restart BookGuard to change this endpoint.</small></label>
           <div class="field span-2"><button id="testTikaButton" type="button">Test Tika connection</button><small id="tikaStatus" class="muted"></small></div>
         </div>
         <div class="notice info">BookGuard runs deterministic file safety checks before native, position-aware identity verification. Tika is an optional fallback when native extraction cannot obtain useful text. Audiobook content verification remains a future feature.</div>

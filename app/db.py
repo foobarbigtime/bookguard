@@ -9,7 +9,7 @@ import sqlite3
 from .config import settings
 
 
-NON_PERSISTED_SETTING_KEYS = {"bindery_api_key"}
+NON_PERSISTED_SETTING_KEYS = {"bindery_api_key", "verification_tika_url"}
 
 
 def utc_now() -> str:
@@ -277,10 +277,8 @@ def init_local_db() -> None:
                 ON ebook_acquisitions(status);
             """
         )
-        conn.execute(
-            "DELETE FROM app_settings WHERE key IN (?)",
-            tuple(NON_PERSISTED_SETTING_KEYS),
-        )
+        for key in NON_PERSISTED_SETTING_KEYS:
+            conn.execute("DELETE FROM app_settings WHERE key=?", (key,))
         conn.commit()
 
 

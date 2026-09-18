@@ -253,7 +253,7 @@ class Settings:
         string_fields = {
             "bindery_db", "bindery_url", "bindery_api_key", "audiobook_root",
             "audiobook_bindery_prefix", "ebook_root", "ebook_bindery_prefix",
-            "quarantine_root", "repair_audio_genre_value", "verification_tika_url",
+            "quarantine_root", "repair_audio_genre_value",
         }
         bool_fields = {
             "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
@@ -283,7 +283,6 @@ class Settings:
                 value = str(values[key]).strip()
                 if key in {
                     "bindery_url", "audiobook_bindery_prefix", "ebook_bindery_prefix",
-                    "verification_tika_url",
                 }:
                     value = value.rstrip("/")
                 setattr(self, key, value)
@@ -365,6 +364,7 @@ class Settings:
         """Return UI settings that are safe to store in BookGuard's database."""
         data = self.public_dict()
         data.pop("bindery_api_key_set", None)
+        data.pop("verification_tika_url", None)
         return data
 
 
