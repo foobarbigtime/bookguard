@@ -7,6 +7,8 @@ import subprocess
 import sys
 from typing import Any
 
+from .subprocess_capture import ProcessOutputLimitExceeded, run_bounded_process
+
 
 MAX_ROUTINE_PDF_BYTES = 512 * 1024 * 1024
 PDF_PROBE_TIMEOUT_SECONDS = 10
@@ -16,6 +18,7 @@ PDF_PROBE_ADDRESS_SPACE_BYTES = 768 * 1024 * 1024
 PDF_PROBE_CPU_SECONDS = 5
 PDF_CONTENT_CPU_SECONDS = 20
 MAX_WORKER_OUTPUT_BYTES = 64 * 1024
+MAX_WORKER_STDERR_BYTES = 64 * 1024
 MAX_CONTENT_TEXT_CHARS = 5_000_000
 MAX_CONTENT_PAGES = 100
 MAX_CONTENT_FRONT_CHARS = 200_000
@@ -51,24 +54,23 @@ def _probe_cached(
 ) -> dict[str, Any]:
     del size, modified_ns, changed_ns, device, inode
     try:
-        proc = subprocess.run(
+        proc = run_bounded_process(
             [sys.executable, "-m", "app.pdf_probe", "--worker", path_text],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
             timeout=PDF_PROBE_TIMEOUT_SECONDS,
-            check=False,
+            stdout_limit=MAX_WORKER_OUTPUT_BYTES,
+            stderr_limit=MAX_WORKER_STDERR_BYTES,
         )
     except subprocess.TimeoutExpired:
         return {"error": "PDF metadata probe timed out."}
+    except ProcessOutputLimitExceeded:
+        return {"error": "PDF metadata probe returned too much output."}
 
     if proc.returncode != 0:
         return {"error": "PDF metadata probe failed in the isolated worker."}
-    if len(proc.stdout.encode("utf-8", errors="replace")) > MAX_WORKER_OUTPUT_BYTES:
-        return {"error": "PDF metadata probe returned too much output."}
 
+    stdout = proc.stdout.decode("utf-8", errors="replace")
     try:
-        payload = json.loads(proc.stdout or "{}")
+        payload = json.loads(stdout or "{}")
     except json.JSONDecodeError:
         return {"error": "PDF metadata probe returned invalid JSON."}
     if not isinstance(payload, dict):
@@ -106,7 +108,7 @@ def inspect_pdf_integrity(path: str | Path) -> dict[str, Any]:
         return {"error": str(exc)[:500]}
 
     try:
-        proc = subprocess.run(
+        proc = run_bounded_process(
             [
                 sys.executable,
                 "-m",
@@ -114,22 +116,21 @@ def inspect_pdf_integrity(path: str | Path) -> dict[str, Any]:
                 "--integrity-worker",
                 str(target),
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
             timeout=PDF_INTEGRITY_TIMEOUT_SECONDS,
-            check=False,
+            stdout_limit=MAX_WORKER_OUTPUT_BYTES,
+            stderr_limit=MAX_WORKER_STDERR_BYTES,
         )
     except subprocess.TimeoutExpired:
         return {"error": "PDF integrity probe timed out."}
+    except ProcessOutputLimitExceeded:
+        return {"error": "PDF integrity probe returned too much output."}
 
     if proc.returncode != 0:
         return {"error": "PDF integrity probe failed in the isolated worker."}
-    if len(proc.stdout.encode("utf-8", errors="replace")) > MAX_WORKER_OUTPUT_BYTES:
-        return {"error": "PDF integrity probe returned too much output."}
 
+    stdout = proc.stdout.decode("utf-8", errors="replace")
     try:
-        payload = json.loads(proc.stdout or "{}")
+        payload = json.loads(stdout or "{}")
     except json.JSONDecodeError:
         return {"error": "PDF integrity probe returned invalid JSON."}
     if not isinstance(payload, dict):
@@ -163,7 +164,7 @@ def extract_pdf_text(
 
     output_limit = (max_chars + front_chars) * 8 + MAX_WORKER_OUTPUT_BYTES
     try:
-        proc = subprocess.run(
+        proc = run_bounded_process(
             [
                 sys.executable,
                 "-m",
@@ -174,22 +175,21 @@ def extract_pdf_text(
                 str(page_limit),
                 str(front_chars),
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
             timeout=PDF_CONTENT_TIMEOUT_SECONDS,
-            check=False,
+            stdout_limit=output_limit,
+            stderr_limit=MAX_WORKER_STDERR_BYTES,
         )
     except subprocess.TimeoutExpired:
         return {"error": "PDF content extraction timed out."}
+    except ProcessOutputLimitExceeded:
+        return {"error": "PDF content extraction returned too much output."}
 
     if proc.returncode != 0:
         return {"error": "PDF content extraction failed in the isolated worker."}
-    if len(proc.stdout.encode("utf-8", errors="replace")) > output_limit:
-        return {"error": "PDF content extraction returned too much output."}
 
+    stdout = proc.stdout.decode("utf-8", errors="replace")
     try:
-        payload = json.loads(proc.stdout or "{}")
+        payload = json.loads(stdout or "{}")
     except json.JSONDecodeError:
         return {"error": "PDF content extraction returned invalid JSON."}
     if not isinstance(payload, dict):
