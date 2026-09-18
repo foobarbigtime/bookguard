@@ -172,7 +172,7 @@ def test_epub_structure_bounds_container_xml_read(tmp_path, monkeypatch):
 
 
 def test_epub_structure_bounds_package_xml_read(tmp_path, monkeypatch):
-    monkeypatch.setattr(archive_io, "DEFAULT_XML_MEMBER_LIMIT", 128)
+    monkeypatch.setattr(archive_io, "DEFAULT_XML_MEMBER_LIMIT", 512)
     path = tmp_path / "oversized-package.epub"
     container = """<?xml version="1.0"?>
 <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -188,7 +188,7 @@ def test_epub_structure_bounds_package_xml_read(tmp_path, monkeypatch):
             compress_type=zipfile.ZIP_STORED,
         )
         archive.writestr("META-INF/container.xml", container)
-        archive.writestr("OEBPS/content.opf", b"x" * 129)
+        archive.writestr("OEBPS/content.opf", b"x" * 513)
 
     report = inspect_ebook_security(path)
 
@@ -196,7 +196,7 @@ def test_epub_structure_bounds_package_xml_read(tmp_path, monkeypatch):
     assert report["safe"] is False
     assert structure["status"] == "failed"
     assert "OEBPS/content.opf" in structure["message"]
-    assert "128-byte metadata limit" in structure["message"]
+    assert "512-byte metadata limit" in structure["message"]
 
 
 def test_valid_pdf_passes_signature_and_integrity(tmp_path):
