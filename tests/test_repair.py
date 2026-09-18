@@ -9,6 +9,7 @@ from app.metadata import ebook_metadata
 from app.repair import (
     RepairError,
     apply_metadata_repair,
+    apply_repair_changes,
     build_repair_preview,
     repair_candidate_summary,
     undo_metadata_repair,
@@ -198,3 +199,37 @@ def test_reversed_literal_author_name_can_be_normalized(tmp_path):
     assert preview["before"]["author"] == "Pilkey, Dav"
     assert preview["after"]["author"] == "Dav Pilkey"
     assert preview["before"]["title"] == preview["after"]["title"]
+
+
+def test_epub_repair_can_add_completely_missing_title_and_author(tmp_path):
+    epub = tmp_path / "missing-metadata.epub"
+    container = """<?xml version='1.0'?>
+<container xmlns='urn:oasis:names:tc:opendocument:xmlns:container' version='1.0'>
+  <rootfiles><rootfile full-path='OEBPS/content.opf' media-type='application/oebps-package+xml'/></rootfiles>
+</container>"""
+    package = """<?xml version='1.0' encoding='utf-8'?>
+<package xmlns='http://www.idpf.org/2007/opf'
+         xmlns:dc='http://purl.org/dc/elements/1.1/' version='3.0'>
+  <metadata/>
+  <manifest/>
+  <spine/>
+</package>"""
+    with zipfile.ZipFile(epub, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr("META-INF/container.xml", container)
+        zf.writestr("OEBPS/content.opf", package)
+
+    apply_repair_changes(
+        {
+            "kind": "EPUB_METADATA",
+            "after": {
+                "path": str(epub),
+                "title": "Bel Canto",
+                "author": "Ann Patchett",
+            },
+        }
+    )
+
+    current = ebook_metadata(str(epub))
+    assert current["title"] == "Bel Canto"
+    assert current["author"] == "Ann Patchett"
