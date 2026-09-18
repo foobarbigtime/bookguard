@@ -50,7 +50,11 @@ def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
         raise SmokeTestFailure(f"Unknown Compose profile: {profile}.")
 
     volumes = _volume_map(payload)
+    services = payload.get("services") or {}
+    service = services.get("bookguard") or {}
+    security_opt = service.get("security_opt") or []
     checks = {
+        "noNewPrivilegesEnabled": "no-new-privileges:true" in security_opt,
         "booksMountedReadOnly": bool(volumes.get("/books", {}).get("read_only")),
         "audiobooksMountedReadOnly": bool(
             volumes.get("/audiobooks", {}).get("read_only")
