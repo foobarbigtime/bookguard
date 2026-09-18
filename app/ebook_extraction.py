@@ -10,6 +10,7 @@ import zipfile
 from .archive_io import read_zip_member_bounded, read_zip_member_prefix
 from .config import settings
 from .metadata import ebook_metadata
+from . import pdf_probe
 from .tika_client import extract_text as tika_text
 from .verification_constants import FRONT_TEXT_CHARS, MIN_USEFUL_TEXT
 
@@ -130,26 +131,22 @@ def extract_epub_identity(path: str) -> tuple[dict, str, list[str], str]:
 
 
 def extract_pdf_identity(path: str) -> tuple[dict, str, list[str], str]:
-    from pypdf import PdfReader
+    payload = pdf_probe.extract_pdf_text(
+        path,
+        max_chars=settings.verification_max_text_chars,
+        page_limit=settings.verification_pdf_pages,
+        front_chars=FRONT_TEXT_CHARS,
+    )
+    if payload.get("error"):
+        raise ValueError(str(payload["error"]))
 
-    metadata = ebook_metadata(path)
-    reader = PdfReader(path)
-    parts: list[str] = []
-    front_parts: list[str] = []
-    max_chars = settings.verification_max_text_chars
-    page_limit = min(len(reader.pages), settings.verification_pdf_pages)
-    for index, page in enumerate(reader.pages[:page_limit]):
-        if sum(len(part) for part in parts) >= max_chars:
-            break
-        try:
-            part = page.extract_text() or ""
-        except Exception:
-            continue
-        parts.append(part)
-        if index < 6:
-            front_parts.append(part)
-    text = " ".join(parts)[:max_chars]
-    front = " ".join(front_parts)[:FRONT_TEXT_CHARS]
+    metadata = {
+        "title": str(payload.get("title") or "").strip(),
+        "author": str(payload.get("author") or "").strip(),
+        "source": "pdf",
+    }
+    text = str(payload.get("text") or "")[: settings.verification_max_text_chars]
+    front = str(payload.get("front_text") or "")[:FRONT_TEXT_CHARS]
     return metadata, text, [], front
 
 
