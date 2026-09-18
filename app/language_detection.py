@@ -4,6 +4,8 @@ from pathlib import Path
 import zipfile
 import xml.etree.ElementTree as ET
 
+from .archive_io import read_zip_member_bounded
+
 
 ENGLISH_CODES = {"en", "eng"}
 LANGUAGE_ALIASES = {
@@ -72,7 +74,7 @@ def epub_languages(path: str) -> dict:
     languages: set[str] = set()
     try:
         with zipfile.ZipFile(path) as zf:
-            container = ET.fromstring(zf.read("META-INF/container.xml"))
+            container = ET.fromstring(read_zip_member_bounded(zf, "META-INF/container.xml"))
             rootfile = None
             for elem in container.iter():
                 if elem.tag.endswith("rootfile"):
@@ -81,7 +83,7 @@ def epub_languages(path: str) -> dict:
                         break
             if not rootfile:
                 return {"source": "epub_metadata", "languages": [], "evidence": []}
-            package = ET.fromstring(zf.read(rootfile))
+            package = ET.fromstring(read_zip_member_bounded(zf, rootfile))
             for elem in package.iter():
                 local = elem.tag.rsplit("}", 1)[-1].lower()
                 if local == "language" and elem.text:
