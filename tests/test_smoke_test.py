@@ -30,6 +30,8 @@ def _compose_payload(
     return {
         "services": {
             "bookguard": {
+                "read_only": True,
+                "tmpfs": ["/tmp:rw,nosuid,nodev,noexec,size=67108864"],
                 "security_opt": ["no-new-privileges:true"],
                 "cap_drop": ["ALL"],
                 "cap_add": ["DAC_READ_SEARCH"],
@@ -109,4 +111,21 @@ def test_compose_profile_rejects_writable_books_mount():
     payload["services"]["bookguard"]["volumes"][3]["read_only"] = False
 
     with pytest.raises(SmokeTestFailure, match="booksMountedReadOnly"):
+        validate_compose(payload, "base")
+
+
+
+def test_compose_profile_requires_read_only_root_filesystem():
+    payload = _compose_payload(False)
+    payload["services"]["bookguard"]["read_only"] = False
+
+    with pytest.raises(SmokeTestFailure, match="rootFilesystemReadOnly"):
+        validate_compose(payload, "base")
+
+
+def test_compose_profile_requires_hardened_tmpfs():
+    payload = _compose_payload(False)
+    payload["services"]["bookguard"]["tmpfs"] = ["/tmp:rw,size=67108864"]
+
+    with pytest.raises(SmokeTestFailure, match="tmpfsNoExec"):
         validate_compose(payload, "base")
