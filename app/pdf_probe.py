@@ -10,6 +10,7 @@ from typing import Any
 
 MAX_ROUTINE_PDF_BYTES = 512 * 1024 * 1024
 PDF_PROBE_TIMEOUT_SECONDS = 10
+PDF_INTEGRITY_TIMEOUT_SECONDS = 15
 PDF_CONTENT_TIMEOUT_SECONDS = 30
 PDF_PROBE_ADDRESS_SPACE_BYTES = 768 * 1024 * 1024
 PDF_PROBE_CPU_SECONDS = 5
@@ -94,6 +95,46 @@ def probe_pdf(path: str | Path) -> dict[str, Any]:
             int(stat.st_ino),
         )
     )
+
+
+def inspect_pdf_integrity(path: str | Path) -> dict[str, Any]:
+    """Validate PDF structure and page tree in an isolated child process."""
+    target = Path(path)
+    try:
+        _preflight(target)
+    except (OSError, ValueError) as exc:
+        return {"error": str(exc)[:500]}
+
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "app.pdf_probe",
+                "--integrity-worker",
+                str(target),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=PDF_INTEGRITY_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": "PDF integrity probe timed out."}
+
+    if proc.returncode != 0:
+        return {"error": "PDF integrity probe failed in the isolated worker."}
+    if len(proc.stdout.encode("utf-8", errors="replace")) > MAX_WORKER_OUTPUT_BYTES:
+        return {"error": "PDF integrity probe returned too much output."}
+
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        return {"error": "PDF integrity probe returned invalid JSON."}
+    if not isinstance(payload, dict):
+        return {"error": "PDF integrity probe returned an invalid result."}
+    return payload
 
 
 def extract_pdf_text(
@@ -190,6 +231,26 @@ def _metadata_worker(path: str) -> int:
     return 0
 
 
+def _integrity_worker(path: str) -> int:
+    try:
+        _apply_worker_limits()
+        from pypdf import PdfReader
+
+        reader = PdfReader(path, strict=False)
+        pages = len(reader.pages)
+        if pages < 1:
+            raise ValueError("the PDF has no pages")
+        payload = {
+            "pages": pages,
+            "encrypted": bool(reader.is_encrypted),
+        }
+    except Exception as exc:
+        payload = {"error": str(exc)[:500]}
+
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
 def _content_worker(
     path: str,
     max_chars: int,
@@ -245,6 +306,8 @@ def _content_worker(
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--worker":
         raise SystemExit(_metadata_worker(sys.argv[2]))
+    if len(sys.argv) == 3 and sys.argv[1] == "--integrity-worker":
+        raise SystemExit(_integrity_worker(sys.argv[2]))
     if len(sys.argv) == 6 and sys.argv[1] == "--extract-worker":
         raise SystemExit(
             _content_worker(

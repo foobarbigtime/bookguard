@@ -6,6 +6,7 @@ import stat
 from pypdf import PdfWriter
 
 import app.ebook_security as ebook_security
+import app.pdf_probe as pdf_probe
 from app.ebook_security import inspect_ebook_security
 
 
@@ -268,3 +269,65 @@ def test_checks_can_be_explicitly_disabled(tmp_path):
     assert report["checks"]["fileSignature"]["status"] == "disabled"
     assert report["checks"]["archiveSafety"]["status"] == "disabled"
     assert report["checks"]["epubStructure"]["status"] == "disabled"
+
+
+
+def test_pdf_integrity_routes_through_isolated_probe(tmp_path, monkeypatch):
+    path = tmp_path / "book.pdf"
+    path.write_bytes(b"%PDF-1.7\nbody\n%%EOF\n")
+
+    observed = {}
+
+    def fake_integrity(target):
+        observed["path"] = target
+        return {"pages": 3, "encrypted": False}
+
+    monkeypatch.setattr(pdf_probe, "inspect_pdf_integrity", fake_integrity)
+
+    report = inspect_ebook_security(
+        path,
+        check_file_signatures=False,
+        check_archive_safety=False,
+        check_epub_structure=False,
+    )
+
+    assert observed["path"] == path
+    assert report["safe"] is True
+    assert report["checks"]["pdfIntegrity"]["status"] == "passed"
+    assert report["checks"]["pdfIntegrity"]["pages"] == 3
+
+
+def test_pdf_integrity_worker_failure_fails_closed(tmp_path, monkeypatch):
+    path = tmp_path / "book.pdf"
+    path.write_bytes(b"%PDF-1.7\nbody\n%%EOF\n")
+
+    monkeypatch.setattr(
+        pdf_probe,
+        "inspect_pdf_integrity",
+        lambda target: {"error": "isolated parser failed"},
+    )
+
+    report = inspect_ebook_security(
+        path,
+        check_file_signatures=False,
+        check_archive_safety=False,
+        check_epub_structure=False,
+    )
+
+    assert report["safe"] is False
+    assert report["checks"]["pdfIntegrity"]["status"] == "failed"
+    assert "isolated parser failed" in report["checks"]["pdfIntegrity"]["message"]
+
+
+def test_pdf_integrity_probe_runs_in_worker(tmp_path):
+    path = tmp_path / "book.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+    payload = pdf_probe.inspect_pdf_integrity(path)
+
+    assert "error" not in payload
+    assert payload["pages"] == 1
+    assert payload["encrypted"] is False

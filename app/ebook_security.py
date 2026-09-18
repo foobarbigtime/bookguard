@@ -7,7 +7,7 @@ from urllib.parse import unquote
 import zipfile
 import xml.etree.ElementTree as ET
 
-from pypdf import PdfReader
+from . import pdf_probe
 
 
 ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
@@ -294,23 +294,17 @@ def _pdf_integrity_check(path: Path, suffix: str, enabled: bool) -> dict[str, An
     if not enabled:
         return _result("disabled", "PDF integrity validation is disabled.")
 
-    try:
-        with path.open("rb") as handle:
-            if handle.read(5) != b"%PDF-":
-                raise ValueError("the PDF header is absent")
-            handle.seek(max(0, path.stat().st_size - 4096))
-            trailer = handle.read()
-        if b"%%EOF" not in trailer:
-            raise ValueError("the PDF end-of-file marker is absent")
-        reader = PdfReader(str(path), strict=False)
-        pages = len(reader.pages)
-        if pages < 1:
-            raise ValueError("the PDF has no pages")
-        encrypted = bool(reader.is_encrypted)
-    except (OSError, ValueError, RuntimeError) as exc:
-        return _result("failed", f"PDF integrity is invalid: {exc}")
-    except Exception as exc:
-        return _result("failed", f"PDF parsing failed: {exc}")
+    payload = pdf_probe.inspect_pdf_integrity(path)
+    if payload.get("error"):
+        return _result(
+            "failed",
+            f"PDF integrity is invalid: {str(payload['error'])[:500]}",
+        )
+
+    pages = int(payload.get("pages") or 0)
+    if pages < 1:
+        return _result("failed", "PDF integrity is invalid: the PDF has no pages")
+    encrypted = bool(payload.get("encrypted"))
 
     return _result(
         "passed",
