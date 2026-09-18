@@ -8,6 +8,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from . import pdf_probe
+from .archive_io import read_zip_member_bounded
 
 
 ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
@@ -20,6 +21,7 @@ MAX_ARCHIVE_MEMBER_RATIO = 1000
 MAX_ARCHIVE_TOTAL_RATIO = 500
 MIN_RATIO_CHECK_BYTES = 16 * 1024 * 1024
 MIN_TOTAL_RATIO_CHECK_BYTES = 64 * 1024 * 1024
+EPUB_MIMETYPE_MAX_BYTES = 256
 
 
 def _result(status: str, message: str, **details: Any) -> dict[str, Any]:
@@ -210,7 +212,11 @@ def _epub_structure_check(path: Path, suffix: str, enabled: bool) -> dict[str, A
                 raise ValueError("the required mimetype file is absent")
             mimetype_info = archive.getinfo("mimetype")
             expected_mimetype = b"application/epub+zip"
-            mimetype_value = archive.read("mimetype")
+            mimetype_value = read_zip_member_bounded(
+                archive,
+                "mimetype",
+                max_bytes=EPUB_MIMETYPE_MAX_BYTES,
+            )
             if mimetype_value != expected_mimetype:
                 normalized_mimetype = mimetype_value.removeprefix(b"\xef\xbb\xbf").strip(
                     b" \t\r\n\v\f"
@@ -227,7 +233,9 @@ def _epub_structure_check(path: Path, suffix: str, enabled: bool) -> dict[str, A
             if "META-INF/container.xml" not in name_set:
                 raise ValueError("META-INF/container.xml is absent")
 
-            container = ET.fromstring(archive.read("META-INF/container.xml"))
+            container = ET.fromstring(
+                read_zip_member_bounded(archive, "META-INF/container.xml")
+            )
             rootfiles = [
                 element.attrib.get("full-path", "").strip()
                 for element in container.iter()
@@ -239,7 +247,7 @@ def _epub_structure_check(path: Path, suffix: str, enabled: bool) -> dict[str, A
             if package_path not in name_set:
                 raise ValueError("the package document referenced by container.xml is absent")
 
-            package = ET.fromstring(archive.read(package_path))
+            package = ET.fromstring(read_zip_member_bounded(archive, package_path))
             if _local_name(package.tag) != "package":
                 raise ValueError("the referenced package document has the wrong root element")
 

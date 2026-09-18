@@ -5,6 +5,7 @@ import stat
 
 from pypdf import PdfWriter
 
+import app.archive_io as archive_io
 import app.ebook_security as ebook_security
 import app.pdf_probe as pdf_probe
 from app.ebook_security import inspect_ebook_security
@@ -134,6 +135,68 @@ def test_epub_with_missing_package_fails_structure(tmp_path):
 
     assert report["safe"] is False
     assert "epubStructure" in report["failures"]
+
+
+def test_epub_structure_bounds_mimetype_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(ebook_security, "EPUB_MIMETYPE_MAX_BYTES", 24)
+    path = tmp_path / "oversized-mimetype.epub"
+    _write_epub(path, mimetype_value="application/epub+zip     ")
+
+    report = inspect_ebook_security(path)
+
+    structure = report["checks"]["epubStructure"]
+    assert report["safe"] is False
+    assert structure["status"] == "failed"
+    assert "mimetype" in structure["message"]
+    assert "24-byte metadata limit" in structure["message"]
+
+
+def test_epub_structure_bounds_container_xml_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive_io, "DEFAULT_XML_MEMBER_LIMIT", 128)
+    path = tmp_path / "oversized-container.epub"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            zipfile.ZipInfo("mimetype"),
+            "application/epub+zip",
+            compress_type=zipfile.ZIP_STORED,
+        )
+        archive.writestr("META-INF/container.xml", b"x" * 129)
+
+    report = inspect_ebook_security(path)
+
+    structure = report["checks"]["epubStructure"]
+    assert report["safe"] is False
+    assert structure["status"] == "failed"
+    assert "META-INF/container.xml" in structure["message"]
+    assert "128-byte metadata limit" in structure["message"]
+
+
+def test_epub_structure_bounds_package_xml_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive_io, "DEFAULT_XML_MEMBER_LIMIT", 128)
+    path = tmp_path / "oversized-package.epub"
+    container = """<?xml version="1.0"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"""
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            zipfile.ZipInfo("mimetype"),
+            "application/epub+zip",
+            compress_type=zipfile.ZIP_STORED,
+        )
+        archive.writestr("META-INF/container.xml", container)
+        archive.writestr("OEBPS/content.opf", b"x" * 129)
+
+    report = inspect_ebook_security(path)
+
+    structure = report["checks"]["epubStructure"]
+    assert report["safe"] is False
+    assert structure["status"] == "failed"
+    assert "OEBPS/content.opf" in structure["message"]
+    assert "128-byte metadata limit" in structure["message"]
 
 
 def test_valid_pdf_passes_signature_and_integrity(tmp_path):
