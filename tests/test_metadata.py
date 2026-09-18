@@ -3,6 +3,7 @@ import zipfile
 from pathlib import Path
 
 import app.archive_io as archive_io
+import app.metadata as metadata
 import app.pdf_probe as pdf_probe
 from app.metadata import cbz_metadata, epub_metadata, mobi_metadata, pdf_metadata, rtf_metadata, txt_metadata
 from pypdf import PdfWriter
@@ -153,5 +154,17 @@ def test_pdf_metadata_refuses_oversized_routine_parse(tmp_path, monkeypatch):
     md = pdf_metadata(str(path))
 
     assert md["source"] == "pdf"
+    assert "error" in md
+    assert "routine metadata limit" in md["error"]
+
+
+def test_mobi_metadata_refuses_oversized_record_zero(tmp_path, monkeypatch):
+    path = tmp_path / "oversized.azw3"
+    build_test_mobi(path)
+    monkeypatch.setattr(metadata, "MAX_MOBI_RECORD0_BYTES", 128)
+
+    md = mobi_metadata(str(path))
+
+    assert md["source"] == "mobi"
     assert "error" in md
     assert "routine metadata limit" in md["error"]
