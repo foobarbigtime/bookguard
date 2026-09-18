@@ -1,4 +1,5 @@
 import struct
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -216,3 +217,27 @@ def test_rtf_metadata_reads_only_bounded_prefix(tmp_path, monkeypatch):
     assert observed["max_bytes"] == 262144
     assert md["title"] == "Test Book"
     assert md["author"] == "Test Author"
+
+def test_ffprobe_metadata_rejects_oversized_output(monkeypatch):
+    def oversized(*args, **kwargs):
+        raise metadata.ProcessOutputLimitExceeded("stdout", 1024)
+
+    monkeypatch.setattr(metadata, "run_bounded_process", oversized)
+
+    result = metadata.ffprobe_metadata("/tmp/fake-audio.m4b")
+
+    assert result["path"] == "/tmp/fake-audio.m4b"
+    assert result["probe_error"] == "ffprobe stdout exceeded the 1024-byte output limit"
+
+
+def test_ffprobe_metadata_handles_timeout(monkeypatch):
+    def timed_out(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, metadata.FFPROBE_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(metadata, "run_bounded_process", timed_out)
+
+    result = metadata.ffprobe_metadata("/tmp/fake-audio.m4b")
+
+    assert result["path"] == "/tmp/fake-audio.m4b"
+    assert result["probe_error"] == "ffprobe timed out after 30 seconds"
+

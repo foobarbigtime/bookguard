@@ -13,6 +13,12 @@ from . import pdf_probe
 from .archive_io import read_zip_member_bounded
 from .file_safety import read_file_prefix
 from .media_discovery import representative_audio_files
+from .subprocess_capture import ProcessOutputLimitExceeded, run_bounded_process
+
+
+FFPROBE_TIMEOUT_SECONDS = 30
+FFPROBE_STDOUT_LIMIT_BYTES = 256 * 1024
+FFPROBE_STDERR_LIMIT_BYTES = 64 * 1024
 
 
 def audio_files(path: str, limit: int) -> list[str]:
@@ -26,11 +32,30 @@ def ffprobe_metadata(path: str) -> dict:
         "-show_entries", "format=duration:format_tags=artist,album_artist,author,composer,album,title,genre",
         "-of", "json", path,
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
-    if proc.returncode != 0:
-        return {"probe_error": proc.stderr.strip()[:500], "path": path}
     try:
-        payload = json.loads(proc.stdout or "{}")
+        proc = run_bounded_process(
+            cmd,
+            timeout=FFPROBE_TIMEOUT_SECONDS,
+            stdout_limit=FFPROBE_STDOUT_LIMIT_BYTES,
+            stderr_limit=FFPROBE_STDERR_LIMIT_BYTES,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "probe_error": f"ffprobe timed out after {FFPROBE_TIMEOUT_SECONDS} seconds",
+            "path": path,
+        }
+    except ProcessOutputLimitExceeded as exc:
+        return {
+            "probe_error": f"ffprobe {exc.stream} exceeded the {exc.limit}-byte output limit",
+            "path": path,
+        }
+
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+    if proc.returncode != 0:
+        return {"probe_error": stderr.strip()[:500], "path": path}
+    try:
+        payload = json.loads(stdout or "{}")
     except json.JSONDecodeError:
         return {"probe_error": "ffprobe returned invalid JSON", "path": path}
     fmt = payload.get("format") or {}
