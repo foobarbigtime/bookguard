@@ -144,3 +144,23 @@ def test_wrong_content_move_uses_separate_writable_alias(tmp_path, monkeypatch):
 
     assert moved == [(alias, destination)]
     assert source.is_file()
+
+
+def test_automatic_quarantine_rejects_root_that_contains_media(tmp_path, monkeypatch):
+    quarantine_root = tmp_path / "media"
+    ebook_root = quarantine_root / "books"
+    audiobook_root = tmp_path / "audiobooks"
+    source = ebook_root / "Book.epub"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"book")
+    audiobook_root.mkdir()
+
+    monkeypatch.setattr(automatic.settings, "quarantine_root", str(quarantine_root))
+    monkeypatch.setattr(automatic.settings, "ebook_root", str(ebook_root))
+    monkeypatch.setattr(automatic.settings, "audiobook_root", str(audiobook_root))
+
+    with pytest.raises(
+        AutomaticMaintenanceError,
+        match="outside configured media roots",
+    ):
+        automatic._quarantine_destination({"book_id": 1}, source)
