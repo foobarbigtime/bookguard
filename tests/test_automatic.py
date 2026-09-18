@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 import app.automatic as automatic
+import app.quarantine_fs as quarantine_fs
 from app.automatic import AutomaticMaintenanceError, _source_grab_event
 from app.bindery_client import evaluate_replacement_candidate
 from app.config import settings
@@ -134,7 +135,7 @@ def test_wrong_content_move_uses_separate_writable_alias(tmp_path, monkeypatch):
         moved.append((Path(src), Path(dst)))
         raise OSError("intentional unit-test stop")
 
-    monkeypatch.setattr(automatic.shutil, "move", reject_move)
+    monkeypatch.setattr(quarantine_fs.shutil, "move", reject_move)
 
     with pytest.raises(
         AutomaticMaintenanceError,
