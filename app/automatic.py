@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import shutil
 from typing import Any
 
 from .action_paths import (
@@ -14,6 +13,12 @@ from .bindery_client import BinderyClient, BinderyClientError, evaluate_replacem
 from .config import settings
 from .db import associations_inside_path, bindery_file_by_id
 from .file_safety import allocate_unique_destination, roots_overlap, sha256_file
+from .quarantine_fs import (
+    QuarantineCommitError,
+    QuarantineMoveError,
+    commit_quarantine_or_rollback,
+    move_to_quarantine,
+)
 from .scan_guard import CurrentScanError, require_current_scan_result
 from .verifier import verification_for_result, verify_result
 
@@ -204,32 +209,37 @@ def remediate_wrong_content(result: dict[str, Any], client: BinderyClient | None
         )
 
     try:
-        shutil.move(str(action_source), str(destination))
-    except Exception as exc:
-        raise AutomaticMaintenanceError(f"Quarantine move failed before Bindery was changed: {exc}") from exc
+        move_to_quarantine(
+            action_source,
+            source,
+            destination,
+            expected_sha256=source_hash,
+        )
+    except QuarantineMoveError as exc:
+        raise AutomaticMaintenanceError(
+            f"Quarantine move failed before Bindery was changed: {exc}"
+        ) from exc
 
     try:
-        if source.exists():
-            raise AutomaticMaintenanceError(
-                "The read-only source remained visible after the quarantine move."
-            )
-        if not destination.is_file() or sha256_file(destination) != source_hash:
-            raise AutomaticMaintenanceError("Quarantined file checksum verification failed.")
-        client.deregister_file(int(result["book_id"]), str(result["stored_path"]))
-    except Exception as exc:
-        rollback_error = ""
-        try:
-            action_source.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists() and not action_source.exists():
-                shutil.move(str(destination), str(action_source))
-            if not source.is_file() or sha256_file(source) != source_hash:
-                raise AutomaticMaintenanceError(
-                    "The original source could not be verified after rollback."
-                )
-        except Exception as rollback_exc:
-            rollback_error = f" Rollback also failed: {rollback_exc}"
+        commit_quarantine_or_rollback(
+            lambda: client.deregister_file(
+                int(result["book_id"]),
+                str(result["stored_path"]),
+            ),
+            action_source,
+            source,
+            destination,
+            expected_sha256=source_hash,
+        )
+    except QuarantineCommitError as exc:
+        rollback_error = (
+            f" Rollback also failed: {exc.rollback_error}"
+            if exc.rollback_error is not None
+            else ""
+        )
         raise AutomaticMaintenanceError(
-            f"Bindery deregistration failed after quarantine: {exc}.{rollback_error}"
+            f"Bindery deregistration failed after quarantine: "
+            f"{exc.cause}.{rollback_error}"
         ) from exc
 
     blocklist = None
