@@ -215,3 +215,22 @@ def test_non_collection_bad_metadata_can_still_be_repaired():
     )
     assert verdict == "METADATA_ERROR"
     assert confidence == 97
+
+
+def test_missing_embedded_metadata_can_be_verified_for_repair():
+    result = sample_result(title="Bel Canto", author="Ann Patchett")
+    result["reason_code"] = "NO_METADATA"
+    text = "Bel Canto by Ann Patchett. " + ("story " * 1000)
+
+    verdict, confidence, evidence = classify(
+        result,
+        {},
+        text,
+    )
+
+    assert verdict == "METADATA_ERROR"
+    assert confidence == 97
+    assert evidence["embedded"]["title"] == ""
+    assert evidence["embedded"]["author"] == ""
+    assert evidence["content"]["expected_signal"]["strong_identity"] is True
+    assert evidence["content"]["expected_signal"]["front_proximity"] is True
