@@ -53,8 +53,10 @@ def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
     services = payload.get("services") or {}
     service = services.get("bookguard") or {}
     security_opt = service.get("security_opt") or []
+    cap_drop = service.get("cap_drop") or []
     checks = {
         "noNewPrivilegesEnabled": "no-new-privileges:true" in security_opt,
+        "allCapabilitiesDropped": "ALL" in cap_drop,
         "booksMountedReadOnly": bool(volumes.get("/books", {}).get("read_only")),
         "audiobooksMountedReadOnly": bool(
             volumes.get("/audiobooks", {}).get("read_only")

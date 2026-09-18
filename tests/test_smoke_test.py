@@ -31,6 +31,7 @@ def _compose_payload(
         "services": {
             "bookguard": {
                 "security_opt": ["no-new-privileges:true"],
+                "cap_drop": ["ALL"],
                 "volumes": volumes,
             }
         }
@@ -75,6 +76,14 @@ def test_compose_profile_requires_no_new_privileges():
     payload["services"]["bookguard"].pop("security_opt")
 
     with pytest.raises(SmokeTestFailure, match="noNewPrivilegesEnabled"):
+        validate_compose(payload, "base")
+
+
+def test_compose_profile_requires_all_capabilities_dropped():
+    payload = _compose_payload(False)
+    payload["services"]["bookguard"].pop("cap_drop")
+
+    with pytest.raises(SmokeTestFailure, match="allCapabilitiesDropped"):
         validate_compose(payload, "base")
 
 

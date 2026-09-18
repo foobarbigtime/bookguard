@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
       - "${BOOKGUARD_BIND_ADDRESS:-127.0.0.1}:8788:8788"
     extra_hosts:
