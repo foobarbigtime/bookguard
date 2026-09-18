@@ -21,3 +21,28 @@ def is_within(path: Path, root: Path) -> bool:
 def roots_overlap(left: Path, right: Path) -> bool:
     """Return whether either root contains the other, including equality."""
     return is_within(left, right) or is_within(right, left)
+
+
+def allocate_unique_destination(
+    directory: Path,
+    source: Path,
+    *,
+    max_suffix: int = 9999,
+) -> Path:
+    """Create the destination directory and reserve a non-existing filename choice.
+
+    The caller still performs the move. This function only selects a path that
+    does not exist at the time of the safety check.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+
+    destination = directory / source.name
+    if not destination.exists():
+        return destination
+
+    for suffix_number in range(2, max_suffix + 1):
+        candidate = directory / f"{source.stem}-{suffix_number}{source.suffix}"
+        if not candidate.exists():
+            return candidate
+
+    raise RuntimeError("Unable to allocate a unique destination.")
