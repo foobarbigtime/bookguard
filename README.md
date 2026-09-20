@@ -550,14 +550,10 @@ exits.
 
 ## Updating
 
-Before deploying this security update, add the required access credentials to
-the existing `.env`. BookGuard's writable `/config` mount should point at a
-dedicated host directory rather than the Git checkout. Existing installations
-that still have `bookguard.db` in the repository root should stop BookGuard,
-copy `bookguard.db*` into the dedicated config directory, and preserve the old
-copy until the migrated container has started successfully.
-
-To retain direct LAN access, also set the bind address to the Unraid server's LAN IP:
+Before deploying an update, keep BookGuard's writable `/config` mount in its
+dedicated host directory rather than the Git checkout, and keep the required
+credentials in the existing `.env`. To retain direct LAN access, set the bind
+address and non-root runtime identity explicitly:
 
 ```env
 BOOKGUARD_AUTH_USERNAME=bookguard
@@ -568,11 +564,54 @@ BOOKGUARD_GID=100
 BOOKGUARD_CONFIG_HOST_PATH=/mnt/cache/appdata/bookguard-config
 ```
 
+Use the guarded upgrade helper instead of combining an ad-hoc pull, build, and
+Compose deployment.
+
+A non-deploying preflight may be run on a synchronized feature or integration
+branch:
+
 ```bash
-cd /mnt/cache/appdata/bookguard
-git pull
-bash scripts/build-with-provenance.sh
-docker compose up -d --no-build
+bash scripts/safer-upgrade.sh preflight
+```
+
+Preflight refuses a dirty, detached, ahead, or behind checkout, runs the full
+isolated smoke suite, builds with exact Git provenance, and verifies the
+candidate image labels. It does not recreate the running production container.
+
+The production upgrade command is intentionally restricted to `main` and
+requires an exact confirmation token:
+
+```bash
+bash scripts/safer-upgrade.sh upgrade --confirm DEPLOY_BOOKGUARD_UPGRADE
+```
+
+Before deployment, the helper repeats preflight, creates a transactionally
+consistent BookGuard database backup with the candidate image, validates that
+backup read-only, proves restore compatibility in disposable tmpfs, rechecks
+the source revision, and tags the currently running image for rollback. It then
+deploys only `compose.yaml` plus `compose.clamav.yaml` with `--no-build`.
+
+Post-deployment acceptance fails closed unless all of these succeed:
+
+- the running container uses the exact candidate image
+- OCI version/revision/source provenance matches the checked-out source
+- Docker health and the `/health` version are correct
+- BookGuard remains non-root with a read-only root filesystem, bounded no-exec
+  `/tmp`, dropped capabilities, no-new-privileges, read-only media/Bindery
+  mounts, and no writable action/admission aliases
+- ClamAV remains private, has no published port or media/config mounts, and
+  retains only its signature database volume
+- the live clean/EICAR ClamAV acceptance test passes and BookGuard still fails
+  closed on malware detection
+
+If a post-deployment check fails, the helper does **not** automatically restore
+the database or roll back the image. It preserves and prints both the rollback
+image tag and validated backup so recovery remains an explicit operator action.
+
+A deployed v0.6+ instance can be rechecked without redeploying:
+
+```bash
+bash scripts/safer-upgrade.sh verify
 ```
 
 ## Isolated smoke test
