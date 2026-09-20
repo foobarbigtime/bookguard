@@ -8,6 +8,7 @@ from pathlib import Path
 import threading
 import uuid
 
+from .audiobook_evidence import build_audiobook_evidence
 from .config import settings
 from .db import (
     create_metadata_repair,
@@ -27,6 +28,7 @@ from .file_snapshot import (
 from .malware_scan import probe_clamd
 from .matcher import normalize
 from .media_discovery import resolve_ebook_target
+from .media_evidence import detect_file_media_kind, media_set_fingerprint
 from .metadata import ebook_metadata
 from .repair import (
     RepairError,
@@ -39,13 +41,14 @@ from .tika_client import test_connection
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "18"
+VERIFIER_VERSION = "19"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
     "WRONG_CONTENT",
     "INSUFFICIENT_EVIDENCE",
     "UNSAFE_FILE",
+    "WRONG_MEDIA_TYPE",
 }
 
 _job_lock = threading.Lock()
@@ -173,8 +176,12 @@ def _verification_for_fingerprint(
 
 
 def verification_for_result(result: dict) -> dict | None:
-    target = resolve_ebook_target(result.get("local_path") or "")
-    fingerprint = _file_fingerprint(target)
+    if result.get("format") == "audiobook":
+        target = str(result.get("local_path") or "")
+        fingerprint = media_set_fingerprint(target)
+    else:
+        target = resolve_ebook_target(result.get("local_path") or "")
+        fingerprint = _file_fingerprint(target)
     return _verification_for_fingerprint(result, target, fingerprint)
 
 
@@ -299,22 +306,27 @@ def verify_result(result: dict, force: bool = False) -> dict:
 
     target = resolve_ebook_target(result.get("local_path") or "")
 
-    if result.get("format") != "ebook":
-        fingerprint = _file_fingerprint(target)
+    if result.get("format") == "audiobook":
+        target = str(result.get("local_path") or "")
+        fingerprint = media_set_fingerprint(target)
         if not force:
             cached = _verification_for_fingerprint(result, target, fingerprint)
             if cached:
                 return cached
-        evidence = {
-            "expected": {"title": result.get("title", ""), "author": result.get("author", "")},
-            "embedded": {},
-            "content": {},
-            "metadata_matches_expected": False,
-            "notes": ["Audiobook content verification is not implemented yet; existing tag-based scanning remains in use."],
-            "explanation": "This verifier currently establishes book identity from ebook content only.",
-        }
+        audiobook = build_audiobook_evidence(result, target)
         return _save_verification(
-            result, target, fingerprint, "INSUFFICIENT_EVIDENCE", 0, "unsupported-audiobook", evidence
+            result,
+            target,
+            fingerprint,
+            str(audiobook["verdict"]),
+            int(audiobook["confidence"]),
+            str(audiobook["source"]),
+            dict(audiobook["evidence"]),
+        )
+
+    if result.get("format") != "ebook":
+        raise RuntimeError(
+            f"Unsupported media format for content verification: {result.get('format')!r}"
         )
 
     snapshot_root = Path(settings.config_dir) / ".verification-snapshots"
@@ -330,6 +342,34 @@ def verify_result(result: dict, force: bool = False) -> dict:
                 if cached:
                     assert_snapshot_source_current(snapshot)
                     return cached
+
+            media_kind = detect_file_media_kind(str(snapshot.path))
+            if media_kind.get("kind") == "audiobook":
+                assert_snapshot_source_current(snapshot)
+                evidence = {
+                    "expected": {
+                        "title": result.get("title", ""),
+                        "author": result.get("author", ""),
+                        "mediaKind": "ebook",
+                    },
+                    "actualMedia": media_kind,
+                    "metadata_matches_expected": False,
+                    "notes": [],
+                    "reasonCode": "EXPECTED_EBOOK_FOUND_AUDIO",
+                    "explanation": (
+                        "Bindery expects an ebook, but the stable tracked bytes contain "
+                        "a readable audio stream."
+                    ),
+                }
+                return _save_verification(
+                    result,
+                    target,
+                    fingerprint,
+                    "WRONG_MEDIA_TYPE",
+                    100,
+                    "media-kind",
+                    evidence,
+                )
 
             security = inspect_ebook_security(
                 snapshot.path,
