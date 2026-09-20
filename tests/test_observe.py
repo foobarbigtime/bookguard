@@ -214,10 +214,11 @@ def test_observe_evidence_is_durable_and_human_readable(monkeypatch, tmp_path):
         settings.config_dir = original
 
     evidence = json.loads(stored["evidence_json"])
+    assert record["decision"] == "would_resolve_wrong_content"
     assert record["reasonCode"] == "VERIFIED_WRONG_CONTENT"
     assert evidence["scanId"] == "observe-scan"
     assert evidence["verification"]["verdict"] == "WRONG_CONTENT"
-    assert "Observe Mode will not quarantine" in evidence["nextStep"]
+    assert "future Automatic Mode should quarantine" in evidence["nextStep"]
 
 
 
@@ -270,4 +271,44 @@ def test_unverified_ebook_is_proposed_verification_not_attention(monkeypatch, tm
     assert record["decision"] == "would_verify_result"
     assert record["reasonCode"] == "CONTENT_VERIFICATION_REQUIRED"
     assert "future Automatic Mode should run" in record["nextStep"]
+    assert attention == []
+
+
+
+def test_unverified_audiobook_is_proposed_verification_not_attention(monkeypatch, tmp_path):
+    original = settings.config_dir
+    settings.config_dir = str(tmp_path / "config")
+    init_local_db()
+    init_verification_db()
+    try:
+        create_scan("audio-observe-scan", 1)
+        add_result(
+            "audio-observe-scan",
+            {
+                "file_id": 51,
+                "book_id": 101,
+                "author": "Example Author",
+                "title": "Example Audio Book",
+                "format": "audiobook",
+                "stored_path": "/data/media/audiobooks/Example Audio Book",
+                "local_path": "/audiobooks/Example Audio Book",
+                "classification": "REVIEW",
+                "risk_score": 80,
+                "reason_code": "MISMATCH",
+                "reasons": ["fixture"],
+                "metadata": {},
+            },
+        )
+        finish_scan("audio-observe-scan")
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+
+        result = run_observe_cycle()
+        attention = observe_attention_items()
+    finally:
+        settings.config_dir = original
+
+    assert result["decisionCount"] == 1
+    record = result["records"][0]
+    assert record["decision"] == "would_verify_audiobook"
+    assert record["reasonCode"] == "AUDIOBOOK_VERIFICATION_REQUIRED"
     assert attention == []
