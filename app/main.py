@@ -14,6 +14,7 @@ from .auth import BasicAuthMiddleware
 from .config import settings
 from .db import init_local_db, load_persisted_settings
 from .routes.automatic import router as automatic_router
+from .routes.hardlink_conflicts import router as hardlink_router
 from .routes.pages import router as pages_router
 from .routes.repairs import router as repairs_router
 from .routes.system import router as system_router
@@ -48,3 +49,4 @@ app.include_router(repairs_router)
 app.include_router(triage_router)
 app.include_router(verification_router)
 app.include_router(automatic_router)
+app.include_router(hardlink_router)

@@ -87,6 +87,19 @@
     Verification is read-only. BookGuard validates file type and structure before separating verified books, repairable metadata errors, wrong content, unsafe files, and cases that still need human review.
   </div>
 
+  <section class="table-card acquisition-panel" aria-live="polite">
+    <div class="section-title row-between">
+      <div>
+        <h2>Shared-file registration conflicts</h2>
+        <p>Check whether different books track hard links to the same ebook.</p>
+      </div>
+      <button id="checkHardlinks" type="button">Check shared files</button>
+    </div>
+    <div id="hardlinkResults" class="acquisition-body">
+      <p class="muted">Checking registrations is read-only. Corrections require verified content and explicit confirmation.</p>
+    </div>
+  </section>
+
   <section id="acquisitionPanel" class="table-card acquisition-panel" aria-live="polite">
     <div class="section-title row-between">
       <div>
@@ -482,5 +495,6 @@ loadCachedVerifications();
 pollVerificationJob();
 </script>
 <script src="/static/triage-acquisition.js" defer></script>
+<script src="/static/triage-hardlinks.js" defer></script>
 </body>
 </html>
