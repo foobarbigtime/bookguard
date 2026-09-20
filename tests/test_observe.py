@@ -246,3 +246,28 @@ def test_automatic_mutation_endpoint_is_blocked_in_observe_mode(monkeypatch):
 
     assert exc.value.status_code == 409
     assert "Observe Mode is active" in str(exc.value.detail)
+
+
+
+def test_unverified_ebook_is_proposed_verification_not_attention(monkeypatch, tmp_path):
+    original, result_id = _seed_review_result(tmp_path)
+    try:
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+        with local_conn() as conn:
+            conn.execute(
+                "DELETE FROM content_verifications WHERE result_id=?",
+                (result_id,),
+            )
+            conn.commit()
+
+        result = run_observe_cycle()
+        attention = observe_attention_items()
+    finally:
+        settings.config_dir = original
+
+    assert result["decisionCount"] == 1
+    record = result["records"][0]
+    assert record["decision"] == "would_verify_result"
+    assert record["reasonCode"] == "CONTENT_VERIFICATION_REQUIRED"
+    assert "future Automatic Mode should run" in record["nextStep"]
+    assert attention == []
