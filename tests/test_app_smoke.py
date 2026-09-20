@@ -15,6 +15,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/hardlink-conflicts/history/{correction_id}/cleanup"),
     ("POST", "/api/hardlink-conflicts/history/{correction_id}/reconcile-cleanup"),
     ("GET", "/"),
+    ("GET", "/attention"),
     ("GET", "/triage"),
     ("GET", "/settings"),
     ("GET", "/repairs"),
@@ -95,6 +96,7 @@ def test_route_contract_is_exact():
 def test_templates_parse():
     env = Environment(loader=FileSystemLoader("templates"))
     env.get_template("index.html")
+    env.get_template("attention.html")
     env.get_template("triage.html")
     env.get_template("settings.html")
     env.get_template("repairs.html")
