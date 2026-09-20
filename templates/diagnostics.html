@@ -35,10 +35,10 @@
   {% endif %}
 
   <section class="diagnostic-gates">
-    {% for key, enabled in diagnostics.gates.items() %}
+    {% for gate in diagnostics.gateCards %}
     <article class="card diagnostic-gate">
-      <span class="label">{{ key|replace('_',' ') }}</span>
-      <strong>{{ "ON" if enabled else "OFF" }}</strong>
+      <span class="label">{{ gate.label }}</span>
+      <strong>{{ "ON" if gate.enabled else "OFF" }}</strong>
     </article>
     {% endfor %}
   </section>
