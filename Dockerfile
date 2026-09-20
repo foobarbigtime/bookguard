@@ -10,7 +10,10 @@ LABEL org.opencontainers.image.title="BookGuard" \
       org.opencontainers.image.source="https://github.com/foobarbigtime/bookguard"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    BOOKGUARD_BUILD_VERSION="${BOOKGUARD_VERSION}" \
+    BOOKGUARD_BUILD_REVISION="${BOOKGUARD_VCS_REF}" \
+    BOOKGUARD_BUILD_SOURCE="https://github.com/foobarbigtime/bookguard"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg curl \
