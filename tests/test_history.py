@@ -1,0 +1,237 @@
+from __future__ import annotations
+
+import json
+
+from app.config import settings
+from app.db import add_result, create_scan, finish_scan, init_local_db, local_conn
+from app.history import operation_history
+from app.triage import init_triage_db
+from app.verifier import init_verification_db
+
+
+def _seed(tmp_path):
+    original = settings.config_dir
+    settings.config_dir = str(tmp_path / "config")
+    init_local_db()
+    init_triage_db()
+    init_verification_db()
+
+    create_scan("history-scan", 1)
+    add_result(
+        "history-scan",
+        {
+            "file_id": 10,
+            "book_id": 20,
+            "author": "Ann Patchett",
+            "title": "Bel Canto",
+            "format": "ebook",
+            "stored_path": "/data/media/books/Bel Canto.epub",
+            "local_path": "/books/Bel Canto.epub",
+            "classification": "REVIEW",
+            "risk_score": 70,
+            "reason_code": "MISMATCH",
+            "reasons": ["history fixture"],
+            "metadata": {},
+        },
+    )
+    finish_scan("history-scan")
+    with local_conn() as conn:
+        result_id = int(
+            conn.execute(
+                "SELECT id FROM scan_results WHERE scan_id='history-scan'"
+            ).fetchone()["id"]
+        )
+        conn.execute(
+            """
+            INSERT INTO ebook_acquisitions(
+                result_id, scan_id, book_id, candidate_guid, candidate_title,
+                status, created_at, updated_at
+            ) VALUES (?, 'history-scan', 20, 'guid', 'Bel Canto candidate',
+                      'verified', '2026-09-20T12:00:00+00:00',
+                      '2026-09-20T12:07:00+00:00')
+            """,
+            (result_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO ebook_admissions(
+                result_id, scan_id, book_id, staged_relative_path, stored_path,
+                local_path, status, created_at, updated_at
+            ) VALUES (?, 'history-scan', 20, 'Bel Canto.epub',
+                      '/data/media/books/Bel Canto.epub', '/books/Bel Canto.epub',
+                      'registered', '2026-09-20T12:08:00+00:00',
+                      '2026-09-20T12:09:00+00:00')
+            """,
+            (result_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO cleanup_actions(
+                result_id, scan_id, file_id, book_id, classification, format,
+                author, title, stored_path, local_path, action_kind, status,
+                created_at, completed_at
+            ) VALUES (?, 'history-scan', 10, 20, 'REVIEW', 'ebook',
+                      'Ann Patchett', 'Bel Canto',
+                      '/data/media/books/Bel Canto.epub', '/books/Bel Canto.epub',
+                      'TRIAGE_QUARANTINE', 'applied',
+                      '2026-09-20T12:10:00+00:00',
+                      '2026-09-20T12:11:00+00:00')
+            """,
+            (result_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO metadata_repairs(
+                result_id, scan_id, file_id, book_id, format, stored_path,
+                local_path, repair_kind, status, before_json, after_json,
+                created_at, completed_at
+            ) VALUES (?, 'history-scan', 10, 20, 'ebook',
+                      '/data/media/books/Bel Canto.epub', '/books/Bel Canto.epub',
+                      'EPUB_METADATA', 'applied', '{}', '{}',
+                      '2026-09-20T12:12:00+00:00',
+                      '2026-09-20T12:13:00+00:00')
+            """,
+            (result_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO content_verifications(
+                signature, result_id, scan_id, file_id, book_id, format, author,
+                title, target_path, file_fingerprint, verdict, confidence,
+                source, evidence_json, created_at, updated_at
+            ) VALUES ('history-verification', ?, 'history-scan', 10, 20, 'ebook',
+                      'Ann Patchett', 'Bel Canto', '/books/Bel Canto.epub',
+                      'fingerprint', 'VERIFIED_CORRECT', 99, 'bookguard',
+                      '{}', '2026-09-20T12:14:00+00:00',
+                      '2026-09-20T12:15:00+00:00')
+            """,
+            (result_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO triage_decisions(
+                signature, result_id, scan_id, file_id, book_id, classification,
+                reason_code, format, author, title, stored_path, decision,
+                created_at, updated_at
+            ) VALUES ('history-triage', ?, 'history-scan', 10, 20, 'REVIEW',
+                      'MISMATCH', 'ebook', 'Ann Patchett', 'Bel Canto',
+                      '/data/media/books/Bel Canto.epub', 'KEEP',
+                      '2026-09-20T12:16:00+00:00',
+                      '2026-09-20T12:17:00+00:00')
+            """,
+            (result_id,),
+        )
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS hardlink_corrections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id INTEGER NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                error TEXT
+            );
+            CREATE TABLE IF NOT EXISTS hardlink_alias_cleanups (
+                correction_id INTEGER PRIMARY KEY,
+                snapshot_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                error TEXT
+            );
+            """
+        )
+        snapshot = json.dumps({"source": "/staging/Bel Canto.epub"})
+        cursor = conn.execute(
+            """
+            INSERT INTO hardlink_corrections(
+                file_id, snapshot_json, status, created_at, completed_at
+            ) VALUES (10, ?, 'applied',
+                      '2026-09-20T12:18:00+00:00',
+                      '2026-09-20T12:19:00+00:00')
+            """,
+            (snapshot,),
+        )
+        correction_id = int(cursor.lastrowid)
+        conn.execute(
+            """
+            INSERT INTO hardlink_alias_cleanups(
+                correction_id, snapshot_json, status, created_at, completed_at
+            ) VALUES (?, ?, 'applied',
+                      '2026-09-20T12:20:00+00:00',
+                      '2026-09-20T12:21:00+00:00')
+            """,
+            (correction_id, snapshot),
+        )
+        conn.commit()
+    return original
+
+
+def test_operation_history_combines_durable_sources_newest_first(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        history = operation_history(100)
+    finally:
+        settings.config_dir = original
+
+    kinds = {item["kind"] for item in history["items"]}
+    assert {
+        "acquisition",
+        "admission",
+        "cleanup",
+        "repair",
+        "verification",
+        "triage",
+        "hardlink_correction",
+        "hardlink_cleanup",
+    } <= kinds
+    timestamps = [item["timestamp"] for item in history["items"]]
+    assert timestamps == sorted(timestamps, reverse=True)
+    assert history["items"][0]["kind"] == "hardlink_cleanup"
+    quarantine = next(item for item in history["items"] if item["kind"] == "cleanup")
+    assert quarantine["kindLabel"] == "Quarantine"
+    assert quarantine["title"] == "Bel Canto"
+
+
+def test_operation_history_limit_is_applied(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        history = operation_history(3)
+    finally:
+        settings.config_dir = original
+
+    assert history["count"] == 3
+    assert len(history["items"]) == 3
+
+
+def test_operation_history_does_not_create_optional_tables(tmp_path):
+    original = settings.config_dir
+    settings.config_dir = str(tmp_path / "config")
+    try:
+        init_local_db()
+        with local_conn() as conn:
+            before = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+
+        operation_history()
+
+        with local_conn() as conn:
+            after = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+    finally:
+        settings.config_dir = original
+
+    assert after == before
+    assert "hardlink_corrections" not in after
+    assert "hardlink_alias_cleanups" not in after
+    assert "content_verifications" not in after
+    assert "triage_decisions" not in after
