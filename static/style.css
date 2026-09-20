@@ -259,3 +259,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #4e8bc7
 .history-detail-summary-note { margin:0 1rem 1rem; border:1px solid rgba(40,103,178,.42); background:rgba(40,103,178,.07); border-radius:.65rem; padding:.8rem .9rem; }
 .history-detail-summary-note strong { display:block; color:#bad8f6; }
 .history-detail-summary-note p { margin-top:.35rem; line-height:1.45; }
+
+
+/* Operator failure guidance */
+.operator-guidance { border:1px solid rgba(214,163,59,.45); background:rgba(214,163,59,.065); border-radius:.65rem; padding:.8rem .9rem; }
+.operator-guidance strong { display:block; color:#edc66e; margin-bottom:.3rem; }
+.operator-guidance small { margin-top:.28rem; line-height:1.45; }
+.operator-guidance.compact { margin-top:.55rem; padding:.55rem .65rem; }
+.history-detail-guidance { margin:0 1rem 1rem; }
+.attention-message { overflow-wrap:anywhere; }
+.attention-actions { min-width:190px; }
+.attention-actions .button-link { display:inline-block; margin:.12rem .2rem .12rem 0; }
