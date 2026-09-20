@@ -16,6 +16,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/hardlink-conflicts/history/{correction_id}/reconcile-cleanup"),
     ("GET", "/"),
     ("GET", "/attention"),
+    ("GET", "/diagnostics"),
     ("GET", "/triage"),
     ("GET", "/settings"),
     ("GET", "/repairs"),
@@ -24,6 +25,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/scan/cancel-safe"),
     ("POST", "/api/scan/stop-immediately"),
     ("GET", "/api/status"),
+    ("GET", "/api/diagnostics"),
     ("GET", "/api/settings"),
     ("POST", "/api/settings"),
     ("POST", "/api/settings/reset"),
@@ -97,6 +99,7 @@ def test_templates_parse():
     env = Environment(loader=FileSystemLoader("templates"))
     env.get_template("index.html")
     env.get_template("attention.html")
+    env.get_template("diagnostics.html")
     env.get_template("triage.html")
     env.get_template("settings.html")
     env.get_template("repairs.html")

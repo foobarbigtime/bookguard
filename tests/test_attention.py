@@ -1,3 +1,5 @@
+from jinja2 import Environment, FileSystemLoader
+
 import app.attention as attention
 
 
@@ -70,3 +72,38 @@ def test_attention_snapshot_zero_state(monkeypatch):
 
     assert snapshot["total"] == 0
     assert snapshot["items"] == []
+
+
+def test_attention_template_renders_item_list():
+    env = Environment(loader=FileSystemLoader("templates"))
+    template = env.get_template("attention.html")
+    rendered = template.render(
+        version="0.5.0",
+        attention={
+            "total": 1,
+            "summary": {
+                "acquisitions": 1,
+                "admissions": 0,
+                "hardlinkCorrections": 0,
+                "hardlinkCleanups": 0,
+                "coordinator": 0,
+            },
+            "generatedAt": "2026-09-20T11:30:00Z",
+            "items": [
+                {
+                    "id": 1,
+                    "kindLabel": "Acquisition",
+                    "status": "cleanup_required",
+                    "title": "Example Book",
+                    "author": "Example Author",
+                    "message": "Cleanup needs operator review.",
+                    "updatedAt": "2026-09-20T11:29:00Z",
+                    "href": "/triage#acquisitionPanel",
+                }
+            ],
+        },
+    )
+
+    assert "Example Book" in rendered
+    assert "cleanup required" in rendered
+    assert "Open guarded workflow" in rendered

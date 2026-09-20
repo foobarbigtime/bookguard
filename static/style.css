@@ -136,6 +136,19 @@ td { font-size: .86rem; }
 .attention-zero strong { display:block; margin-bottom:.35rem; color:#a6e3bc; }
 .attention-table .button-link { display:inline-block; border-color:var(--border); background:#101820; white-space:nowrap; }
 
+/* Readiness diagnostics */
+.diagnostic-gates { display:grid; gap:.8rem; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); margin-bottom:1rem; }
+.diagnostic-gate strong { font-size:1.05rem; }
+.diagnostic-sections { display:grid; gap:1rem; }
+.diagnostic-section { overflow:hidden; }
+.diagnostic-blockers { display:grid; gap:.65rem; padding:0 1rem 1rem; }
+.diagnostic-blocker { border:1px solid rgba(224,93,93,.38); background:rgba(224,93,93,.055); border-radius:.65rem; padding:.8rem .9rem; }
+.diagnostic-blocker strong { display:block; margin-bottom:.3rem; }
+.diagnostic-blocker small { margin-top:.28rem; line-height:1.4; }
+.diagnostic-blocker code { display:inline-block; margin-top:.45rem; font-size:.72rem; color:var(--muted); }
+.diagnostic-ready { padding:0 1rem 1rem; }
+.diagnostic-ready strong { display:block; color:#a6e3bc; margin-bottom:.3rem; }
+
 /* Settings */
 .settings-main { max-width: 1250px; }
 .settings-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; margin-bottom: 1rem; }

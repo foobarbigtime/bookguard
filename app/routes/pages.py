@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from .. import __version__
 from ..attention import attention_snapshot
 from ..config import settings
+from ..diagnostics import diagnostics_snapshot
 from ..db import (
     latest_counts,
     latest_reason_counts,
@@ -75,6 +76,18 @@ def attention_page(request: Request):
         name="attention.html",
         context={
             "attention": attention_snapshot(),
+            "version": __version__,
+        },
+    )
+
+
+@router.get("/diagnostics", response_class=HTMLResponse)
+def diagnostics_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="diagnostics.html",
+        context={
+            "diagnostics": diagnostics_snapshot(),
             "version": __version__,
         },
     )
