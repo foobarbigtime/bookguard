@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from .db import local_conn, result_by_id, utc_now
+from .operator_guidance import operation_guidance
 
 
 _TABLES = {
@@ -594,6 +595,7 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
         "path": path,
         "error": error,
         "summary": summary,
+        "guidance": operation_guidance(kind, status, error),
         "fields": fields,
         "evidence": evidence,
         "notes": notes,
