@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -10,7 +10,7 @@ from .. import __version__
 from ..attention import attention_snapshot
 from ..config import settings
 from ..diagnostics import diagnostics_snapshot
-from ..history import operation_history
+from ..history import operation_detail, operation_history
 from ..db import (
     latest_counts,
     latest_reason_counts,
@@ -90,6 +90,21 @@ def history_page(request: Request):
         name="history.html",
         context={
             "history": operation_history(),
+            "version": __version__,
+        },
+    )
+
+
+@router.get("/history/{kind}/{record_id}", response_class=HTMLResponse)
+def history_detail_page(request: Request, kind: str, record_id: int):
+    detail = operation_detail(kind, record_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Operation record not found.")
+    return templates.TemplateResponse(
+        request=request,
+        name="history_detail.html",
+        context={
+            "detail": detail,
             "version": __version__,
         },
     )

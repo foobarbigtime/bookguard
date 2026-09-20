@@ -66,7 +66,11 @@
           <tr data-history-kind="{{ 'hardlink' if item.kind in ['hardlink_correction', 'hardlink_cleanup'] else item.kind }}">
             <td class="history-time" title="{{ item.timestamp or '' }}">{{ item.timestamp[:19]|replace('T', ' ') if item.timestamp else '—' }}{% if item.timestamp %}<small>UTC</small>{% endif %}</td>
             <td>
-              <strong>{{ item.kindLabel }}</strong>
+              {% if item.detailHref %}
+                <a class="history-detail-link" href="{{ item.detailHref }}"><strong>{{ item.kindLabel }}</strong></a>
+              {% else %}
+                <strong>{{ item.kindLabel }}</strong>
+              {% endif %}
               <small>#{{ item.id }}</small>
             </td>
             <td>
