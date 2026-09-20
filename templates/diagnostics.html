@@ -36,6 +36,11 @@
   {% endif %}
 
   <section class="diagnostic-gates">
+    <article class="card diagnostic-gate">
+      <span class="label">Automation mode</span>
+      <strong>{{ diagnostics.automationMode|upper }}</strong>
+      <small>{{ "Records proposed decisions only; no external mutations." if diagnostics.automationMode == "observe" else "Fail-closed manual behavior." }}</small>
+    </article>
     {% for gate in diagnostics.gateCards %}
     <article class="card diagnostic-gate">
       <span class="label">{{ gate.label }}</span>
