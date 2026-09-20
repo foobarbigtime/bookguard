@@ -28,7 +28,7 @@ from .file_snapshot import (
 from .malware_scan import probe_clamd
 from .matcher import normalize
 from .media_discovery import resolve_ebook_target
-from .media_evidence import detect_file_media_kind, media_set_fingerprint
+from .media_evidence import detect_file_media_kind, inspect_media_path, media_set_fingerprint
 from .metadata import ebook_metadata
 from .repair import (
     RepairError,
@@ -175,13 +175,30 @@ def _verification_for_fingerprint(
     return _decode_row(row) if row else None
 
 
+def _ebook_directory_media_mismatch(result: dict) -> dict | None:
+    raw_path = str(result.get("local_path") or "")
+    target = Path(raw_path)
+    if not target.is_dir():
+        return None
+    inventory = inspect_media_path(raw_path)
+    counts = dict(inventory.get("counts") or {})
+    if int(counts.get("audiobook") or 0) < 1 or int(counts.get("ebook") or 0) > 0:
+        return None
+    return inventory
+
+
 def verification_for_result(result: dict) -> dict | None:
     if result.get("format") == "audiobook":
         target = str(result.get("local_path") or "")
         fingerprint = media_set_fingerprint(target)
     else:
-        target = resolve_ebook_target(result.get("local_path") or "")
-        fingerprint = _file_fingerprint(target)
+        mismatch = _ebook_directory_media_mismatch(result)
+        if mismatch is not None:
+            target = str(result.get("local_path") or "")
+            fingerprint = media_set_fingerprint(target)
+        else:
+            target = resolve_ebook_target(result.get("local_path") or "")
+            fingerprint = _file_fingerprint(target)
     return _verification_for_fingerprint(result, target, fingerprint)
 
 
@@ -325,6 +342,39 @@ def verify_result(result: dict, force: bool = False) -> dict:
     if result.get("format") != "ebook":
         raise RuntimeError(
             f"Unsupported media format for content verification: {result.get('format')!r}"
+        )
+
+    directory_mismatch = _ebook_directory_media_mismatch(result)
+    if directory_mismatch is not None:
+        target = str(result.get("local_path") or "")
+        fingerprint = media_set_fingerprint(target)
+        if not force:
+            cached = _verification_for_fingerprint(result, target, fingerprint)
+            if cached:
+                return cached
+        evidence = {
+            "expected": {
+                "title": result.get("title", ""),
+                "author": result.get("author", ""),
+                "mediaKind": "ebook",
+            },
+            "actualMedia": directory_mismatch,
+            "metadata_matches_expected": False,
+            "notes": [],
+            "reasonCode": "EXPECTED_EBOOK_FOUND_AUDIO",
+            "explanation": (
+                "Bindery expects an ebook, but the tracked directory contains "
+                "readable audio media and no deterministically identified ebook."
+            ),
+        }
+        return _save_verification(
+            result,
+            target,
+            fingerprint,
+            "WRONG_MEDIA_TYPE",
+            100,
+            "media-kind",
+            evidence,
         )
 
     target = resolve_ebook_target(result.get("local_path") or "")
