@@ -215,3 +215,22 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #4e8bc7
 .diagnostic-environment-card small { margin-top:.25rem; line-height:1.4; }
 .diagnostic-environment-card .workflow-state { margin-top:.55rem; }
 .diagnostic-mount-table { min-width:860px; }
+
+
+/* Unified operation history */
+.history-card { overflow:hidden; }
+.history-table { min-width:1180px; }
+.history-meta { text-align:right; }
+.history-meta strong { display:block; font-size:1.2rem; }
+.history-time { white-space:nowrap; }
+.history-table .path { max-width:360px; overflow-wrap:anywhere; }
+.history-table .why-cell { min-width:220px; }
+
+.history-controls { display:flex; align-items:center; flex-wrap:wrap; gap:.5rem .75rem; padding:.75rem 1rem; border-top:1px solid var(--border); border-bottom:1px solid var(--border); background:#101820; }
+.history-controls label { font-size:.78rem; color:var(--muted); }
+.history-controls select { min-width:220px; border:1px solid var(--border); background:var(--panel-2); color:var(--text); border-radius:.5rem; padding:.48rem .6rem; }
+.history-controls small { margin-left:auto; }
+.history-time small { margin-top:.18rem; font-size:.68rem; }
+.history-table td:nth-child(2) { min-width:135px; }
+.history-table td:nth-child(3) { min-width:145px; }
+.history-table td:nth-child(4) { min-width:230px; }

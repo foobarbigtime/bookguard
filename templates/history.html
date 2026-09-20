@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard History</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div><h1>BookGuard</h1><p>Unified chronological operation history</p></div>
+    <span class="version">v{{ version }}</span>
+  </div>
+  <nav class="topnav">
+    <a class="nav-link" href="/">Dashboard</a>
+    <a class="nav-link" href="/attention">Attention</a>
+    <a class="nav-link active" href="/history">History</a>
+    <a class="nav-link" href="/diagnostics">Diagnostics</a>
+    <a class="nav-link" href="/triage">Triage</a>
+    <a class="nav-link" href="/repairs">Repairs</a>
+    <a class="nav-link" href="/settings">Settings</a>
+  </nav>
+</header>
+
+<main>
+  <div class="notice info">
+    <strong>Read-only audit view.</strong>
+    This page combines existing durable BookGuard records. It does not resume, retry, correct, delete, quarantine, admit, repair, or otherwise mutate anything.
+  </div>
+
+  <section class="table-card history-card">
+    <div class="section-title row-between">
+      <div>
+        <h2>Operation history</h2>
+        <p>Newest durable operation state first across acquisition, admission, cleanup, verification, correction, repair, and triage.</p>
+      </div>
+      <div class="history-meta">
+        <strong id="historyVisibleCount">{{ history.count }}</strong>
+        <small>visible records · snapshot {{ history.generatedAt[:19]|replace('T', ' ') }} UTC</small>
+      </div>
+    </div>
+
+    {% if history['items'] %}
+    <div class="history-controls">
+      <label for="historyKindFilter">Operation</label>
+      <select id="historyKindFilter">
+        <option value="">All operations</option>
+        <option value="verification">Verification</option>
+        <option value="acquisition">Acquisition</option>
+        <option value="admission">Admission</option>
+        <option value="cleanup">Cleanup / quarantine / detach</option>
+        <option value="repair">Metadata repair</option>
+        <option value="hardlink">Hard-link correction / cleanup</option>
+        <option value="triage">Triage decision</option>
+      </select>
+      <small>Filtering is local to this read-only page and does not change BookGuard state.</small>
+    </div>
+    <div class="table-wrap">
+      <table class="history-table">
+        <thead>
+          <tr><th>When</th><th>Operation</th><th>Status</th><th>Book</th><th>Path</th><th>Detail</th></tr>
+        </thead>
+        <tbody>
+        {% for item in history['items'] %}
+          <tr data-history-kind="{{ 'hardlink' if item.kind in ['hardlink_correction', 'hardlink_cleanup'] else item.kind }}">
+            <td class="history-time" title="{{ item.timestamp or '' }}">{{ item.timestamp[:19]|replace('T', ' ') if item.timestamp else '—' }}{% if item.timestamp %}<small>UTC</small>{% endif %}</td>
+            <td>
+              <strong>{{ item.kindLabel }}</strong>
+              <small>#{{ item.id }}</small>
+            </td>
+            <td>
+              {% set status_class =
+                'ready' if item.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed']
+                else 'error' if item.status in ['failed', 'wrong_content', 'unsafe_file', 'registration_conflict']
+                else 'review' if item.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting']
+                else 'idle'
+              %}
+              <span class="workflow-state workflow-state-{{ status_class }}">{{ item.status|replace('_',' ') }}</span>
+            </td>
+            <td class="book-cell">
+              {% if item.title %}
+                <strong>{{ item.title }}</strong>
+                <small>{{ item.author or 'Unknown author' }}</small>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td class="path">{{ item.path or '—' }}</td>
+            <td class="why-cell">{{ item.message or '—' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="attention-zero">
+        <strong>No durable operation history is recorded yet.</strong>
+        <small>History appears as BookGuard records scans, triage decisions, verification, repairs, cleanup, acquisition, admission, and shared-file correction activity.</small>
+      </div>
+    {% endif %}
+  </section>
+</main>
+<script>
+const historyFilter = document.getElementById("historyKindFilter");
+const historyRows = Array.from(document.querySelectorAll("tr[data-history-kind]"));
+const historyVisibleCount = document.getElementById("historyVisibleCount");
+
+function applyHistoryFilter() {
+  const wanted = historyFilter ? historyFilter.value : "";
+  let visible = 0;
+  for (const row of historyRows) {
+    const show = !wanted || row.dataset.historyKind === wanted;
+    row.hidden = !show;
+    if (show) visible += 1;
+  }
+  if (historyVisibleCount) historyVisibleCount.textContent = String(visible);
+}
+
+if (historyFilter) {
+  historyFilter.addEventListener("change", applyHistoryFilter);
+  applyHistoryFilter();
+}
+</script>
+</body>
+</html>
