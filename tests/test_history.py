@@ -4,7 +4,7 @@ import json
 
 from app.config import settings
 from app.db import add_result, create_scan, finish_scan, init_local_db, local_conn
-from app.history import operation_history
+from app.history import operation_detail, operation_history
 from app.triage import init_triage_db
 from app.verifier import init_verification_db
 
@@ -235,3 +235,123 @@ def test_operation_history_does_not_create_optional_tables(tmp_path):
     assert "hardlink_alias_cleanups" not in after
     assert "content_verifications" not in after
     assert "triage_decisions" not in after
+
+
+def test_operation_detail_reads_all_supported_durable_record_types(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        expected = {
+            "acquisition": "verified",
+            "admission": "registered",
+            "cleanup": "applied",
+            "repair": "applied",
+            "verification": "verified_correct",
+            "hardlink-correction": "applied",
+            "hardlink-cleanup": "applied",
+            "triage": "keep",
+        }
+        details = {
+            kind: operation_detail(kind, 1)
+            for kind in expected
+        }
+    finally:
+        settings.config_dir = original
+
+    for kind, status in expected.items():
+        assert details[kind] is not None
+        assert details[kind]["kind"] == kind
+        assert details[kind]["status"] == status
+        assert details[kind]["historyHref"] == "/history"
+
+    assert details["acquisition"]["title"] == "Bel Canto"
+    assert details["verification"]["title"] == "Bel Canto"
+    assert details["hardlink-correction"]["path"] == "/staging/Bel Canto.epub"
+    assert details["hardlink-cleanup"]["path"] == "/staging/Bel Canto.epub"
+
+
+def test_operation_detail_decodes_stored_evidence(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        with local_conn() as conn:
+            conn.execute(
+                "UPDATE content_verifications SET evidence_json=? WHERE id=1",
+                (json.dumps({"signature": "epub", "safe": True}),),
+            )
+            conn.execute(
+                "UPDATE metadata_repairs SET before_json=?, after_json=? WHERE id=1",
+                (
+                    json.dumps({"title": "Old"}),
+                    json.dumps({"title": "Bel Canto"}),
+                ),
+            )
+            conn.commit()
+
+        verification = operation_detail("verification", 1)
+        repair = operation_detail("repair", 1)
+    finally:
+        settings.config_dir = original
+
+    assert verification is not None
+    assert verification["evidence"][0]["value"]["safe"] is True
+    assert '"safe": true' in verification["evidence"][0]["pretty"]
+    assert repair is not None
+    assert [block["label"] for block in repair["evidence"]] == ["Before", "After"]
+
+
+def test_acquisition_detail_omits_grab_provider_response(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        with local_conn() as conn:
+            conn.execute(
+                "UPDATE ebook_acquisitions SET grab_response_json=? WHERE id=1",
+                (json.dumps({"downloadUrl": "https://provider.invalid/private"}),),
+            )
+            conn.commit()
+        detail = operation_detail("acquisition", 1)
+    finally:
+        settings.config_dir = original
+
+    assert detail is not None
+    assert all(field["name"] != "grab_response_json" for field in detail["fields"])
+    assert all(block["label"] != "Grab response" for block in detail["evidence"])
+    assert detail["notes"]
+    assert "intentionally omitted" in detail["notes"][0]
+
+
+def test_operation_detail_unknown_or_missing_record_returns_none(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        assert operation_detail("not-a-kind", 1) is None
+        assert operation_detail("verification", 999999) is None
+    finally:
+        settings.config_dir = original
+
+
+def test_operation_detail_does_not_create_optional_tables(tmp_path):
+    original = settings.config_dir
+    settings.config_dir = str(tmp_path / "config")
+    try:
+        init_local_db()
+        with local_conn() as conn:
+            before = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+
+        assert operation_detail("hardlink-correction", 1) is None
+        assert operation_detail("verification", 1) is None
+        assert operation_detail("triage", 1) is None
+
+        with local_conn() as conn:
+            after = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+    finally:
+        settings.config_dir = original
+
+    assert after == before
