@@ -91,10 +91,18 @@ def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:
 
     rows = conn.execute(
         """
-        SELECT id, file_id, book_id, author, title, format, stored_path,
+        SELECT id, scan_id, file_id, book_id, author, title, format, stored_path,
                classification, reason_code, risk_score
         FROM scan_results
         WHERE scan_id=?
+          AND (
+              classification IN ('REVIEW', 'REJECT')
+              OR id IN (
+                  SELECT result_id
+                  FROM content_verifications
+                  WHERE verdict != 'VERIFIED_CORRECT'
+              )
+          )
         ORDER BY
             CASE classification
                 WHEN 'REJECT' THEN 0
@@ -128,6 +136,7 @@ def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:
             "path": str(row["stored_path"] or ""),
         }
         evidence = {
+            "scanId": str(row["scan_id"] or ""),
             "scanClassification": classification,
             "scanReasonCode": str(row["reason_code"] or "UNKNOWN"),
             "riskScore": int(row["risk_score"] or 0),
@@ -142,7 +151,20 @@ def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 "updatedAt": verification["updated_at"],
             }
 
-        if verdict == "WRONG_CONTENT":
+        if verdict == "VERIFIED_CORRECT":
+            decisions.append(_decision(
+                **common,
+                state=verdict,
+                decision="no_action",
+                reason_code="VERIFIED_CORRECT_NO_ACTION",
+                reason=(
+                    "Durable content verification now confirms the expected ebook "
+                    "identity, so Observe Mode proposes no remediation."
+                ),
+                next_step="No automatic remediation is proposed for this result.",
+                evidence=evidence,
+            ))
+        elif verdict == "WRONG_CONTENT":
             decisions.append(_decision(
                 **common,
                 state=verdict,
@@ -243,7 +265,6 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
                r.title, r.author, r.stored_path
         FROM ebook_acquisitions a
         LEFT JOIN scan_results r ON r.id=a.result_id
-        WHERE lower(a.status) != 'finalized'
         ORDER BY a.id DESC
         LIMIT ?
         """,
@@ -336,6 +357,16 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 ),
                 evidence=evidence,
             ))
+        elif status == "finalized":
+            decisions.append(_decision(
+                **common,
+                state=status,
+                decision="no_action",
+                reason_code="ACQUISITION_FINALIZED",
+                reason="The acquisition is already finalized.",
+                next_step="No automatic work is proposed for this acquisition.",
+                evidence=evidence,
+            ))
         else:
             decisions.append(_decision(
                 **common,
@@ -365,7 +396,6 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
                a.stored_path, a.local_path, a.error, r.title, r.author
         FROM ebook_admissions a
         LEFT JOIN scan_results r ON r.id=a.result_id
-        WHERE lower(a.status) != 'registered'
         ORDER BY a.id DESC
         LIMIT ?
         """,
@@ -388,7 +418,17 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
             "status": status,
             "recordedError": str(row["error"] or ""),
         }
-        if status == "scan_requested":
+        if status == "registered":
+            decisions.append(_decision(
+                **common,
+                state=status,
+                decision="no_action",
+                reason_code="ADMISSION_REGISTERED",
+                reason="The admitted ebook is already registered to the intended book.",
+                next_step="No automatic work is proposed for this admission.",
+                evidence=evidence,
+            ))
+        elif status == "scan_requested":
             decisions.append(_decision(
                 **common,
                 state=status,
@@ -641,6 +681,13 @@ def observe_attention_items(limit: int = 200) -> list[dict[str, Any]]:
             (limit * 4,),
         ).fetchall()
 
+    latest_scan = None
+    with local_conn() as conn:
+        scan_row = conn.execute(
+            "SELECT id FROM scans ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        latest_scan = str(scan_row["id"]) if scan_row else None
+
     seen: set[tuple[str, str]] = set()
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -650,6 +697,12 @@ def observe_attention_items(limit: int = 200) -> list[dict[str, Any]]:
             continue
         seen.add(subject)
         if decoded["decision"] != "attention":
+            continue
+        if (
+            decoded["subjectKind"] == "result"
+            and latest_scan is not None
+            and str(decoded["evidence"].get("scanId") or "") != latest_scan
+        ):
             continue
         workflow = (
             "/triage#acquisitionPanel"
