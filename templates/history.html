@@ -53,6 +53,7 @@
         <option value="repair">Metadata repair</option>
         <option value="hardlink">Hard-link correction / cleanup</option>
         <option value="triage">Triage decision</option>
+        <option value="observe">Observe Mode decision</option>
       </select>
       <small>Filtering is local to this read-only page and does not change BookGuard state.</small>
     </div>
@@ -75,9 +76,9 @@
             </td>
             <td>
               {% set status_class =
-                'ready' if item.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed']
+                'ready' if item.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed', 'no_action']
                 else 'error' if item.status in ['failed', 'wrong_content', 'unsafe_file', 'registration_conflict']
-                else 'review' if item.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting']
+                else 'review' if item.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting', 'attention']
                 else 'idle'
               %}
               <span class="workflow-state workflow-state-{{ status_class }}">{{ item.status|replace('_',' ') }}</span>
