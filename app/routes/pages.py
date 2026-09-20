@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import __version__
+from ..attention import attention_snapshot
 from ..config import settings
 from ..db import (
     latest_counts,
@@ -62,6 +63,18 @@ def dashboard(
             "poll_ms": settings.dashboard_poll_ms,
             "missing_cleanup": missing_cleanup,
             "cleanup_history": recent_cleanup_actions(50) if classification == "MISSING" else [],
+            "version": __version__,
+        },
+    )
+
+
+@router.get("/attention", response_class=HTMLResponse)
+def attention_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="attention.html",
+        context={
+            "attention": attention_snapshot(),
             "version": __version__,
         },
     )
