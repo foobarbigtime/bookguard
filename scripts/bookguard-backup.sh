@@ -85,7 +85,14 @@ case "$command_name" in
       exit 1
     fi
 
-    docker run "${common_args[@]}"       -v "$config_source:/config:ro"       -v "$(readlink -f "$backup_root"):/backups"       "$image_id"       python -m tools.bookguard_backup create         --config-dir /config         --backup-root /backups
+    resolved_backup_root="$(readlink -f "$backup_root")"
+    if ! docker run "${common_args[@]}" -v "$resolved_backup_root:/backups" "$image_id" python -c 'import os,sys; sys.exit(0 if os.access("/backups", os.W_OK | os.X_OK) else 1)'; then
+      echo "Backup root is not writable by BookGuard runtime user $runtime_user: $resolved_backup_root" >&2
+      echo "Adjust only that backup directory's ownership/permissions, then retry." >&2
+      exit 1
+    fi
+
+    docker run "${common_args[@]}" -v "$config_source:/config:ro" -v "$resolved_backup_root:/backups" "$image_id" python -m tools.bookguard_backup create --config-dir /config --backup-root /backups
     ;;
 
   validate)
