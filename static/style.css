@@ -129,6 +129,13 @@ td { font-size: .86rem; }
 .candidate-meta { display: flex; flex-wrap: wrap; gap: .35rem .8rem; margin-top: .35rem; color: var(--muted); font-size: .76rem; }
 .candidate-reason { margin-top: .35rem; color: var(--muted); font-size: .8rem; }
 
+/* Operator attention dashboard */
+.attention-summary { display:grid; gap:.8rem; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); margin-bottom:1rem; }
+.attention-table { min-width:1050px; }
+.attention-zero { padding:2rem 1rem; text-align:center; }
+.attention-zero strong { display:block; margin-bottom:.35rem; color:#a6e3bc; }
+.attention-table .button-link { display:inline-block; border-color:var(--border); background:#101820; white-space:nowrap; }
+
 /* Settings */
 .settings-main { max-width: 1250px; }
 .settings-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; margin-bottom: 1rem; }
