@@ -85,13 +85,62 @@ def validate_runtime(payload: Any) -> dict[str, Any]:
     }
 
 
+
+def validate_clamav_runtime(payload: Any) -> dict[str, Any]:
+    container = _bookguard_container(payload)
+    host = container.get("HostConfig") or {}
+    mounts = container.get("Mounts") or []
+    security_opt = [str(item) for item in (host.get("SecurityOpt") or [])]
+    port_bindings = host.get("PortBindings") or {}
+
+    mount_targets = {
+        str(item.get("Destination") or "")
+        for item in mounts
+        if isinstance(item, dict)
+    }
+    media_targets = {
+        "/books",
+        "/audiobooks",
+        "/staging",
+        "/quarantine",
+        "/action-books",
+        "/admission-books",
+        "/bindery",
+        "/config",
+    }
+
+    checks = {
+        "notPrivileged": not bool(host.get("Privileged")),
+        "noNewPrivilegesEnabled": any(
+            item == "no-new-privileges:true" or item == "no-new-privileges"
+            for item in security_opt
+        ),
+        "noPublishedPorts": not bool(port_bindings),
+        "noMediaOrConfigMounts": not bool(mount_targets & media_targets),
+        "signatureDatabaseOnly": all(
+            target == "/var/lib/clamav" for target in mount_targets
+        ),
+    }
+
+    failed = [name for name, ok in checks.items() if not ok]
+    if failed:
+        raise UpgradeSafetyError(
+            "Deployed ClamAV hardening checks failed: " + ", ".join(failed)
+        )
+
+    return {
+        "ok": True,
+        "checks": checks,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Validate BookGuard's deployed runtime hardening."
     )
     parser.add_argument(
         "command",
-        choices=("runtime",),
+        choices=("runtime", "clamav-runtime"),
     )
     args = parser.parse_args(argv)
 
@@ -99,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
         payload = json.load(sys.stdin)
         if args.command == "runtime":
             result = validate_runtime(payload)
+        elif args.command == "clamav-runtime":
+            result = validate_clamav_runtime(payload)
         else:  # pragma: no cover - argparse owns this branch
             raise UpgradeSafetyError("Unsupported command.")
     except Exception as exc:
