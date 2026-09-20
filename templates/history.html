@@ -33,7 +33,7 @@
     <div class="section-title row-between">
       <div>
         <h2>Operation history</h2>
-        <p>Newest durable operation state first across acquisition, admission, cleanup, verification, correction, repair, and triage.</p>
+        <p>Newest durable operation state first across acquisition, admission, cleanup, verification, correction, repair, triage, and Observe Mode decisions.</p>
       </div>
       <div class="history-meta">
         <strong id="historyVisibleCount">{{ history.count }}</strong>
@@ -101,7 +101,7 @@
     {% else %}
       <div class="attention-zero">
         <strong>No durable operation history is recorded yet.</strong>
-        <small>History appears as BookGuard records scans, triage decisions, verification, repairs, cleanup, acquisition, admission, and shared-file correction activity.</small>
+        <small>History appears as BookGuard records scans, triage decisions, verification, repairs, cleanup, acquisition, admission, shared-file correction, and Observe Mode activity.</small>
       </div>
     {% endif %}
   </section>
