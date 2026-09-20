@@ -235,6 +235,16 @@ _OPERATION_HELP: dict[tuple[str, str], tuple[str, str, str]] = {
         "BookGuard cannot prove that cleanup of a staging hard-link alias completed.",
         "Inspect the cleanup snapshot and confirm the retained library file before explicitly recovering the staging-link cleanup.",
     ),
+    ("cleanup", "failed"): (
+        "Cleanup failed",
+        "BookGuard could not prove that the requested cleanup completed safely.",
+        "Review the recorded error and confirm the retained library media before retrying any cleanup action.",
+    ),
+    ("repair", "failed"): (
+        "Metadata repair failed",
+        "The guarded metadata repair did not complete successfully.",
+        "Review the recorded error and before/after evidence before deciding whether to retry or undo any related change.",
+    ),
     ("verification", "insufficient_evidence"): (
         "Verification evidence is insufficient",
         "The file may be structurally safe, but BookGuard does not have enough identity evidence to prove it belongs to the expected book.",
@@ -261,7 +271,11 @@ def operation_guidance(
     normalized_kind = str(kind or "").casefold().replace("-", "_")
     normalized_status = str(status or "").casefold()
     item = _OPERATION_HELP.get((normalized_kind, normalized_status))
-    if item is None and normalized_kind in {"hardlink_correction", "hardlink_cleanup"}:
+    if (
+        item is None
+        and normalized_kind in {"hardlink_correction", "hardlink_cleanup"}
+        and normalized_status not in {"applied", "cancelled", "complete", "completed"}
+    ):
         item = _OPERATION_HELP.get((normalized_kind, "*"))
     if item is None:
         return None
