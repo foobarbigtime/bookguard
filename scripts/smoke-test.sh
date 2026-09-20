@@ -89,7 +89,24 @@ docker run \
 echo
 echo "=== ISOLATED PROCESS-BOUNDARY RECOVERY ==="
 RECOVERY_ROOT=$(mktemp -d -t bookguard-recovery-XXXXXX)
-trap 'rm -rf "${RECOVERY_ROOT}"' EXIT
+cleanup_recovery_root() {
+  if [[ -d "${RECOVERY_ROOT}" ]]; then
+    # The isolated containers intentionally run as BookGuard's non-root UID
+    # and therefore own files created in the bind-mounted fixture. Use the
+    # already-built smoke image as root, with no network, only to remove that
+    # temporary fixture before the host removes its empty directory.
+    docker run \
+      --rm \
+      --network none \
+      --read-only \
+      --mount "type=bind,source=${RECOVERY_ROOT},target=/recovery" \
+      "${SMOKE_IMAGE}" \
+      sh -c 'rm -rf /recovery/* /recovery/.[!.]* /recovery/..?*' \
+      >/dev/null 2>&1 || true
+    rm -rf "${RECOVERY_ROOT}" || true
+  fi
+}
+trap cleanup_recovery_root EXIT
 chmod 0777 "${RECOVERY_ROOT}"
 
 docker run \
@@ -112,7 +129,7 @@ docker run \
   "${SMOKE_IMAGE}" \
   python -m tools.smoke_test recovery resume /recovery
 
-rm -rf "${RECOVERY_ROOT}"
+cleanup_recovery_root
 trap - EXIT
 
 echo
