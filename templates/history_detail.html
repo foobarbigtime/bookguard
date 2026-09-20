@@ -71,6 +71,13 @@
       </article>
     </div>
 
+    {% if detail.summary %}
+      <div class="history-detail-summary-note">
+        <strong>What happened</strong>
+        <p>{{ detail.summary }}</p>
+      </div>
+    {% endif %}
+
     {% if detail.error %}
       <div class="history-detail-error">
         <strong>Recorded error</strong>
@@ -95,7 +102,11 @@
       {% for field in detail['fields'] %}
         <div class="history-detail-field">
           <span>{{ field.label }}</span>
-          <strong>{{ field.value }}</strong>
+          {% if field.name.endswith('_at') and field.value|string|length >= 19 %}
+            <strong title="{{ field.value }}">{{ (field.value|string)[:19]|replace('T', ' ') }} UTC</strong>
+          {% else %}
+            <strong>{{ field.value }}</strong>
+          {% endif %}
         </div>
       {% endfor %}
       </div>
