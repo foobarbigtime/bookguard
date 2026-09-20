@@ -462,8 +462,26 @@ def _detail_book(row: dict[str, Any]) -> dict[str, str]:
     author = str(row.get("author") or "")
     if title or author:
         return {"title": title, "author": author}
+
     result_id = row.get("result_id")
-    return _book_context(int(result_id)) if result_id else {"title": "", "author": ""}
+    if result_id:
+        return _book_context(int(result_id))
+
+    raw_snapshot = row.get("snapshot_json")
+    if raw_snapshot:
+        try:
+            snapshot = json.loads(str(raw_snapshot))
+        except json.JSONDecodeError:
+            snapshot = {}
+        if isinstance(snapshot, dict):
+            retained = snapshot.get("retained")
+            if isinstance(retained, dict):
+                title = str(retained.get("title") or "")
+                author = str(retained.get("author") or "")
+                if title or author:
+                    return {"title": title, "author": author}
+
+    return {"title": "", "author": ""}
 
 
 def _detail_path(row: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
@@ -546,6 +564,20 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
     path = _detail_path(raw, evidence)
 
     notes = []
+    summary = ""
+    if kind in {"hardlink-correction", "hardlink-cleanup"}:
+        snapshot_value, _ = _decode_json_detail(raw.get("snapshot_json"))
+        if isinstance(snapshot_value, dict):
+            wrong = snapshot_value.get("wrong")
+            retained = snapshot_value.get("retained")
+            if isinstance(wrong, dict) and isinstance(retained, dict):
+                wrong_title = str(wrong.get("title") or "unknown book")
+                retained_title = str(retained.get("title") or "unknown book")
+                summary = (
+                    f"Shared EPUB association corrected away from {wrong_title} "
+                    f"and retained for {retained_title}."
+                )
+
     if kind == "acquisition" and raw.get("grab_response_json"):
         notes.append(
             "The stored grab-provider response is intentionally omitted from this "
@@ -561,6 +593,7 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
         "author": book["author"],
         "path": path,
         "error": error,
+        "summary": summary,
         "fields": fields,
         "evidence": evidence,
         "notes": notes,
