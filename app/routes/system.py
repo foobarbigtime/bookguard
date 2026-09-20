@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .. import __version__
 from ..config import Settings, settings
+from ..diagnostics import diagnostics_snapshot
 from ..db import (
     clear_persisted_settings,
     latest_counts,
@@ -89,6 +90,11 @@ def api_status():
         "poll_ms": settings.dashboard_poll_ms,
         "repair_mode": settings.metadata_repair_mode,
     }
+
+
+@router.get("/api/diagnostics")
+def api_diagnostics():
+    return diagnostics_snapshot()
 
 
 @router.get("/api/settings")
