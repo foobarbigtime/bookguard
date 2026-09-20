@@ -79,5 +79,7 @@ def test_diagnostics_snapshot_is_secret_free(monkeypatch):
     assert result["secretsIncluded"] is False
     assert result["gates"]["malwareScanningEnabled"] is True
     assert result["gates"]["malwareScannerConfigured"] is True
+    assert result["gateCards"][0]["label"] == "Bindery actions"
+    assert result["gateCards"][-1]["label"] == "Malware scanner configured"
     assert result["sections"][0]["explanations"][0]["key"] == "binderyExternalImport"
     assert result["sections"][2]["ready"] is True
