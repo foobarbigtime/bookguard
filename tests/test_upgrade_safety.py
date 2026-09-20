@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -133,3 +135,28 @@ def test_clamav_runtime_rejects_media_mount():
 
     with pytest.raises(UpgradeSafetyError, match="noMediaOrConfigMounts"):
         validate_clamav_runtime(payload)
+
+
+def test_clamav_runtime_requires_signature_database_volume():
+    payload = _clamav_payload()
+    payload[0]["Mounts"] = []
+
+    with pytest.raises(UpgradeSafetyError, match="signatureDatabasePresent"):
+        validate_clamav_runtime(payload)
+
+
+def test_safer_upgrade_shell_syntax_and_safety_contract():
+    completed = subprocess.run(
+        ["bash", "-n", "scripts/safer-upgrade.sh"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    script = Path("scripts/safer-upgrade.sh").read_text(encoding="utf-8")
+    assert "DEPLOY_BOOKGUARD_UPGRADE" in script
+    assert 'branch" != "main"' in script
+    assert "compose.clamav.yaml" in script
+    assert "up -d --no-build" in script
+    assert "No automatic rollback was attempted" in script
