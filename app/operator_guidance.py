@@ -143,6 +143,10 @@ def _humanize(key: str) -> str:
     return "".join(output).replace("_", " ").strip().capitalize()
 
 
+def humanize_key(key: str) -> str:
+    return _humanize(key)
+
+
 def explain_blockers(blockers: list[str] | tuple[str, ...] | None) -> list[dict[str, str]]:
     explained = []
     for key in blockers or []:
