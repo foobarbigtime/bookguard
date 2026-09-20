@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import stat
 from typing import Any
@@ -261,6 +262,97 @@ def validate_backup(bundle_dir: str | Path) -> dict[str, Any]:
     }
 
 
+
+def validate_restore(
+    bundle_dir: str | Path,
+    restore_dir: str | Path,
+) -> dict[str, Any]:
+    """Prove a validated backup can initialize under the current BookGuard code.
+
+    The backup bundle itself remains read-only. All migration/startup writes are
+    directed to a disposable restore directory supplied by the caller.
+    """
+    backup = validate_backup(bundle_dir)
+    bundle = Path(bundle_dir).resolve()
+    source = bundle / DATABASE_NAME
+    source_hash_before = _sha256(source)
+
+    restore_root = Path(restore_dir)
+    if restore_root.exists():
+        try:
+            info = restore_root.lstat()
+        except OSError as exc:
+            raise BackupError(f"Restore validation directory is unavailable: {exc}") from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise BackupError("Restore validation directory must not be a symlink.")
+        if not stat.S_ISDIR(info.st_mode):
+            raise BackupError("Restore validation path must be a directory.")
+        try:
+            if any(restore_root.iterdir()):
+                raise BackupError("Restore validation directory must be empty.")
+        except OSError as exc:
+            raise BackupError(f"Unable to inspect restore validation directory: {exc}") from exc
+    else:
+        try:
+            restore_root.mkdir(parents=True, mode=0o700)
+        except OSError as exc:
+            raise BackupError(f"Unable to create restore validation directory: {exc}") from exc
+
+    restore_root = restore_root.resolve()
+    if restore_root == bundle or bundle in restore_root.parents:
+        raise BackupError("Restore validation directory must be separate from the backup bundle.")
+
+    restored_db = restore_root / DATABASE_NAME
+    try:
+        with source.open("rb") as src, restored_db.open("xb") as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+            dst.flush()
+            os.fsync(dst.fileno())
+    except OSError as exc:
+        raise BackupError(f"Unable to stage restore validation copy: {exc}") from exc
+
+    restored_hash_before = _sha256(restored_db)
+    if restored_hash_before != source_hash_before:
+        raise BackupError("Restore validation copy does not match the validated backup SHA-256.")
+
+    from app.config import settings
+    from app.db import init_local_db, load_persisted_settings
+
+    original_config_dir = settings.config_dir
+    try:
+        settings.config_dir = str(restore_root)
+        init_local_db()
+        persisted_settings = load_persisted_settings()
+    except Exception as exc:
+        raise BackupError(
+            f"Current BookGuard code could not initialize the restored database: {exc}"
+        ) from exc
+    finally:
+        settings.config_dir = original_config_dir
+
+    restored_report = _inspect_database(restored_db)
+    source_hash_after = _sha256(source)
+    if source_hash_after != source_hash_before:
+        raise BackupError("Backup database changed during restore validation.")
+
+    return {
+        "ok": True,
+        "bundle": backup["bundle"],
+        "bookguardVersion": backup.get("bookguardVersion"),
+        "currentApplicationVersion": __version__,
+        "backupUnchanged": True,
+        "restoredDatabase": {
+            "integrity": restored_report["integrity"],
+            "userVersion": restored_report["userVersion"],
+            "tables": restored_report["tables"],
+            "bytes": restored_db.stat().st_size,
+        },
+        "startupInitialization": True,
+        "persistedSettingCount": len(persisted_settings),
+        "productionStateTouched": False,
+        "disposableRestore": True,
+    }
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Create or validate BookGuard database backup bundles."
@@ -281,13 +373,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     validate_parser.add_argument("bundle")
 
+    restore_parser = subparsers.add_parser(
+        "restore-validate",
+        help="Validate restore compatibility in a disposable directory.",
+    )
+    restore_parser.add_argument("bundle")
+    restore_parser.add_argument("--restore-dir", required=True)
+
     args = parser.parse_args(argv)
     try:
-        result = (
-            create_backup(args.config_dir, args.backup_root, name=args.name)
-            if args.command == "create"
-            else validate_backup(args.bundle)
-        )
+        if args.command == "create":
+            result = create_backup(args.config_dir, args.backup_root, name=args.name)
+        elif args.command == "validate":
+            result = validate_backup(args.bundle)
+        else:
+            result = validate_restore(args.bundle, args.restore_dir)
     except Exception as exc:
         print(
             json.dumps(
