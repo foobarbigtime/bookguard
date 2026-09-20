@@ -243,9 +243,12 @@ verification endpoints remain available.
 
 Observe decisions are idempotently journaled in `automation_observations`,
 appear in unified History, and the latest decision for a subject appears in
-Attention when the decision is `attention`. A later safe/terminal state records
-a resolving `no_action` decision so stale Observe Mode attention does not remain
-active.
+Attention when the decision is `attention`. Missing durable ebook verification
+is recorded as `would_verify_result` rather than Attention because verification
+is a read-only prerequisite that a future Automatic Mode can perform safely.
+Observe Mode itself still does not open the library file. A later safe/terminal
+state records a resolving `no_action` decision so stale Observe Mode attention
+does not remain active.
 
 ```text
 GET  /api/automatic/observe
