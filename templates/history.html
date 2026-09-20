@@ -33,7 +33,7 @@
     <div class="section-title row-between">
       <div>
         <h2>Operation history</h2>
-        <p>Newest durable operation state first across acquisition, admission, cleanup, verification, correction, repair, and triage.</p>
+        <p>Newest durable operation state first across acquisition, admission, cleanup, verification, correction, repair, triage, and Observe Mode decisions.</p>
       </div>
       <div class="history-meta">
         <strong id="historyVisibleCount">{{ history.count }}</strong>
@@ -53,6 +53,7 @@
         <option value="repair">Metadata repair</option>
         <option value="hardlink">Hard-link correction / cleanup</option>
         <option value="triage">Triage decision</option>
+        <option value="observe">Observe Mode decision</option>
       </select>
       <small>Filtering is local to this read-only page and does not change BookGuard state.</small>
     </div>
@@ -75,9 +76,9 @@
             </td>
             <td>
               {% set status_class =
-                'ready' if item.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed']
+                'ready' if item.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed', 'no_action']
                 else 'error' if item.status in ['failed', 'wrong_content', 'unsafe_file', 'registration_conflict']
-                else 'review' if item.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting']
+                else 'review' if item.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting', 'attention']
                 else 'idle'
               %}
               <span class="workflow-state workflow-state-{{ status_class }}">{{ item.status|replace('_',' ') }}</span>
@@ -100,7 +101,7 @@
     {% else %}
       <div class="attention-zero">
         <strong>No durable operation history is recorded yet.</strong>
-        <small>History appears as BookGuard records scans, triage decisions, verification, repairs, cleanup, acquisition, admission, and shared-file correction activity.</small>
+        <small>History appears as BookGuard records scans, triage decisions, verification, repairs, cleanup, acquisition, admission, shared-file correction, and Observe Mode activity.</small>
       </div>
     {% endif %}
   </section>

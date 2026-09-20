@@ -16,6 +16,7 @@ _TABLES = {
     "hardlink_corrections",
     "hardlink_alias_cleanups",
     "triage_decisions",
+    "automation_observations",
 }
 
 
@@ -331,6 +332,35 @@ def _triage_events(conn, limit: int) -> list[dict[str, Any]]:
     ]
 
 
+def _observe_events(conn, limit: int) -> list[dict[str, Any]]:
+    if not _table_exists(conn, "automation_observations"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, decision, reason, title, author, path, last_seen_at
+        FROM automation_observations
+        ORDER BY last_seen_at DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [
+        _event(
+            kind="observe",
+            label="Observe decision",
+            record_id=row["id"],
+            status=row["decision"],
+            timestamp=row["last_seen_at"],
+            title=str(row["title"] or ""),
+            author=str(row["author"] or ""),
+            path=str(row["path"] or ""),
+            message=str(row["reason"] or ""),
+            detail_href=f"/history/observe/{row['id']}",
+        )
+        for row in rows
+    ]
+
+
 def operation_history(limit: int = 250) -> dict[str, Any]:
     """Read durable operation records without creating tables or mutating state."""
     limit = max(1, min(int(limit), 1000))
@@ -345,6 +375,7 @@ def operation_history(limit: int = 250) -> dict[str, Any]:
             + _verification_events(conn, per_source)
             + _hardlink_events(conn, per_source)
             + _triage_events(conn, per_source)
+            + _observe_events(conn, per_source)
         )
 
     items.sort(
@@ -427,6 +458,14 @@ _DETAIL_SPECS: dict[str, dict[str, Any]] = {
         "json": {},
         "omit": {"signature"},
     },
+    "observe": {
+        "table": "automation_observations",
+        "pk": "id",
+        "label": "Observe decision",
+        "status": "decision",
+        "json": {"evidence_json": "Observed evidence"},
+        "omit": {"signature"},
+    },
 }
 
 
@@ -492,6 +531,7 @@ def _detail_path(row: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
         "local_path",
         "staged_relative_path",
         "observed_relative_path",
+        "path",
     ):
         value = str(row.get(key) or "").strip()
         if value:
@@ -566,6 +606,7 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
 
     notes = []
     summary = ""
+    guidance = operation_guidance(kind, status, error)
     if kind in {"hardlink-correction", "hardlink-cleanup"}:
         snapshot_value, _ = _decode_json_detail(raw.get("snapshot_json"))
         if isinstance(snapshot_value, dict):
@@ -578,6 +619,30 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
                     f"Shared EPUB association corrected away from {wrong_title} "
                     f"and retained for {retained_title}."
                 )
+
+    if kind == "observe":
+        summary = (
+            f"Observe Mode proposed: {status.replace('_', ' ')}. "
+            "This durable record did not authorize or perform an external mutation."
+        )
+        observed_evidence = next(
+            (
+                block.get("value")
+                for block in evidence
+                if block.get("label") == "Observed evidence"
+                and isinstance(block.get("value"), dict)
+            ),
+            {},
+        )
+        if status == "attention":
+            guidance = {
+                "label": str(raw.get("reason_code") or "Observe Mode attention")
+                .replace("_", " ")
+                .title(),
+                "why": str(raw.get("reason") or ""),
+                "nextStep": str(observed_evidence.get("nextStep") or ""),
+                "recordedError": "",
+            }
 
     if kind == "acquisition" and raw.get("grab_response_json"):
         notes.append(
@@ -595,7 +660,7 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
         "path": path,
         "error": error,
         "summary": summary,
-        "guidance": operation_guidance(kind, status, error),
+        "guidance": guidance,
         "fields": fields,
         "evidence": evidence,
         "notes": notes,

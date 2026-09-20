@@ -20,6 +20,7 @@ DEFAULT_AUTHOR_ALIASES = [
 ]
 
 REPAIR_MODES = {"off", "preview", "safe"}
+AUTOMATION_MODES = {"manual", "observe"}
 DEFAULT_MAX_STAGED_EBOOK_BYTES = 512 * 1024 * 1024
 DEFAULT_ACQUISITION_COORDINATOR_INTERVAL_SECONDS = 10
 DEFAULT_MALWARE_SCAN_TIMEOUT_SECONDS = 60
@@ -108,6 +109,7 @@ class AutomationSettings:
     the current environment without mixing them into persisted UI settings.
     """
 
+    automation_mode: str
     staging_root: str
     bindery_drop_folder: str
     automatic_reacquisition: bool
@@ -122,6 +124,12 @@ class AutomationSettings:
 
 
 def load_automation_settings() -> AutomationSettings:
+    automation_mode = os.getenv("BOOKGUARD_AUTOMATION_MODE", "manual").strip().lower()
+    if automation_mode not in AUTOMATION_MODES:
+        raise ConfigurationError(
+            "BOOKGUARD_AUTOMATION_MODE must be one of: manual, observe."
+        )
+
     raw_limit = os.getenv("BOOKGUARD_MAX_STAGED_EBOOK_BYTES", "").strip()
     if not raw_limit:
         raw_limit = str(DEFAULT_MAX_STAGED_EBOOK_BYTES)
@@ -137,6 +145,7 @@ def load_automation_settings() -> AutomationSettings:
         )
 
     return AutomationSettings(
+        automation_mode=automation_mode,
         staging_root=os.getenv("BOOKGUARD_STAGING_ROOT", "/staging").strip() or "/staging",
         bindery_drop_folder=os.getenv("BOOKGUARD_BINDERY_DROP_FOLDER", "").strip(),
         automatic_reacquisition=_bool("BOOKGUARD_AUTOMATIC_REACQUISITION", False),

@@ -276,8 +276,10 @@ def diagnostics_snapshot() -> dict[str, Any]:
     )
 
     automation = None
+    automation_mode = "invalid"
     try:
         automation = load_automation_settings()
+        automation_mode = automation.automation_mode
         deployment_error = None
         gates = {
             "actionsEnabled": bool(settings.allow_actions),
@@ -299,6 +301,7 @@ def diagnostics_snapshot() -> dict[str, Any]:
     return {
         "ok": deployment_error is None,
         "deploymentError": deployment_error,
+        "automationMode": automation_mode,
         "gates": gates,
         "gateCards": _gate_cards(gates),
         "sections": sections,

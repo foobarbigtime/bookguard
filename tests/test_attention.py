@@ -40,6 +40,7 @@ def test_attention_snapshot_collects_only_intervention_states(monkeypatch):
         "acquisition_coordinator_status",
         lambda: {"state": "attention_required", "lastError": "explicit recovery required", "lastRunAt": "2026-09-20T03:00:00Z"},
     )
+    monkeypatch.setattr(attention, "observe_attention_items", lambda limit: [])
 
     snapshot = attention.attention_snapshot()
 
@@ -50,6 +51,7 @@ def test_attention_snapshot_collects_only_intervention_states(monkeypatch):
         "hardlinkCorrections": 1,
         "hardlinkCleanups": 1,
         "coordinator": 1,
+        "observe": 0,
     }
     statuses = {(item["kind"], item["status"]) for item in snapshot["items"]}
     assert ("acquisition", "cleanup_required") in statuses
@@ -85,6 +87,7 @@ def test_attention_snapshot_zero_state(monkeypatch):
     monkeypatch.setattr(attention, "recent_ebook_admissions", lambda limit: [])
     monkeypatch.setattr(attention, "_journal_rows", lambda table, id_column: [])
     monkeypatch.setattr(attention, "acquisition_coordinator_status", lambda: {"state": "idle"})
+    monkeypatch.setattr(attention, "observe_attention_items", lambda limit: [])
 
     snapshot = attention.attention_snapshot()
 
@@ -105,6 +108,7 @@ def test_attention_template_renders_item_list():
                 "hardlinkCorrections": 0,
                 "hardlinkCleanups": 0,
                 "coordinator": 0,
+                "observe": 0,
             },
             "generatedAt": "2026-09-20T11:30:00Z",
             "items": [

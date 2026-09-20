@@ -205,6 +205,28 @@ def init_local_db() -> None:
                 error TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS automation_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signature TEXT NOT NULL UNIQUE,
+                policy_version TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                subject_kind TEXT NOT NULL,
+                subject_id TEXT NOT NULL,
+                result_id INTEGER,
+                book_id INTEGER,
+                title TEXT NOT NULL DEFAULT '',
+                author TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                reason_code TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                observed_count INTEGER NOT NULL DEFAULT 1
+            );
+
             CREATE TABLE IF NOT EXISTS ebook_acquisitions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 result_id INTEGER NOT NULL,
@@ -269,6 +291,12 @@ def init_local_db() -> None:
                 ON ebook_admissions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_admissions_result
                 ON ebook_admissions(result_id);
+            CREATE INDEX IF NOT EXISTS idx_automation_observations_seen
+                ON automation_observations(last_seen_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_automation_observations_subject
+                ON automation_observations(subject_kind, subject_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_automation_observations_decision
+                ON automation_observations(decision, last_seen_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_created
                 ON ebook_acquisitions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_result

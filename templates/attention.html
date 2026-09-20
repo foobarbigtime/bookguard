@@ -50,6 +50,11 @@
       <strong>{{ attention.summary.hardlinkCorrections + attention.summary.hardlinkCleanups }}</strong>
       <small>Unresolved hard-link correction or staging-link cleanup records.</small>
     </article>
+    <article class="card">
+      <span class="label">Observe Mode</span>
+      <strong>{{ attention.summary.observe or 0 }}</strong>
+      <small>Latest simulated automation decisions that require operator attention.</small>
+    </article>
   </section>
 
   <section class="table-card">

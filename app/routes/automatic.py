@@ -23,13 +23,31 @@ from ..admission import (
 )
 from ..automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
 from ..bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
+from ..config import ConfigurationError, load_automation_settings
 from ..db import result_by_id
+from ..observe import observe_snapshot, run_observe_cycle
 from ..preimport import PreImportSafetyError, preimport_readiness
 from ..staging import StagingSafetyError, list_staged_ebooks, verify_staged_ebook
 from .models import ConfirmationRequest, require_confirmation
 
 
 router = APIRouter(prefix="/api/automatic", tags=["automatic maintenance"])
+
+
+def _require_mutation_mode() -> None:
+    """Keep all automatic-maintenance mutation endpoints inert in Observe Mode."""
+    try:
+        configured = load_automation_settings()
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if configured.automation_mode == "observe":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Observe Mode is active. Automatic-maintenance mutation endpoints "
+                "are disabled until BOOKGUARD_AUTOMATION_MODE is returned to manual."
+            ),
+        )
 
 
 class StagedVerificationRequest(BaseModel):
@@ -43,6 +61,28 @@ class StagedAdmissionRequest(StagedVerificationRequest):
 class EbookAcquisitionRequest(BaseModel):
     candidateGuid: str = Field(min_length=1, max_length=4096)
     confirm: str = Field(min_length=1, max_length=64)
+
+
+@router.get("/observe")
+def api_automatic_observe(limit: int = 100):
+    """Return durable Observe Mode decisions without running a new cycle."""
+    try:
+        return observe_snapshot(limit)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/observe/run")
+def api_automatic_observe_run(payload: ConfirmationRequest):
+    """Record what Automatic Mode would do without invoking mutation workflows."""
+    require_confirmation(payload, "RUN_OBSERVE_MODE")
+    try:
+        result = run_observe_cycle()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if not result.get("enabled"):
+        raise HTTPException(status_code=409, detail=str(result.get("message") or "Observe Mode is disabled."))
+    return result
 
 
 @router.get("/bindery-status")
@@ -124,6 +164,7 @@ def api_automatic_start_acquisition(
     payload: EbookAcquisitionRequest,
 ):
     """Freshly revalidate and grab one explicitly selected ebook release."""
+    _require_mutation_mode()
     require_confirmation(payload, "START_EBOOK_ACQUISITION")
     item = _automatic_result(result_id)
     try:
@@ -138,6 +179,7 @@ def api_automatic_reconcile_acquisition(
     payload: ConfirmationRequest,
 ):
     """Observe Bindery and verify an unambiguous staged ebook."""
+    _require_mutation_mode()
     require_confirmation(payload, "RECONCILE_EBOOK_ACQUISITION")
     try:
         return reconcile_ebook_acquisition(acquisition_id)
@@ -151,6 +193,7 @@ def api_automatic_admit_acquisition(
     payload: ConfirmationRequest,
 ):
     """Submit one verified acquisition to guarded direct admission."""
+    _require_mutation_mode()
     require_confirmation(payload, "ADMIT_EBOOK_ACQUISITION")
     try:
         return admit_ebook_acquisition(acquisition_id)
@@ -164,6 +207,7 @@ def api_automatic_finalize_acquisition(
     payload: ConfirmationRequest,
 ):
     """Finalize a registered admission without deleting download-client data."""
+    _require_mutation_mode()
     require_confirmation(payload, "FINALIZE_EBOOK_ACQUISITION")
     try:
         return finalize_ebook_acquisition(acquisition_id)
@@ -180,6 +224,7 @@ def api_automatic_admissions(limit: int = 100):
 @router.post("/results/{result_id}/admit-staged-ebook")
 def api_automatic_admit_staged_ebook(result_id: int, payload: StagedAdmissionRequest):
     """Verify and atomically publish one staged ebook to its former path."""
+    _require_mutation_mode()
     require_confirmation(payload, "ADMIT_STAGED_EBOOK")
     item = _automatic_result(result_id)
     try:
@@ -194,6 +239,7 @@ def api_automatic_reconcile_admission(
     payload: ConfirmationRequest,
 ):
     """Confirm registration, stop on a wrong owner, or request another scan."""
+    _require_mutation_mode()
     require_confirmation(payload, "RECONCILE_ADMISSION")
     try:
         return reconcile_admission(admission_id)
@@ -207,6 +253,7 @@ def api_automatic_correct_registration(
     payload: ConfirmationRequest,
 ):
     """Explicitly correct one proven exact-path Bindery ownership conflict."""
+    _require_mutation_mode()
     require_confirmation(payload, "CORRECT_BINDERY_REGISTRATION")
     try:
         return correct_registration_conflict(admission_id)
@@ -290,6 +337,7 @@ async def api_automatic_remediate_wrong_content(result_id: int, request: Request
     grab can be enabled, so downloaded bytes can be verified before admission to
     the managed library.
     """
+    _require_mutation_mode()
     item = _automatic_result(result_id)
     try:
         payload = await request.json()

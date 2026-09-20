@@ -64,6 +64,7 @@ def test_diagnostics_snapshot_is_secret_free(monkeypatch):
         diagnostics,
         "load_automation_settings",
         lambda: SimpleNamespace(
+            automation_mode="observe",
             automatic_reacquisition=False,
             acquisition_coordinator_enabled=False,
             admission_enabled=False,
@@ -89,6 +90,7 @@ def test_diagnostics_snapshot_is_secret_free(monkeypatch):
     result = diagnostics.diagnostics_snapshot()
 
     assert result["secretsIncluded"] is False
+    assert result["automationMode"] == "observe"
     assert result["gates"]["malwareScanningEnabled"] is True
     assert result["gates"]["malwareScannerConfigured"] is True
     assert result["gateCards"][0]["label"] == "Bindery actions"

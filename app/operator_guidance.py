@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 _BLOCKER_HELP: dict[str, tuple[str, str, str]] = {
+    "observeModeActive": (
+        "Observe Mode disables the supervised coordinator",
+        "Observe Mode is intentionally non-mutating, so BookGuard will not run the background acquisition coordinator even if its older deployment gates are enabled.",
+        "Keep Observe Mode enabled while validating decisions. Return BOOKGUARD_AUTOMATION_MODE to manual only when you intentionally want the supervised mutation workflow available again.",
+    ),
     "automaticReacquisitionEnabled": (
         "Automatic reacquisition is disabled",
         "BookGuard will not start or advance the guarded reacquisition workflow while this deployment gate is off.",

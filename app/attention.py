@@ -5,6 +5,7 @@ from typing import Any
 
 from .acquisition_coordinator import acquisition_coordinator_status
 from .operator_guidance import explain_blockers, operation_guidance
+from .observe import observe_attention_items
 from .db import (
     local_conn,
     recent_ebook_acquisitions,
@@ -224,6 +225,7 @@ def attention_snapshot(limit: int = 200) -> dict[str, Any]:
         + _admission_items(limit)
         + _hardlink_items()
         + _coordinator_items()
+        + observe_attention_items(limit)
     )
     items.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
     counts = Counter(item["kind"] for item in items)
@@ -237,5 +239,6 @@ def attention_snapshot(limit: int = 200) -> dict[str, Any]:
             "hardlinkCorrections": counts["hardlink_correction"],
             "hardlinkCleanups": counts["hardlink_cleanup"],
             "coordinator": counts["coordinator"],
+            "observe": counts["observe"],
         },
     }
