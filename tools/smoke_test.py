@@ -472,6 +472,216 @@ def run_workflow_smoke_test() -> dict[str, Any]:
         }
 
 
+
+def _configure_recovery_root(root: Path) -> tuple[Path, Path, Path]:
+    """Configure one persistent isolated root shared across smoke-test processes."""
+    from app.config import settings
+
+    config = root / "config"
+    books = root / "books"
+    staging = root / "staging"
+    quarantine = root / "quarantine"
+    audiobooks = root / "audiobooks"
+    for directory in (config, books, staging, quarantine, audiobooks):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    settings.config_dir = str(config)
+    settings.ebook_root = str(books)
+    settings.ebook_bindery_prefix = "/data/media/books"
+    settings.audiobook_root = str(audiobooks)
+    settings.quarantine_root = str(quarantine)
+    settings.verification_use_tika = False
+    settings.allow_actions = True
+
+    os.environ.update({
+        "BOOKGUARD_STAGING_ROOT": str(staging),
+        "BOOKGUARD_BINDERY_DROP_FOLDER": "/isolated/bookguard-staging",
+        "BOOKGUARD_AUTOMATIC_REACQUISITION": "true",
+        "BOOKGUARD_ADMISSION_ENABLED": "true",
+        "BOOKGUARD_ADMISSION_ROOT": str(books),
+        "BOOKGUARD_ADMISSION_BINDERY_ROOT": "/data/media/books",
+        "BOOKGUARD_MAX_STAGED_EBOOK_BYTES": str(8 * 1024 * 1024),
+    })
+    return books, staging, config
+
+
+def prepare_restart_recovery(root: Path) -> dict[str, Any]:
+    """Persist an intentionally interrupted finalization for a fresh process."""
+    from app import acquisition
+    from app.admission import reconcile_admission
+    from app.db import (
+        add_result,
+        create_scan,
+        finish_scan,
+        init_local_db,
+        latest_results,
+        update_ebook_acquisition,
+    )
+
+    books, staging, _ = _configure_recovery_root(root)
+    init_local_db()
+
+    relative = Path("Ann Patchett/Bel Canto (2001)/Bel Canto - Ann Patchett.epub")
+    (books / relative.parent).mkdir(parents=True, exist_ok=True)
+
+    create_scan("isolated-recovery-scan", 1)
+    add_result("isolated-recovery-scan", {
+        "file_id": 1,
+        "book_id": 42,
+        "author": "Ann Patchett",
+        "title": "Bel Canto",
+        "format": "ebook",
+        "stored_path": str(Path("/data/media/books") / relative),
+        "local_path": str(books / relative),
+        "classification": "REVIEW",
+        "risk_score": 80,
+        "reason_code": "MISMATCH",
+        "reasons": ["isolated restart-recovery smoke-test record"],
+        "metadata": {},
+    })
+    finish_scan("isolated-recovery-scan")
+    result = latest_results(limit=1)[0]
+    client = FakeBinderyClient(result["stored_path"])
+    client.import_mode = "external"
+
+    started = acquisition.start_ebook_acquisition(
+        result,
+        client.candidate["guid"],
+        client,
+    )
+    acquisition_id = int(started["acquisition"]["id"])
+
+    staged = staging / relative.name
+    _write_epub(staged)
+    expected_hash = _sha256(staged)
+
+    client.queue[0]["status"] = "importExternal"
+    acquisition.reconcile_ebook_acquisition(acquisition_id, client)
+    verified = acquisition.reconcile_ebook_acquisition(acquisition_id, client)
+    _require(
+        verified["acquisition"]["status"] == "verified",
+        "Recovery preparation did not reach verified state.",
+    )
+
+    admitted = acquisition.admit_ebook_acquisition(acquisition_id, client)
+    admission_id = int(admitted["admission"]["admissionId"])
+    library = books / relative
+    _require(
+        library.is_file() and _sha256(library) == expected_hash,
+        "Recovery preparation did not publish the verified library copy.",
+    )
+
+    client.registered = True
+    registered = reconcile_admission(admission_id, client)
+    _require(
+        registered["registered"],
+        "Recovery preparation did not record Bindery registration.",
+    )
+
+    # Simulate a hard process interruption after both safe cleanup operations
+    # succeeded but before the final durable state transition was committed.
+    client.remove_queue_item(77, remove_from_client=False, delete_files=False)
+    staged.unlink()
+    update_ebook_acquisition(
+        acquisition_id,
+        "cleanup_required",
+        queue_status="removed",
+        error="simulated interruption after safe cleanup",
+    )
+
+    state = {
+        "acquisitionId": acquisition_id,
+        "admissionId": admission_id,
+        "storedPath": result["stored_path"],
+        "relativePath": str(relative),
+        "sha256": expected_hash,
+    }
+    (root / "recovery-state.json").write_text(
+        json.dumps(state, sort_keys=True, indent=2),
+        encoding="utf-8",
+    )
+
+    return {
+        "ok": True,
+        "phase": "prepare",
+        "acquisitionId": acquisition_id,
+        "status": "cleanup_required",
+        "queueRemovedSafely": client.removals == [(77, False, False)],
+        "stagingRemovedBeforeInterruption": not staged.exists(),
+        "libraryRetained": library.is_file() and _sha256(library) == expected_hash,
+        "durableStateWritten": True,
+    }
+
+
+def resume_restart_recovery(root: Path) -> dict[str, Any]:
+    """Resume the interrupted durable state in a completely new process."""
+    from app import acquisition
+    from app.db import active_ebook_acquisitions, ebook_acquisition_by_id, init_local_db
+
+    books, staging, _ = _configure_recovery_root(root)
+    init_local_db()
+
+    state_path = root / "recovery-state.json"
+    _require(state_path.is_file(), "Recovery state file is missing.")
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    acquisition_id = int(state["acquisitionId"])
+    expected_hash = str(state["sha256"])
+    relative = Path(str(state["relativePath"]))
+
+    before = acquisition.ebook_acquisition_by_id(acquisition_id)
+    _require(
+        before is not None and before["status"] == "cleanup_required",
+        "Interrupted acquisition state was not durable across the process boundary.",
+    )
+
+    client = FakeBinderyClient(str(state["storedPath"]))
+    client.import_mode = "external"
+    client.registered = True
+    client.queue = []
+
+    recovered = acquisition.finalize_ebook_acquisition(acquisition_id, client)
+    library = books / relative
+    staged = staging / relative.name
+
+    _require(
+        recovered["acquisition"]["status"] == "finalized",
+        "Restart recovery did not reach finalized state.",
+    )
+    _require(
+        recovered.get("cleanupAlreadyComplete") is True,
+        "Restart recovery did not recognize the already-completed cleanup.",
+    )
+    _require(
+        client.removals == [],
+        "Restart recovery attempted to remove an already-absent queue record.",
+    )
+    _require(
+        not staged.exists(),
+        "Restart recovery unexpectedly recreated or retained staging bytes.",
+    )
+    _require(
+        library.is_file() and _sha256(library) == expected_hash,
+        "Restart recovery changed the admitted library bytes.",
+    )
+    _require(
+        active_ebook_acquisitions() == [],
+        "Recovered finalized acquisition remained active.",
+    )
+
+    after = ebook_acquisition_by_id(acquisition_id)
+    return {
+        "ok": True,
+        "phase": "resume",
+        "processBoundaryRecovered": True,
+        "statusBefore": before["status"],
+        "statusAfter": after["status"] if after else None,
+        "cleanupAlreadyComplete": True,
+        "queueRemovalRepeated": False,
+        "librarySha256": expected_hash,
+        "temporaryStateIsolated": True,
+    }
+
+
 def validate_runtime_rootfs() -> dict[str, bool]:
     """Prove the image root is immutable while the temporary workspace is writable."""
     root_probe = Path("/app/.bookguard-rootfs-write-test")
@@ -521,6 +731,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     subparsers.add_parser("workflow")
     subparsers.add_parser("rootfs")
+    recovery_parser = subparsers.add_parser("recovery")
+    recovery_parser.add_argument("phase", choices=("prepare", "resume"))
+    recovery_parser.add_argument("root")
     args = parser.parse_args(argv)
 
     try:
@@ -535,6 +748,13 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": True,
                 "checks": validate_runtime_rootfs(),
             }
+        elif args.command == "recovery":
+            recovery_root = Path(args.root).resolve()
+            result = (
+                prepare_restart_recovery(recovery_root)
+                if args.phase == "prepare"
+                else resume_restart_recovery(recovery_root)
+            )
         else:
             result = run_workflow_smoke_test()
     except Exception as exc:
