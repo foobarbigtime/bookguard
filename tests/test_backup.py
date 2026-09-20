@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -14,6 +15,7 @@ from tools.bookguard_backup import (
     REQUIRED_TABLES,
     create_backup,
     validate_backup,
+    validate_restore,
 )
 
 
@@ -27,6 +29,24 @@ def _make_source(config: Path) -> Path:
         conn.commit()
     return database
 
+
+
+def _make_real_source(config: Path) -> Path:
+    from app.config import settings
+    from app.db import init_local_db
+
+    config.mkdir(parents=True)
+    original = settings.config_dir
+    try:
+        settings.config_dir = str(config)
+        init_local_db()
+    finally:
+        settings.config_dir = original
+    return config / DATABASE_NAME
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 def test_create_and_validate_consistent_backup(tmp_path):
     config = tmp_path / "config"
@@ -126,3 +146,40 @@ def test_backup_helper_shell_syntax():
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_restore_validation_uses_disposable_copy_and_preserves_backup(tmp_path):
+    config = tmp_path / "config"
+    backups = tmp_path / "backups"
+    _make_real_source(config)
+    bundle = Path(create_backup(config, backups, name="restore-test")["bundle"])
+    backup_db = bundle / DATABASE_NAME
+    before = _file_sha256(backup_db)
+
+    restore_dir = tmp_path / "restore"
+    result = validate_restore(bundle, restore_dir)
+
+    assert result["ok"] is True
+    assert result["backupUnchanged"] is True
+    assert result["startupInitialization"] is True
+    assert result["productionStateTouched"] is False
+    assert result["disposableRestore"] is True
+    assert result["restoredDatabase"]["integrity"] == "ok"
+    assert _file_sha256(backup_db) == before
+    assert (restore_dir / DATABASE_NAME).is_file()
+
+
+def test_restore_validation_rejects_nonempty_destination(tmp_path):
+    config = tmp_path / "config"
+    backups = tmp_path / "backups"
+    _make_real_source(config)
+    bundle = Path(create_backup(config, backups, name="restore-nonempty")["bundle"])
+
+    restore_dir = tmp_path / "restore"
+    restore_dir.mkdir()
+    (restore_dir / "keep.txt").write_text("do not overwrite", encoding="utf-8")
+
+    with pytest.raises(BackupError, match="must be empty"):
+        validate_restore(bundle, restore_dir)
+
+    assert (restore_dir / "keep.txt").read_text(encoding="utf-8") == "do not overwrite"
