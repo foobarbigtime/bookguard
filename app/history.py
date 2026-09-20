@@ -95,7 +95,7 @@ def _acquisition_events(conn, limit: int) -> list[dict[str, Any]]:
                 author=book["author"],
                 path=path,
                 message=str(row["error"] or row["candidate_title"] or ""),
-                detail_href=f"/history/acquisition/{row['id']}",
+                detail_href="",
             )
         )
     return items
@@ -128,7 +128,7 @@ def _admission_events(conn, limit: int) -> list[dict[str, Any]]:
                 author=book["author"],
                 path=str(row["stored_path"] or row["local_path"] or ""),
                 message=str(row["error"] or row["publication_method"] or ""),
-                detail_href=f"/history/admission/{row['id']}",
+                detail_href="",
             )
         )
     return items
@@ -168,7 +168,7 @@ def _cleanup_events(conn, limit: int) -> list[dict[str, Any]]:
                 author=str(row["author"] or ""),
                 path=str(row["stored_path"] or row["local_path"] or ""),
                 message=str(row["error"] or action.replace("_", " ").title()),
-                detail_href=f"/history/cleanup/{row['id']}",
+                detail_href="",
             )
         )
     return items
@@ -202,7 +202,7 @@ def _repair_events(conn, limit: int) -> list[dict[str, Any]]:
                 author=book["author"],
                 path=str(row["stored_path"] or row["local_path"] or ""),
                 message=str(row["error"] or str(row["repair_kind"] or "").replace("_", " ").title()),
-                detail_href=f"/history/repair/{row['id']}",
+                detail_href="",
             )
         )
     return items
@@ -232,7 +232,7 @@ def _verification_events(conn, limit: int) -> list[dict[str, Any]]:
             author=str(row["author"] or ""),
             path=str(row["target_path"] or ""),
             message=f"{int(row['confidence'])}% confidence via {row['source']}",
-            detail_href=f"/history/verification/{row['id']}",
+            detail_href="",
         )
         for row in rows
     ]
@@ -266,7 +266,7 @@ def _hardlink_events(conn, limit: int) -> list[dict[str, Any]]:
                     timestamp=row["completed_at"] or row["created_at"],
                     path=path,
                     message=str(row["error"] or f"Bindery file #{row['file_id']}"),
-                    detail_href=f"/history/hardlink-correction/{row['id']}",
+                    detail_href="",
                 )
             )
     if _table_exists(conn, "hardlink_alias_cleanups"):
@@ -295,7 +295,7 @@ def _hardlink_events(conn, limit: int) -> list[dict[str, Any]]:
                     timestamp=row["completed_at"] or row["created_at"],
                     path=path,
                     message=str(row["error"] or "Hard-link alias cleanup"),
-                    detail_href=f"/history/hardlink-cleanup/{row['correction_id']}",
+                    detail_href="",
                 )
             )
     return items
@@ -324,7 +324,7 @@ def _triage_events(conn, limit: int) -> list[dict[str, Any]]:
             author=str(row["author"] or ""),
             path=str(row["stored_path"] or ""),
             message="Durable operator triage decision.",
-            detail_href=f"/history/triage/{row['id']}",
+            detail_href="",
         )
         for row in rows
     ]
