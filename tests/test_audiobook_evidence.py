@@ -144,6 +144,9 @@ def test_audiobook_evidence_marks_unreadable_audio_unsafe(monkeypatch):
 
 
 def test_audiobook_evidence_rejects_consistent_different_identity(monkeypatch):
+    monkeypatch.setattr(audiobook_evidence.settings, "reject_strong_mismatch", True)
+    monkeypatch.setattr(audiobook_evidence.settings, "strong_mismatch_min_samples", 1)
+    monkeypatch.setattr(audiobook_evidence.settings, "strong_mismatch_consensus_percent", 67)
     monkeypatch.setattr(
         audiobook_evidence,
         "inspect_media_path",
