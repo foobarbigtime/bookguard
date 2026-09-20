@@ -227,31 +227,35 @@ def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:
             ))
         elif not verification and classification in {"REVIEW", "REJECT"}:
             if fmt == "ebook":
-                reason_code = "CONTENT_VERIFICATION_REQUIRED"
-                reason = (
-                    "The latest scan requires review, but no durable ebook content "
-                    "verification is available for this result."
-                )
-                next_step = (
-                    "Run content verification before considering any automatic "
-                    "remediation or admission decision."
-                )
+                decisions.append(_decision(
+                    **common,
+                    state=classification,
+                    decision="would_verify_result",
+                    reason_code="CONTENT_VERIFICATION_REQUIRED",
+                    reason=(
+                        "The latest scan requires review, but no durable ebook content "
+                        "verification is available for this result."
+                    ),
+                    next_step=(
+                        "A future Automatic Mode should run the existing read-only "
+                        "content verifier before considering remediation or admission. "
+                        "Observe Mode records that proposal without reading library bytes."
+                    ),
+                    evidence=evidence,
+                ))
             else:
-                reason_code = "AUDIOBOOK_AUTOMATION_NOT_SUPPORTED"
-                reason = (
-                    "This result requires review, and automatic audiobook content "
-                    "verification is not implemented."
-                )
-                next_step = "Keep this audiobook in the manual triage workflow."
-            decisions.append(_decision(
-                **common,
-                state=classification,
-                decision="attention",
-                reason_code=reason_code,
-                reason=reason,
-                next_step=next_step,
-                evidence=evidence,
-            ))
+                decisions.append(_decision(
+                    **common,
+                    state=classification,
+                    decision="attention",
+                    reason_code="AUDIOBOOK_AUTOMATION_NOT_SUPPORTED",
+                    reason=(
+                        "This result requires review, and automatic audiobook content "
+                        "verification is not implemented."
+                    ),
+                    next_step="Keep this audiobook in the manual triage workflow.",
+                    evidence=evidence,
+                ))
     return decisions
 
 
