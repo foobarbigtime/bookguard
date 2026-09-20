@@ -11,7 +11,7 @@ from .admission import admission_readiness
 from . import __version__
 from .config import ConfigurationError, load_automation_settings, settings
 from .malware_scan import probe_clamd
-from .operator_guidance import explain_blockers
+from .operator_guidance import explain_blockers, humanize_key
 from .preimport import preimport_readiness
 
 
@@ -30,7 +30,7 @@ def _gate_cards(gates: dict[str, bool]) -> list[dict[str, object]]:
     return [
         {
             "key": key,
-            "label": _GATE_LABELS.get(key, _humanize(key)),
+            "label": _GATE_LABELS.get(key, humanize_key(key)),
             "enabled": bool(enabled),
         }
         for key, enabled in gates.items()
