@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard Diagnostics</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div><h1>BookGuard</h1><p>Readiness diagnostics and safety gates</p></div>
+    <span class="version">v{{ version }}</span>
+  </div>
+  <nav class="topnav">
+    <a class="nav-link" href="/">Dashboard</a>
+    <a class="nav-link" href="/attention">Attention</a>
+    <a class="nav-link active" href="/diagnostics">Diagnostics</a>
+    <a class="nav-link" href="/triage">Triage</a>
+    <a class="nav-link" href="/repairs">Repairs</a>
+    <a class="nav-link" href="/settings">Settings</a>
+  </nav>
+</header>
+
+<main>
+  <div class="notice info">
+    <strong>Read-only diagnostics.</strong>
+    This page explains current safety gates. It does not change BookGuard, Bindery, files, queue state, or settings, and it never displays saved credentials.
+  </div>
+
+  {% if diagnostics.deploymentError %}
+  <div class="notice warning">
+    <strong>Deployment configuration error:</strong> {{ diagnostics.deploymentError }}
+  </div>
+  {% endif %}
+
+  <section class="diagnostic-gates">
+    {% for key, enabled in diagnostics.gates.items() %}
+    <article class="card diagnostic-gate">
+      <span class="label">{{ key|replace('_',' ') }}</span>
+      <strong>{{ "ON" if enabled else "OFF" }}</strong>
+    </article>
+    {% endfor %}
+  </section>
+
+  <section class="diagnostic-sections">
+    {% for section in diagnostics.sections %}
+    <article class="table-card diagnostic-section">
+      <div class="section-title row-between">
+        <div>
+          <h2>{{ section.label }}</h2>
+          <p>{{ section.message or "Current read-only safety state." }}</p>
+        </div>
+        <span class="workflow-state {{ 'workflow-state-ready' if section.ready else 'workflow-state-review' }}">
+          {{ section.state|replace('_',' ') }}
+        </span>
+      </div>
+
+      {% if section.explanations %}
+      <div class="diagnostic-blockers">
+        {% for blocker in section.explanations %}
+        <div class="diagnostic-blocker">
+          <strong>{{ blocker.label }}</strong>
+          <small><b>Why:</b> {{ blocker.why }}</small>
+          <small><b>What to change:</b> {{ blocker.fix }}</small>
+          <code>{{ blocker.key }}</code>
+        </div>
+        {% endfor %}
+      </div>
+      {% elif section.state == 'error' %}
+      <div class="diagnostic-blockers">
+        <div class="diagnostic-blocker">
+          <strong>Readiness check could not complete</strong>
+          <small>{{ section.message }}</small>
+        </div>
+      </div>
+      {% else %}
+      <div class="diagnostic-ready">
+        <strong>No readiness blockers reported.</strong>
+        <small>This does not authorize a mutation by itself; the guarded operation will re-check its safety conditions at the mutation boundary.</small>
+      </div>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </section>
+</main>
+</body>
+</html>
