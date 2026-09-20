@@ -255,3 +255,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #4e8bc7
 .history-detail-field strong { display:block; font-size:.86rem; overflow-wrap:anywhere; white-space:pre-wrap; }
 .history-detail-evidence { display:grid; gap:1rem; }
 .history-detail-json { margin:0; padding:1rem; max-height:520px; overflow:auto; border-top:1px solid var(--border); background:#0d141c; color:#c9d5e1; font-size:.78rem; line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+.history-detail-summary-note { margin:0 1rem 1rem; border:1px solid rgba(40,103,178,.42); background:rgba(40,103,178,.07); border-radius:.65rem; padding:.8rem .9rem; }
+.history-detail-summary-note strong { display:block; color:#bad8f6; }
+.history-detail-summary-note p { margin-top:.35rem; line-height:1.45; }
