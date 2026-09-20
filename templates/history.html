@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard History</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div><h1>BookGuard</h1><p>Unified chronological operation history</p></div>
+    <span class="version">v{{ version }}</span>
+  </div>
+  <nav class="topnav">
+    <a class="nav-link" href="/">Dashboard</a>
+    <a class="nav-link" href="/attention">Attention</a>
+    <a class="nav-link active" href="/history">History</a>
+    <a class="nav-link" href="/diagnostics">Diagnostics</a>
+    <a class="nav-link" href="/triage">Triage</a>
+    <a class="nav-link" href="/repairs">Repairs</a>
+    <a class="nav-link" href="/settings">Settings</a>
+  </nav>
+</header>
+
+<main>
+  <div class="notice info">
+    <strong>Read-only audit view.</strong>
+    This page combines existing durable BookGuard records. It does not resume, retry, correct, delete, quarantine, admit, repair, or otherwise mutate anything.
+  </div>
+
+  <section class="table-card history-card">
+    <div class="section-title row-between">
+      <div>
+        <h2>Operation history</h2>
+        <p>Newest durable operation state first across acquisition, admission, cleanup, verification, correction, repair, and triage.</p>
+      </div>
+      <div class="history-meta">
+        <strong>{{ history.count }}</strong>
+        <small>records · snapshot {{ history.generatedAt }}</small>
+      </div>
+    </div>
+
+    {% if history['items'] %}
+    <div class="table-wrap">
+      <table class="history-table">
+        <thead>
+          <tr><th>When</th><th>Operation</th><th>Status</th><th>Book</th><th>Path</th><th>Detail</th></tr>
+        </thead>
+        <tbody>
+        {% for item in history['items'] %}
+          <tr>
+            <td class="history-time">{{ item.timestamp or '—' }}</td>
+            <td>
+              <strong>{{ item.kindLabel }}</strong>
+              <small>#{{ item.id }}</small>
+            </td>
+            <td><span class="workflow-state">{{ item.status|replace('_',' ') }}</span></td>
+            <td class="book-cell">
+              {% if item.title %}
+                <strong>{{ item.title }}</strong>
+                <small>{{ item.author or 'Unknown author' }}</small>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td class="path">{{ item.path or '—' }}</td>
+            <td class="why-cell">{{ item.message or '—' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="attention-zero">
+        <strong>No durable operation history is recorded yet.</strong>
+        <small>History appears as BookGuard records scans, triage decisions, verification, repairs, cleanup, acquisition, admission, and shared-file correction activity.</small>
+      </div>
+    {% endif %}
+  </section>
+</main>
+</body>
+</html>
