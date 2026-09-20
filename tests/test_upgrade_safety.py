@@ -4,7 +4,11 @@ import copy
 
 import pytest
 
-from tools.upgrade_safety import UpgradeSafetyError, validate_runtime
+from tools.upgrade_safety import (
+    UpgradeSafetyError,
+    validate_clamav_runtime,
+    validate_runtime,
+)
 
 
 def _inspect_payload() -> list[dict]:
@@ -85,3 +89,47 @@ def test_runtime_hardening_fails_closed(mutator, expected):
 def test_runtime_hardening_requires_one_inspect_object():
     with pytest.raises(UpgradeSafetyError, match="exactly one"):
         validate_runtime([])
+
+
+def _clamav_payload() -> list[dict]:
+    return [{
+        "HostConfig": {
+            "Privileged": False,
+            "SecurityOpt": ["no-new-privileges:true"],
+            "PortBindings": {},
+        },
+        "Mounts": [
+            {
+                "Destination": "/var/lib/clamav",
+                "Type": "volume",
+                "RW": True,
+            }
+        ],
+    }]
+
+
+def test_clamav_runtime_accepts_private_scanner_topology():
+    result = validate_clamav_runtime(_clamav_payload())
+
+    assert result["ok"] is True
+    assert all(result["checks"].values())
+
+
+def test_clamav_runtime_rejects_published_port():
+    payload = _clamav_payload()
+    payload[0]["HostConfig"]["PortBindings"] = {
+        "3310/tcp": [{"HostIp": "0.0.0.0", "HostPort": "3310"}]
+    }
+
+    with pytest.raises(UpgradeSafetyError, match="noPublishedPorts"):
+        validate_clamav_runtime(payload)
+
+
+def test_clamav_runtime_rejects_media_mount():
+    payload = _clamav_payload()
+    payload[0]["Mounts"].append(
+        {"Destination": "/books", "Type": "bind", "RW": False}
+    )
+
+    with pytest.raises(UpgradeSafetyError, match="noMediaOrConfigMounts"):
+        validate_clamav_runtime(payload)
