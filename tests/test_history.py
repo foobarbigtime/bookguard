@@ -430,3 +430,78 @@ def test_observe_decision_appears_in_history_and_detail(tmp_path):
     assert detail["status"] == "attention"
     assert "did not authorize or perform" in detail["summary"]
     assert detail["guidance"]["nextStep"] == "Review verification evidence."
+
+
+
+def test_verification_detail_builds_media_evidence_gui_summary(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        evidence = {
+            "expected": {
+                "title": "Bel Canto",
+                "author": "Ann Patchett",
+                "mediaKind": "audiobook",
+            },
+            "actualMedia": {
+                "candidateCount": 2,
+                "counts": {"audiobook": 2},
+                "detected": [
+                    {
+                        "path": "/audio/01.mp3",
+                        "kind": "audiobook",
+                        "detectedFormat": "mp3",
+                    },
+                    {
+                        "path": "/audio/02.mp3",
+                        "kind": "audiobook",
+                        "detectedFormat": "mp3",
+                    },
+                ],
+            },
+            "technical": {
+                "verdict": "PASS",
+                "reason_code": "AUDIO_TECHNICAL_PASS",
+                "file_count": 2,
+                "readable_file_count": 2,
+                "total_duration_seconds": 7200.0,
+                "chapter_count": 8,
+                "codecs": ["mp3"],
+            },
+            "identity": {
+                "detected_title": "Bel Canto",
+                "detected_author": "Ann Patchett",
+                "classification": "PASS",
+                "reasonCode": "MATCH",
+            },
+            "reasonCode": "AUDIOBOOK_IDENTITY_VERIFIED",
+            "explanation": "Audio identity is verified.",
+        }
+        with local_conn() as conn:
+            conn.execute(
+                """
+                UPDATE content_verifications
+                SET format='audiobook',
+                    verdict='VERIFIED_CORRECT',
+                    source='audiobook-evidence',
+                    evidence_json=?
+                WHERE id=1
+                """,
+                (json.dumps(evidence),),
+            )
+            conn.commit()
+
+        detail = operation_detail("verification", 1)
+    finally:
+        settings.config_dir = original
+
+    assert detail is not None
+    summary = detail["verificationSummary"]
+    assert summary["expectedKind"] == "audiobook"
+    assert summary["detectedKind"] == "audiobook"
+    assert summary["detectedFormats"] == ["mp3"]
+    assert summary["fileCount"] == 2
+    assert summary["readableFileCount"] == 2
+    assert summary["durationSeconds"] == 7200.0
+    assert summary["detectedTitle"] == "Bel Canto"
+    assert summary["detectedAuthor"] == "Ann Patchett"
+    assert summary["planLabel"] == "No repair required"
