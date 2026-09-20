@@ -41,7 +41,7 @@
 
     {% set status_class =
       'ready' if detail.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed', 'keep', 'no_action']
-      else 'error' if detail.status in ['failed', 'wrong_content', 'unsafe_file', 'registration_conflict']
+      else 'error' if detail.status in ['failed', 'wrong_content', 'wrong_media_type', 'unsafe_file', 'registration_conflict']
       else 'review' if detail.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting', 'attention']
       else 'idle'
     %}
