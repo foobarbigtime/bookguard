@@ -10,6 +10,7 @@ from app.config import (
 
 
 def test_automation_settings_are_loaded_on_demand(monkeypatch):
+    monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
     monkeypatch.setenv("BOOKGUARD_STAGING_ROOT", "/test-staging")
     monkeypatch.setenv("BOOKGUARD_BINDERY_DROP_FOLDER", "/test-drop")
     monkeypatch.setenv("BOOKGUARD_AUTOMATIC_REACQUISITION", "true")
@@ -24,6 +25,7 @@ def test_automation_settings_are_loaded_on_demand(monkeypatch):
 
     configured = load_automation_settings()
 
+    assert configured.automation_mode == "observe"
     assert configured.staging_root == "/test-staging"
     assert configured.bindery_drop_folder == "/test-drop"
     assert configured.automatic_reacquisition is True
@@ -35,6 +37,13 @@ def test_automation_settings_are_loaded_on_demand(monkeypatch):
     assert configured.admission_enabled is True
     assert configured.admission_root == "/test-admission"
     assert configured.admission_bindery_root == "/bindery-books"
+
+
+def test_invalid_automation_mode_fails_closed(monkeypatch):
+    monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "automatic")
+
+    with pytest.raises(ConfigurationError, match="manual, observe"):
+        load_automation_settings()
 
 
 @pytest.mark.parametrize("value", ["not-a-number", "0", "-1"])
