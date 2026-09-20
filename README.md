@@ -489,6 +489,50 @@ Metadata repair settings include:
 
 Repair history and Undo are available at `/repairs`.
 
+
+## Backup and validation
+
+BookGuard's persistent application state lives in `/config/bookguard.db`. The
+backup helper creates a transactionally consistent SQLite copy while the normal
+BookGuard container may remain running. It does not copy media files, Bindery's
+database, credentials, verification snapshots, staging, or quarantine content.
+
+Create a backup on the Unraid host:
+
+```bash
+bash scripts/bookguard-backup.sh create
+```
+
+The default destination is:
+
+```text
+/mnt/cache/appdata/bookguard-backups
+```
+
+Or supply a different dedicated backup root:
+
+```bash
+bash scripts/bookguard-backup.sh create /mnt/user/backups/bookguard
+```
+
+Each backup is a directory containing `bookguard.db` plus a manifest with the
+BookGuard version, database SHA-256, byte count, SQLite integrity result, and
+table inventory. Creation uses the exact image and non-root UID:GID of the
+existing BookGuard container, mounts production `/config` read-only, disables
+networking, and gives the one-shot container write access only to the backup
+destination.
+
+Validate a backup without modifying it:
+
+```bash
+bash scripts/bookguard-backup.sh validate \
+  /mnt/cache/appdata/bookguard-backups/bookguard-YYYYMMDDTHHMMSSZ
+```
+
+Validation mounts the backup read-only and checks the manifest, SHA-256, byte
+count, SQLite integrity, and required BookGuard tables. Validation never
+overwrites or restores production state.
+
 ## Updating
 
 Before deploying this security update, add the required access credentials to
