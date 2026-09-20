@@ -36,12 +36,26 @@
         <p>Newest durable operation state first across acquisition, admission, cleanup, verification, correction, repair, and triage.</p>
       </div>
       <div class="history-meta">
-        <strong>{{ history.count }}</strong>
-        <small>records · snapshot {{ history.generatedAt }}</small>
+        <strong id="historyVisibleCount">{{ history.count }}</strong>
+        <small>visible records · snapshot {{ history.generatedAt[:19]|replace('T', ' ') }} UTC</small>
       </div>
     </div>
 
     {% if history['items'] %}
+    <div class="history-controls">
+      <label for="historyKindFilter">Operation</label>
+      <select id="historyKindFilter">
+        <option value="">All operations</option>
+        <option value="verification">Verification</option>
+        <option value="acquisition">Acquisition</option>
+        <option value="admission">Admission</option>
+        <option value="cleanup">Cleanup / quarantine / detach</option>
+        <option value="repair">Metadata repair</option>
+        <option value="hardlink">Hard-link correction / cleanup</option>
+        <option value="triage">Triage decision</option>
+      </select>
+      <small>Filtering is local to this read-only page and does not change BookGuard state.</small>
+    </div>
     <div class="table-wrap">
       <table class="history-table">
         <thead>
@@ -49,13 +63,21 @@
         </thead>
         <tbody>
         {% for item in history['items'] %}
-          <tr>
-            <td class="history-time">{{ item.timestamp or '—' }}</td>
+          <tr data-history-kind="{{ 'hardlink' if item.kind in ['hardlink_correction', 'hardlink_cleanup'] else item.kind }}">
+            <td class="history-time" title="{{ item.timestamp or '' }}">{{ item.timestamp[:19]|replace('T', ' ') if item.timestamp else '—' }}{% if item.timestamp %}<small>UTC</small>{% endif %}</td>
             <td>
               <strong>{{ item.kindLabel }}</strong>
               <small>#{{ item.id }}</small>
             </td>
-            <td><span class="workflow-state">{{ item.status|replace('_',' ') }}</span></td>
+            <td>
+              {% set status_class =
+                'ready' if item.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed']
+                else 'error' if item.status in ['failed', 'wrong_content', 'unsafe_file', 'registration_conflict']
+                else 'review' if item.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting']
+                else 'idle'
+              %}
+              <span class="workflow-state workflow-state-{{ status_class }}">{{ item.status|replace('_',' ') }}</span>
+            </td>
             <td class="book-cell">
               {% if item.title %}
                 <strong>{{ item.title }}</strong>
@@ -79,5 +101,26 @@
     {% endif %}
   </section>
 </main>
+<script>
+const historyFilter = document.getElementById("historyKindFilter");
+const historyRows = Array.from(document.querySelectorAll("tr[data-history-kind]"));
+const historyVisibleCount = document.getElementById("historyVisibleCount");
+
+function applyHistoryFilter() {
+  const wanted = historyFilter ? historyFilter.value : "";
+  let visible = 0;
+  for (const row of historyRows) {
+    const show = !wanted || row.dataset.historyKind === wanted;
+    row.hidden = !show;
+    if (show) visible += 1;
+  }
+  if (historyVisibleCount) historyVisibleCount.textContent = String(visible);
+}
+
+if (historyFilter) {
+  historyFilter.addEventListener("change", applyHistoryFilter);
+  applyHistoryFilter();
+}
+</script>
 </body>
 </html>
