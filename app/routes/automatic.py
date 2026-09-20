@@ -24,6 +24,7 @@ from ..admission import (
 from ..automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
 from ..bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from ..db import result_by_id
+from ..observe import observe_snapshot, run_observe_cycle
 from ..preimport import PreImportSafetyError, preimport_readiness
 from ..staging import StagingSafetyError, list_staged_ebooks, verify_staged_ebook
 from .models import ConfirmationRequest, require_confirmation
@@ -43,6 +44,28 @@ class StagedAdmissionRequest(StagedVerificationRequest):
 class EbookAcquisitionRequest(BaseModel):
     candidateGuid: str = Field(min_length=1, max_length=4096)
     confirm: str = Field(min_length=1, max_length=64)
+
+
+@router.get("/observe")
+def api_automatic_observe(limit: int = 100):
+    """Return durable Observe Mode decisions without running a new cycle."""
+    try:
+        return observe_snapshot(limit)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/observe/run")
+def api_automatic_observe_run(payload: ConfirmationRequest):
+    """Record what Automatic Mode would do without invoking mutation workflows."""
+    require_confirmation(payload, "RUN_OBSERVE_MODE")
+    try:
+        result = run_observe_cycle()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if not result.get("enabled"):
+        raise HTTPException(status_code=409, detail=str(result.get("message") or "Observe Mode is disabled."))
+    return result
 
 
 @router.get("/bindery-status")
