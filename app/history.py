@@ -16,6 +16,7 @@ _TABLES = {
     "hardlink_corrections",
     "hardlink_alias_cleanups",
     "triage_decisions",
+    "automation_observations",
 }
 
 
@@ -331,6 +332,35 @@ def _triage_events(conn, limit: int) -> list[dict[str, Any]]:
     ]
 
 
+def _observe_events(conn, limit: int) -> list[dict[str, Any]]:
+    if not _table_exists(conn, "automation_observations"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, decision, reason, title, author, path, last_seen_at
+        FROM automation_observations
+        ORDER BY last_seen_at DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [
+        _event(
+            kind="observe",
+            label="Observe decision",
+            record_id=row["id"],
+            status=row["decision"],
+            timestamp=row["last_seen_at"],
+            title=str(row["title"] or ""),
+            author=str(row["author"] or ""),
+            path=str(row["path"] or ""),
+            message=str(row["reason"] or ""),
+            detail_href=f"/history/observe/{row['id']}",
+        )
+        for row in rows
+    ]
+
+
 def operation_history(limit: int = 250) -> dict[str, Any]:
     """Read durable operation records without creating tables or mutating state."""
     limit = max(1, min(int(limit), 1000))
@@ -345,6 +375,7 @@ def operation_history(limit: int = 250) -> dict[str, Any]:
             + _verification_events(conn, per_source)
             + _hardlink_events(conn, per_source)
             + _triage_events(conn, per_source)
+            + _observe_events(conn, per_source)
         )
 
     items.sort(
@@ -427,6 +458,14 @@ _DETAIL_SPECS: dict[str, dict[str, Any]] = {
         "json": {},
         "omit": {"signature"},
     },
+    "observe": {
+        "table": "automation_observations",
+        "pk": "id",
+        "label": "Observe decision",
+        "status": "decision",
+        "json": {"evidence_json": "Observed evidence"},
+        "omit": {"signature"},
+    },
 }
 
 
@@ -492,6 +531,7 @@ def _detail_path(row: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
         "local_path",
         "staged_relative_path",
         "observed_relative_path",
+        "path",
     ):
         value = str(row.get(key) or "").strip()
         if value:
