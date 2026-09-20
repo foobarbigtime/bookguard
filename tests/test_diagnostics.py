@@ -68,11 +68,23 @@ def test_diagnostics_snapshot_is_secret_free(monkeypatch):
             acquisition_coordinator_enabled=False,
             admission_enabled=False,
             ebook_actions_enabled=False,
+            staging_root="/staging",
+            ebook_action_root="/action-books",
+            admission_root="/admission-books",
         ),
     )
     monkeypatch.setattr(diagnostics.settings, "allow_actions", False)
     monkeypatch.setattr(diagnostics.settings, "verification_malware_scan", True)
     monkeypatch.setattr(diagnostics.settings, "verification_clamd_host", "clamav")
+    monkeypatch.setattr(
+        diagnostics,
+        "probe_clamd",
+        lambda **kwargs: {
+            "ok": True,
+            "message": "ClamAV responded to PING.",
+            "version": "ClamAV test",
+        },
+    )
 
     result = diagnostics.diagnostics_snapshot()
 
@@ -83,3 +95,41 @@ def test_diagnostics_snapshot_is_secret_free(monkeypatch):
     assert result["gateCards"][-1]["label"] == "Malware scanner configured"
     assert result["sections"][0]["explanations"][0]["key"] == "binderyExternalImport"
     assert result["sections"][2]["ready"] is True
+    assert result["deployment"]["malware"]["reachable"] is True
+    assert result["deployment"]["malware"]["version"] == "ClamAV test"
+    assert "bindery_api_key" not in str(result).lower()
+
+
+def test_build_report_uses_safe_provenance_environment(monkeypatch):
+    monkeypatch.setenv("BOOKGUARD_BUILD_VERSION", diagnostics.__version__)
+    monkeypatch.setenv("BOOKGUARD_BUILD_REVISION", "abc123")
+    monkeypatch.setenv(
+        "BOOKGUARD_BUILD_SOURCE",
+        "https://github.com/foobarbigtime/bookguard",
+    )
+
+    report = diagnostics._build_report()
+
+    assert report["applicationVersion"] == diagnostics.__version__
+    assert report["imageVersion"] == diagnostics.__version__
+    assert report["revision"] == "abc123"
+    assert report["provenanceComplete"] is True
+
+
+def test_path_status_uses_mount_mode_without_writing(monkeypatch):
+    monkeypatch.setattr(diagnostics.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(
+        diagnostics,
+        "_mount_info",
+        lambda path: {"mountPoint": "/books", "readOnly": True},
+    )
+
+    report = diagnostics._path_status(
+        "ebooks",
+        "Ebook library",
+        "/books",
+        expected_writable=False,
+    )
+
+    assert report["observedMode"] == "read-only"
+    assert report["expectationMet"] is True
