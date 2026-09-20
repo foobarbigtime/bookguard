@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
 
 import pytest
 
@@ -115,3 +116,13 @@ def test_backup_root_must_be_separate_from_config(tmp_path):
 
     with pytest.raises(BackupError, match="must be separate"):
         create_backup(config, config, name="bad-location")
+
+
+def test_backup_helper_shell_syntax():
+    completed = subprocess.run(
+        ["bash", "-n", "scripts/bookguard-backup.sh"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
