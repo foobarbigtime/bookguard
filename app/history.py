@@ -333,7 +333,7 @@ def _triage_events(conn, limit: int) -> list[dict[str, Any]]:
 def operation_history(limit: int = 250) -> dict[str, Any]:
     """Read durable operation records without creating tables or mutating state."""
     limit = max(1, min(int(limit), 1000))
-    per_source = min(limit, 500)
+    per_source = limit
 
     with local_conn() as conn:
         items = (
