@@ -117,6 +117,7 @@ def validate_clamav_runtime(payload: Any) -> dict[str, Any]:
         ),
         "noPublishedPorts": not bool(port_bindings),
         "noMediaOrConfigMounts": not bool(mount_targets & media_targets),
+        "signatureDatabasePresent": "/var/lib/clamav" in mount_targets,
         "signatureDatabaseOnly": all(
             target == "/var/lib/clamav" for target in mount_targets
         ),
