@@ -164,7 +164,8 @@ anything. A failed move occurs before Bindery is changed; a later detach failure
 causes BookGuard to restore the file through the writable alias.
 
 ```bash
-docker compose -f compose.yaml -f compose.actions.yaml up -d --build
+bash scripts/build-with-provenance.sh
+docker compose -f compose.yaml -f compose.actions.yaml up -d --no-build
 ```
 
 ### Automatic reacquisition
@@ -246,18 +247,20 @@ BOOKGUARD_ADMISSION_BINDERY_ROOT=/data/media/books
 Start the opt-in topology only when deliberately testing admission:
 
 ```bash
-docker compose -f compose.yaml -f compose.admission.yaml up -d --build
+bash scripts/build-with-provenance.sh
+docker compose -f compose.yaml -f compose.admission.yaml up -d --no-build
 ```
 
 For the complete supervised replacement workflow, include both narrow aliases;
 `/books` remains read-only throughout:
 
 ```bash
+bash scripts/build-with-provenance.sh
 docker compose \
   -f compose.yaml \
   -f compose.actions.yaml \
   -f compose.admission.yaml \
-  up -d --build
+  up -d --no-build
 ```
 
 An admission is tied to a prior scan result so BookGuard can reuse the exact
@@ -336,8 +339,16 @@ git clone git@github.com:foobarbigtime/bookguard.git
 cd bookguard
 cp .env.example .env
 # Edit .env and set BOOKGUARD_AUTH_PASSWORD before starting.
-docker compose up -d --build
+bash scripts/build-with-provenance.sh
+docker compose up -d --no-build
 ```
+
+Use `scripts/build-with-provenance.sh` for every BookGuard image rebuild. It
+stamps the image with the application version, exact Git revision, and source
+repository, and refuses to stamp tracked uncommitted changes. After that build
+completes, deploy with `--no-build`. A direct `docker compose ... --build`
+can create an image whose revision label is `unknown`, so it is intentionally
+not the documented deployment path.
 
 Open:
 
@@ -390,7 +401,8 @@ overlay. The scanner has no library mounts and port 3310 is not published to
 the host:
 
 ```bash
-docker compose -f compose.yaml -f compose.clamav.yaml up -d --build
+bash scripts/build-with-provenance.sh
+docker compose -f compose.yaml -f compose.clamav.yaml up -d --no-build
 ```
 
 On first start ClamAV may need time to initialize its signature database. Once
@@ -448,7 +460,8 @@ BOOKGUARD_CONFIG_HOST_PATH=/mnt/cache/appdata/bookguard-config
 ```bash
 cd /mnt/cache/appdata/bookguard
 git pull
-docker compose up -d --build
+bash scripts/build-with-provenance.sh
+docker compose up -d --no-build
 ```
 
 ## Isolated smoke test
