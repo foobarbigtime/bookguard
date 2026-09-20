@@ -8,6 +8,7 @@ import stat
 import zipfile
 from typing import Any
 
+from .archive_io import read_zip_member_bounded
 from .audiobook_verification import probe_audio_file
 from .media_discovery import AUDIO_EXTENSIONS, EBOOK_EXTENSIONS
 
@@ -69,7 +70,7 @@ def _epub_zip(path: Path) -> bool:
         with zipfile.ZipFile(path) as archive:
             if "mimetype" not in archive.namelist():
                 return False
-            value = archive.read("mimetype")
+            value = read_zip_member_bounded(archive, "mimetype", max_bytes=256)
             return value.removeprefix(b"\xef\xbb\xbf").strip() == b"application/epub+zip"
     except (OSError, RuntimeError, KeyError, zipfile.BadZipFile):
         return False
