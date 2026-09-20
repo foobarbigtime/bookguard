@@ -85,6 +85,14 @@
       </div>
     {% endif %}
 
+    {% if detail.guidance %}
+      <div class="operator-guidance history-detail-guidance">
+        <strong>{{ detail.guidance.label }}</strong>
+        <small><b>Why BookGuard stopped:</b> {{ detail.guidance.why }}</small>
+        <small><b>Next step:</b> {{ detail.guidance.nextStep }}</small>
+      </div>
+    {% endif %}
+
     {% if detail.notes %}
       {% for note in detail.notes %}
         <div class="notice warning history-detail-note">{{ note }}</div>

@@ -275,6 +275,7 @@ def test_operation_detail_reads_all_supported_durable_record_types(tmp_path):
     assert details["hardlink-correction"]["author"] == "Ann Patchett"
     assert "Wrong Book" in details["hardlink-correction"]["summary"]
     assert "Bel Canto" in details["hardlink-correction"]["summary"]
+    assert details["hardlink-correction"]["guidance"] is None
 
 
 def test_operation_detail_decodes_stored_evidence(tmp_path):
@@ -363,3 +364,25 @@ def test_operation_detail_does_not_create_optional_tables(tmp_path):
         settings.config_dir = original
 
     assert after == before
+
+
+def test_operation_detail_explains_review_state(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        with local_conn() as conn:
+            conn.execute(
+                """
+                UPDATE content_verifications
+                SET verdict='INSUFFICIENT_EVIDENCE'
+                WHERE id=1
+                """
+            )
+            conn.commit()
+        detail = operation_detail("verification", 1)
+    finally:
+        settings.config_dir = original
+
+    assert detail is not None
+    assert detail["guidance"] is not None
+    assert detail["guidance"]["label"] == "Verification evidence is insufficient"
+    assert "manual review" in detail["guidance"]["nextStep"]

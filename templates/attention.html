@@ -80,9 +80,26 @@
                 <span class="muted">System workflow</span>
               {% endif %}
             </td>
-            <td class="why-cell">{{ item.message }}</td>
-            <td>{{ item.updatedAt or '—' }}</td>
-            <td><a class="button-link" href="{{ item.href }}">Open guarded workflow</a></td>
+            <td class="why-cell">
+              <div class="attention-message">{{ item.message }}</div>
+              {% if item.guidance %}
+                <div class="operator-guidance compact">
+                  <strong>{{ item.guidance.label }}</strong>
+                  <small><b>Why BookGuard stopped:</b> {{ item.guidance.why }}</small>
+                  <small><b>Next step:</b> {{ item.guidance.nextStep }}</small>
+                </div>
+              {% endif %}
+            </td>
+            <td class="history-time" title="{{ item.updatedAt or '' }}">
+              {{ item.updatedAt[:19]|replace('T', ' ') if item.updatedAt else '—' }}
+              {% if item.updatedAt %}<small>UTC</small>{% endif %}
+            </td>
+            <td class="attention-actions">
+              {% if item.detailHref %}
+                <a class="button-link" href="{{ item.detailHref }}">Audit detail</a>
+              {% endif %}
+              <a class="button-link" href="{{ item.href }}">Open guarded workflow</a>
+            </td>
           </tr>
         {% endfor %}
         </tbody>

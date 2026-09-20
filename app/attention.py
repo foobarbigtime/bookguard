@@ -4,6 +4,7 @@ from collections import Counter
 from typing import Any
 
 from .acquisition_coordinator import acquisition_coordinator_status
+from .operator_guidance import explain_blockers, operation_guidance
 from .db import (
     local_conn,
     recent_ebook_acquisitions,
@@ -81,6 +82,7 @@ def _acquisition_items(limit: int) -> list[dict[str, Any]]:
         if status not in _ACQUISITION_ATTENTION:
             continue
         book = _book_context(row.get("result_id"))
+        error = str(row.get("error") or "").strip()
         items.append(
             {
                 "kind": "acquisition",
@@ -89,9 +91,11 @@ def _acquisition_items(limit: int) -> list[dict[str, Any]]:
                 "status": status,
                 "title": book["title"],
                 "author": book["author"],
-                "message": str(row.get("error") or "").strip()
+                "message": error
                 or "This replacement workflow requires operator review or recovery.",
+                "guidance": operation_guidance("acquisition", status, error),
                 "updatedAt": row.get("updated_at") or row.get("created_at"),
+                "detailHref": f"/history/acquisition/{row.get('id')}",
                 "href": "/triage#acquisitionPanel",
             }
         )
@@ -112,6 +116,7 @@ def _admission_items(limit: int) -> list[dict[str, Any]]:
             if status == "registration_correcting"
             else "This admission failed and requires operator review."
         )
+        error = str(row.get("error") or "").strip()
         items.append(
             {
                 "kind": "admission",
@@ -120,8 +125,10 @@ def _admission_items(limit: int) -> list[dict[str, Any]]:
                 "status": status,
                 "title": book["title"],
                 "author": book["author"],
-                "message": str(row.get("error") or "").strip() or default,
+                "message": error or default,
+                "guidance": operation_guidance("admission", status, error),
                 "updatedAt": row.get("updated_at") or row.get("created_at"),
+                "detailHref": f"/history/admission/{row.get('id')}",
                 "href": "/triage#acquisitionPanel",
             }
         )
@@ -141,7 +148,13 @@ def _hardlink_items() -> list[dict[str, Any]]:
                 "author": "",
                 "message": str(row.get("error") or "").strip()
                 or "An interrupted or uncertain shared-file correction needs review.",
+                "guidance": operation_guidance(
+                    "hardlink_correction",
+                    str(row.get("status") or ""),
+                    str(row.get("error") or ""),
+                ),
                 "updatedAt": row.get("completed_at") or row.get("created_at"),
+                "detailHref": f"/history/hardlink-correction/{row['id']}",
                 "href": "/triage#hardlinkPanel",
             }
         )
@@ -156,7 +169,13 @@ def _hardlink_items() -> list[dict[str, Any]]:
                 "author": "",
                 "message": str(row.get("error") or "").strip()
                 or "An interrupted staging-link cleanup needs review.",
+                "guidance": operation_guidance(
+                    "hardlink_cleanup",
+                    str(row.get("status") or ""),
+                    str(row.get("error") or ""),
+                ),
                 "updatedAt": row.get("completed_at") or row.get("created_at"),
+                "detailHref": f"/history/hardlink-cleanup/{row['id']}",
                 "href": "/triage#hardlinkPanel",
             }
         )
@@ -168,6 +187,17 @@ def _coordinator_items() -> list[dict[str, Any]]:
     state = str(status.get("state") or "").casefold()
     if state not in {"attention_required", "error"}:
         return []
+    blockers = [str(item) for item in status.get("blockers") or []]
+    explained = explain_blockers(blockers)
+    guidance = None
+    if explained:
+        first = explained[0]
+        guidance = {
+            "label": first["label"],
+            "why": first["why"],
+            "nextStep": first["fix"],
+            "recordedError": str(status.get("lastError") or "").strip(),
+        }
     return [
         {
             "kind": "coordinator",
@@ -178,7 +208,9 @@ def _coordinator_items() -> list[dict[str, Any]]:
             "author": "",
             "message": str(status.get("lastError") or "").strip()
             or "The supervised acquisition coordinator requires operator attention.",
+            "guidance": guidance,
             "updatedAt": status.get("lastRunAt"),
+            "detailHref": "",
             "href": "/triage#acquisitionPanel",
         }
     ]
