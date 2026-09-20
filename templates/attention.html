@@ -60,14 +60,14 @@
       <small>Snapshot {{ attention.generatedAt }}</small>
     </div>
 
-    {% if attention.items %}
+    {% if attention['items'] %}
     <div class="table-wrap">
       <table class="attention-table">
         <thead>
           <tr><th>Type</th><th>State</th><th>Book</th><th>Why</th><th>Updated</th><th>Workflow</th></tr>
         </thead>
         <tbody>
-        {% for item in attention.items %}
+        {% for item in attention['items'] %}
           <tr>
             <td><strong>{{ item.kindLabel }}</strong>{% if item.id %}<small>#{{ item.id }}</small>{% endif %}</td>
             <td><span class="workflow-state workflow-state-review">{{ item.status|replace('_',' ') }}</span></td>
