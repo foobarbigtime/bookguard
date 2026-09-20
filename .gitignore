@@ -4,3 +4,10 @@ __pycache__/
 .env
 bookguard.db
 .DS_Store
+.env.before-*
+.venv/
+/quarantine/
+/bookguard-safe-epub-plan.json
+/missing-detach-plan.json
+/review-verifications*.json
+/review-verifications*.tsv

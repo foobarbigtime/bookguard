@@ -83,9 +83,49 @@
   </section>
 
   <div class="notice info triage-note">
-    <strong>Content verification:</strong>
-    Verification is read-only. BookGuard checks the ebook itself and separates verified books, repairable metadata errors, wrong content, and cases that still need human review.
+    <strong>Verification and security:</strong>
+    Verification is read-only. BookGuard validates file type and structure before separating verified books, repairable metadata errors, wrong content, unsafe files, and cases that still need human review.
   </div>
+
+  <section class="table-card acquisition-panel" aria-live="polite">
+    <div class="section-title row-between">
+      <div>
+        <h2>Shared-file registration conflicts</h2>
+        <p>Check whether different books track hard links to the same ebook.</p>
+      </div>
+      <button id="checkHardlinks" type="button">Check shared files</button>
+    </div>
+    <div id="hardlinkResults" class="acquisition-body">
+      <p class="muted">Checking registrations is read-only. Corrections require verified content and explicit confirmation.</p>
+    </div>
+  </section>
+
+  <section id="acquisitionPanel" class="table-card acquisition-panel" aria-live="polite">
+    <div class="section-title row-between">
+      <div>
+        <h2>Supervised ebook replacement</h2>
+        <p>BookGuard can prepare one verified wrong-content result, supervise its replacement, and pause before admission.</p>
+      </div>
+      <span id="acquisitionState" class="workflow-state workflow-state-loading">Loading status</span>
+    </div>
+    <div class="acquisition-body">
+      <p id="acquisitionMessage" class="muted">Checking the replacement safety gates…</p>
+      <dl id="acquisitionDetails" class="workflow-details" hidden></dl>
+      <div id="acquisitionControls" class="workflow-controls"></div>
+      <div id="acquisitionError" class="notice warning workflow-error" role="alert" hidden></div>
+    </div>
+  </section>
+
+  <section id="replacementPanel" class="table-card replacement-panel" aria-live="polite" hidden>
+    <div class="section-title row-between">
+      <div>
+        <h2 id="replacementTitle">Replacement candidates</h2>
+        <p id="replacementSubtitle"></p>
+      </div>
+      <button type="button" data-replacement-close>Close</button>
+    </div>
+    <div id="replacementBody" class="replacement-body"></div>
+  </section>
 
   <section class="filter-row">
     <div class="triage-toolbar">
@@ -139,7 +179,7 @@
               <span class="reason-badge reason-{{ row.reason_code|lower }}">{{ row.reason_code|replace('_',' ') }}</span>
               <small>{{ row.format }}</small>
             </td>
-            <td id="verification-cell-{{ row.id }}" class="verification-cell" data-verification-id="{{ row.id }}"><span class="muted">Not verified</span></td>
+            <td id="verification-cell-{{ row.id }}" class="verification-cell" data-verification-id="{{ row.id }}" data-book-id="{{ row.book_id }}" data-format="{{ row.format }}" data-reason-code="{{ row.reason_code }}"><span class="muted">Not verified</span></td>
             <td class="book-cell"><strong>{{ row.title }}</strong><small>{{ row.author }}</small></td>
             <td class="book-cell detected-cell">
               <strong>{{ row.detected_title or '—' }}</strong>
@@ -230,6 +270,7 @@ function verificationClass(verdict) {
   if (verdict === 'VERIFIED_CORRECT') return 'verification-correct';
   if (verdict === 'METADATA_ERROR') return 'verification-metadata';
   if (verdict === 'WRONG_CONTENT') return 'verification-wrong';
+  if (verdict === 'UNSAFE_FILE') return 'verification-wrong';
   return 'verification-unknown';
 }
 
@@ -250,6 +291,17 @@ function renderVerification(id, verification) {
   if (verification.verdict === 'METADATA_ERROR') {
     controls += ` <button class="repair-verified-button" onclick="repairVerified(${id})">Review metadata fix</button>`;
   }
+  const preparedReplacement = (
+    verification.verdict === 'INSUFFICIENT_EVIDENCE' &&
+    verification.source === 'missing' &&
+    cell.dataset.format === 'ebook' &&
+    cell.dataset.reasonCode === 'MISMATCH'
+  );
+  if (verification.verdict === 'WRONG_CONTENT' || preparedReplacement) {
+    const bookId = Number(cell.dataset.bookId);
+    const label = preparedReplacement ? 'Resume replacement' : 'Replacement workflow';
+    controls += ` <button class="danger" type="button" data-replacement-result="${id}" data-replacement-book="${bookId}">${label}</button>`;
+  }
   cell.innerHTML = `
     <span class="verification-badge ${verificationClass(verification.verdict)}">${escapeHtml(verificationLabel(verification.verdict))}</span>
     <small>${escapeHtml(verification.confidence)}% confidence · ${escapeHtml(verification.source || 'native')}</small>
@@ -264,7 +316,15 @@ function verificationDetailText(v) {
   const content = e.content || {};
   const ids = (embedded.identifiers || []).join(' | ') || '—';
   const yn = value => value ? 'FOUND' : 'not found';
-  return `Verdict: ${verificationLabel(v.verdict)}\nConfidence: ${v.confidence}%\nSource: ${v.source || '—'}\n\nExpected\nTitle: ${expected.title || '—'}\nAuthor: ${expected.author || '—'}\n\nEmbedded\nTitle: ${embedded.title || '—'}\nAuthor: ${embedded.author || '—'}\nIDs: ${ids}\n\nInternal content\nExpected title: ${yn(content.expected_title_found)}\nExpected author: ${yn(content.expected_author_found)}\nEmbedded title: ${yn(content.embedded_title_found)}\nEmbedded author: ${yn(content.embedded_author_found)}\nText examined: ${content.text_characters_examined || 0} characters\n\n${e.explanation || ''}`;
+  const security = e.security || {};
+  const securityChecks = security.checks || {};
+  const securityLines = Object.entries(securityChecks).map(([name, check]) =>
+    `${name}: ${String(check.status || 'unknown').replaceAll('_', ' ')} — ${check.message || ''}`
+  );
+  const securityText = securityLines.length
+    ? `\n\nDeterministic security\n${securityLines.join('\n')}`
+    : '';
+  return `Verdict: ${verificationLabel(v.verdict)}\nConfidence: ${v.confidence}%\nSource: ${v.source || '—'}\n\nExpected\nTitle: ${expected.title || '—'}\nAuthor: ${expected.author || '—'}\n\nEmbedded\nTitle: ${embedded.title || '—'}\nAuthor: ${embedded.author || '—'}\nIDs: ${ids}\n\nInternal content\nExpected title: ${yn(content.expected_title_found)}\nExpected author: ${yn(content.expected_author_found)}\nEmbedded title: ${yn(content.embedded_title_found)}\nEmbedded author: ${yn(content.embedded_author_found)}\nText examined: ${content.text_characters_examined || 0} characters${securityText}\n\n${e.explanation || ''}`;
 }
 
 function showVerification(id) {
@@ -342,7 +402,7 @@ async function pollVerificationJob() {
     const counts = job.counts || {};
     status.textContent = `Complete: ${job.processed || 0} verified`;
     await loadCachedVerifications();
-    alert(`Content verification complete.\n\nVerified correct: ${counts.VERIFIED_CORRECT || 0}\nMetadata errors: ${counts.METADATA_ERROR || 0}\nWrong content: ${counts.WRONG_CONTENT || 0}\nInsufficient evidence: ${counts.INSUFFICIENT_EVIDENCE || 0}`);
+    alert(`Content verification complete.\n\nVerified correct: ${counts.VERIFIED_CORRECT || 0}\nMetadata errors: ${counts.METADATA_ERROR || 0}\nWrong content: ${counts.WRONG_CONTENT || 0}\nUnsafe files: ${counts.UNSAFE_FILE || 0}\nInsufficient evidence: ${counts.INSUFFICIENT_EVIDENCE || 0}`);
   }
 }
 
@@ -358,7 +418,11 @@ async function repairVerified(id) {
     return;
   }
   if (!confirm(`${text}\n\nApply this content-verified metadata repair?`)) return;
-  const response = await fetch(`/api/verification/${id}/repair`, {method:'POST'});
+  const response = await fetch(`/api/verification/${id}/repair`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({confirm:'REPAIR'})
+  });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) { alert(body.detail || 'Verified metadata repair failed.'); return; }
   alert(`Verified metadata repair completed and checked. Repair history ID: ${body.repair_id}`);
@@ -430,5 +494,7 @@ async function triageAction(id, action) {
 loadCachedVerifications();
 pollVerificationJob();
 </script>
+<script src="/static/triage-acquisition.js" defer></script>
+<script src="/static/triage-hardlinks.js" defer></script>
 </body>
 </html>

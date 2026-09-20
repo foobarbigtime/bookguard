@@ -20,6 +20,35 @@ DEFAULT_AUTHOR_ALIASES = [
 ]
 
 REPAIR_MODES = {"off", "preview", "safe"}
+DEFAULT_MAX_STAGED_EBOOK_BYTES = 512 * 1024 * 1024
+DEFAULT_ACQUISITION_COORDINATOR_INTERVAL_SECONDS = 10
+DEFAULT_MALWARE_SCAN_TIMEOUT_SECONDS = 60
+DEFAULT_MALWARE_MAX_BYTES = 512 * 1024 * 1024
+DEFAULT_VERIFICATION_SNAPSHOT_MAX_BYTES = 512 * 1024 * 1024
+
+
+class ConfigurationError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class AuthSettings:
+    username: str
+    password: str
+
+
+def load_auth_settings() -> AuthSettings:
+    username = os.getenv("BOOKGUARD_AUTH_USERNAME", "bookguard").strip()
+    password = os.getenv("BOOKGUARD_AUTH_PASSWORD", "")
+    if not username:
+        raise ConfigurationError("BOOKGUARD_AUTH_USERNAME must not be empty.")
+    if ":" in username:
+        raise ConfigurationError("BOOKGUARD_AUTH_USERNAME must not contain a colon.")
+    if not password:
+        raise ConfigurationError(
+            "BOOKGUARD_AUTH_PASSWORD is required before BookGuard can serve protected routes."
+        )
+    return AuthSettings(username=username, password=password)
 
 
 def _bool(name: str, default: bool = False) -> bool:
@@ -69,6 +98,75 @@ def _clean_lines(raw: object) -> list[str]:
             seen.add(key)
             cleaned.append(value)
     return cleaned
+
+
+@dataclass(frozen=True)
+class AutomationSettings:
+    """Environment-only settings for the experimental maintenance workflow.
+
+    These values are loaded on demand so tests and container restarts observe
+    the current environment without mixing them into persisted UI settings.
+    """
+
+    staging_root: str
+    bindery_drop_folder: str
+    automatic_reacquisition: bool
+    acquisition_coordinator_enabled: bool
+    acquisition_coordinator_interval_seconds: int
+    max_staged_ebook_bytes: int
+    ebook_actions_enabled: bool
+    ebook_action_root: str
+    admission_enabled: bool
+    admission_root: str
+    admission_bindery_root: str
+
+
+def load_automation_settings() -> AutomationSettings:
+    raw_limit = os.getenv("BOOKGUARD_MAX_STAGED_EBOOK_BYTES", "").strip()
+    if not raw_limit:
+        raw_limit = str(DEFAULT_MAX_STAGED_EBOOK_BYTES)
+    try:
+        max_staged_ebook_bytes = int(raw_limit)
+    except ValueError as exc:
+        raise ConfigurationError(
+            "BOOKGUARD_MAX_STAGED_EBOOK_BYTES must be an integer."
+        ) from exc
+    if max_staged_ebook_bytes <= 0:
+        raise ConfigurationError(
+            "BOOKGUARD_MAX_STAGED_EBOOK_BYTES must be greater than zero."
+        )
+
+    return AutomationSettings(
+        staging_root=os.getenv("BOOKGUARD_STAGING_ROOT", "/staging").strip() or "/staging",
+        bindery_drop_folder=os.getenv("BOOKGUARD_BINDERY_DROP_FOLDER", "").strip(),
+        automatic_reacquisition=_bool("BOOKGUARD_AUTOMATIC_REACQUISITION", False),
+        acquisition_coordinator_enabled=_bool(
+            "BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED",
+            False,
+        ),
+        acquisition_coordinator_interval_seconds=_clamp(
+            _int(
+                "BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS",
+                DEFAULT_ACQUISITION_COORDINATOR_INTERVAL_SECONDS,
+            ),
+            2,
+            300,
+        ),
+        max_staged_ebook_bytes=max_staged_ebook_bytes,
+        ebook_actions_enabled=_bool("BOOKGUARD_EBOOK_ACTIONS_ENABLED", False),
+        ebook_action_root=os.getenv(
+            "BOOKGUARD_EBOOK_ACTION_ROOT",
+            "/action-books",
+        ).strip()
+        or "/action-books",
+        admission_enabled=_bool("BOOKGUARD_ADMISSION_ENABLED", False),
+        admission_root=os.getenv("BOOKGUARD_ADMISSION_ROOT", "/admission-books").strip()
+        or "/admission-books",
+        admission_bindery_root=os.getenv(
+            "BOOKGUARD_ADMISSION_BINDERY_ROOT",
+            "/data/media/books",
+        ).rstrip("/"),
+    )
 
 
 @dataclass
@@ -124,6 +222,47 @@ class Settings:
     )
     verification_use_tika: bool = _bool("BOOKGUARD_VERIFICATION_USE_TIKA", True)
     verification_tika_url: str = os.getenv("BOOKGUARD_TIKA_URL", "").rstrip("/")
+    verification_file_signatures: bool = _bool(
+        "BOOKGUARD_VERIFICATION_FILE_SIGNATURES", True
+    )
+    verification_archive_safety: bool = _bool(
+        "BOOKGUARD_VERIFICATION_ARCHIVE_SAFETY", True
+    )
+    verification_epub_structure: bool = _bool(
+        "BOOKGUARD_VERIFICATION_EPUB_STRUCTURE", True
+    )
+    verification_pdf_integrity: bool = _bool(
+        "BOOKGUARD_VERIFICATION_PDF_INTEGRITY", True
+    )
+    verification_malware_scan: bool = _bool(
+        "BOOKGUARD_VERIFICATION_MALWARE_SCAN", False
+    )
+    # The scanner endpoint is deployment-only so the web UI cannot turn this
+    # feature into an arbitrary network client.
+    verification_clamd_host: str = os.getenv("BOOKGUARD_CLAMD_HOST", "").strip()
+    verification_clamd_port: int = _clamp(_int("BOOKGUARD_CLAMD_PORT", 3310), 1, 65535)
+    verification_malware_timeout_seconds: int = _clamp(
+        _int(
+            "BOOKGUARD_MALWARE_SCAN_TIMEOUT_SECONDS",
+            DEFAULT_MALWARE_SCAN_TIMEOUT_SECONDS,
+        ),
+        1,
+        300,
+    )
+    verification_malware_max_bytes: int = _clamp(
+        _int("BOOKGUARD_MALWARE_MAX_BYTES", DEFAULT_MALWARE_MAX_BYTES),
+        1024 * 1024,
+        2 * 1024 * 1024 * 1024,
+    )
+    # Deployment-only bound for the private, disk-backed verification snapshot.
+    verification_snapshot_max_bytes: int = _clamp(
+        _int(
+            "BOOKGUARD_VERIFICATION_SNAPSHOT_MAX_BYTES",
+            DEFAULT_VERIFICATION_SNAPSHOT_MAX_BYTES,
+        ),
+        1024 * 1024,
+        2 * 1024 * 1024 * 1024,
+    )
 
     # Metadata repair. Preview is intentionally the default; it never writes files.
     metadata_repair_mode: str = field(
@@ -146,12 +285,15 @@ class Settings:
         string_fields = {
             "bindery_db", "bindery_url", "bindery_api_key", "audiobook_root",
             "audiobook_bindery_prefix", "ebook_root", "ebook_bindery_prefix",
-            "quarantine_root", "repair_audio_genre_value", "verification_tika_url",
+            "quarantine_root", "repair_audio_genre_value",
         }
         bool_fields = {
             "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
             "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
             "verification_enabled", "verification_use_tika",
+            "verification_file_signatures", "verification_archive_safety",
+            "verification_epub_structure",
+            "verification_pdf_integrity", "verification_malware_scan",
             "repair_audiobooks", "repair_ebooks", "repair_normalize_pass",
             "repair_audio_album", "repair_audio_album_artist", "repair_audio_genre",
         }
@@ -173,7 +315,6 @@ class Settings:
                 value = str(values[key]).strip()
                 if key in {
                     "bindery_url", "audiobook_bindery_prefix", "ebook_bindery_prefix",
-                    "verification_tika_url",
                 }:
                     value = value.rstrip("/")
                 setattr(self, key, value)
@@ -234,6 +375,11 @@ class Settings:
             "verification_pdf_pages": self.verification_pdf_pages,
             "verification_use_tika": self.verification_use_tika,
             "verification_tika_url": self.verification_tika_url,
+            "verification_file_signatures": self.verification_file_signatures,
+            "verification_archive_safety": self.verification_archive_safety,
+            "verification_epub_structure": self.verification_epub_structure,
+            "verification_pdf_integrity": self.verification_pdf_integrity,
+            "verification_malware_scan": self.verification_malware_scan,
             "metadata_repair_mode": self.metadata_repair_mode,
             "repair_audiobooks": self.repair_audiobooks,
             "repair_ebooks": self.repair_ebooks,
@@ -248,9 +394,10 @@ class Settings:
         }
 
     def persistable_dict(self) -> dict:
+        """Return UI settings that are safe to store in BookGuard's database."""
         data = self.public_dict()
         data.pop("bindery_api_key_set", None)
-        data["bindery_api_key"] = self.bindery_api_key
+        data.pop("verification_tika_url", None)
         return data
 
 

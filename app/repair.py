@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 
 from mutagen import File as MutagenFile
 
+from .archive_io import read_zip_member_bounded
 from .config import settings
 from .db import (
     create_metadata_repair,
@@ -21,17 +22,34 @@ from .matcher import (
     author_mentioned_in_text,
     normalize,
 )
-from .metadata import AUDIO_EXTENSIONS, ebook_metadata
+from .media_discovery import discover_audio_files, resolve_ebook_target
+from .metadata import ebook_metadata
+from .scan_guard import (
+    CurrentScanError,
+    NO_COMPLETE_SCAN,
+    require_current_scan_result as require_guarded_scan_result,
+)
 
 
 class RepairError(RuntimeError):
     pass
 
 
+def require_current_scan_result(result: dict) -> None:
+    """Refuse a write based on stale or incomplete scan evidence."""
+    try:
+        require_guarded_scan_result(result)
+    except CurrentScanError as exc:
+        if exc.code == NO_COMPLETE_SCAN:
+            raise RepairError(
+                "A completed latest scan is required before metadata repair."
+            ) from exc
+        raise RepairError(
+            "This result is not from the latest completed scan. Refresh before metadata repair."
+        ) from exc
+
+
 WRITABLE_AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".m4b", ".mp4", ".ogg", ".opus"}
-EBOOK_CANDIDATE_SUFFIXES = {
-    ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".rtf", ".txt", ".cbr", ".lit",
-}
 
 
 def _first(value) -> str:
@@ -64,38 +82,6 @@ def _repair_title_equivalent(expected: str | None, observed: str | None) -> bool
     e = normalize(expected)
     o = normalize(observed)
     return bool(e) and e == o
-
-
-def _resolve_ebook_target(local_path: str) -> str:
-    path = Path(local_path)
-    if path.is_file():
-        return str(path)
-    if not path.is_dir():
-        return local_path
-    candidates = sorted(
-        (
-            candidate
-            for candidate in path.rglob("*")
-            if candidate.is_file() and candidate.suffix.lower() in EBOOK_CANDIDATE_SUFFIXES
-        ),
-        key=lambda candidate: str(candidate).casefold(),
-    )
-    return str(candidates[0]) if candidates else local_path
-
-
-def _all_audio_paths(local_path: str) -> list[str]:
-    path = Path(local_path)
-    if path.is_file():
-        return [str(path)] if path.suffix.lower() in AUDIO_EXTENSIONS else []
-    if not path.is_dir():
-        return []
-    found: list[str] = []
-    for root, _, names in os.walk(path):
-        for name in names:
-            candidate = Path(root) / name
-            if candidate.suffix.lower() in AUDIO_EXTENSIONS:
-                found.append(str(candidate))
-    return sorted(found, key=str.casefold)
 
 
 def _audio_summary_safe(result: dict) -> bool:
@@ -155,7 +141,7 @@ def repair_candidate_summary(result: dict) -> dict:
     if not settings.repair_ebooks:
         return {"eligible": False, "safe": False, "kind": "", "reason": "Ebook repair is disabled."}
 
-    target = _resolve_ebook_target(result.get("local_path") or "")
+    target = resolve_ebook_target(result.get("local_path") or "")
     if Path(target).suffix.lower() != ".epub":
         return {
             "eligible": False,
@@ -235,7 +221,7 @@ def _write_audio_fields(path: str, values: dict) -> None:
 
 
 def _audio_preview(result: dict) -> dict:
-    paths = _all_audio_paths(result["local_path"])
+    paths = discover_audio_files(result["local_path"])
     if not paths:
         raise RepairError("No audio files were found under the tracked audiobook path.")
     unsupported = [path for path in paths if Path(path).suffix.lower() not in WRITABLE_AUDIO_EXTENSIONS]
@@ -283,7 +269,9 @@ def _audio_preview(result: dict) -> dict:
 
 def _epub_package(path: str) -> tuple[str, bytes]:
     with zipfile.ZipFile(path) as zf:
-        container = ET.fromstring(zf.read("META-INF/container.xml"))
+        container = ET.fromstring(
+            read_zip_member_bounded(zf, "META-INF/container.xml")
+        )
         rootfile = ""
         for elem in container.iter():
             if elem.tag.endswith("rootfile"):
@@ -292,7 +280,7 @@ def _epub_package(path: str) -> tuple[str, bytes]:
                     break
         if not rootfile:
             raise RepairError("EPUB container does not declare an OPF package.")
-        return rootfile, zf.read(rootfile)
+        return rootfile, read_zip_member_bounded(zf, rootfile)
 
 
 def _rewrite_epub_metadata(path: str, title: str, author: str) -> None:
@@ -329,8 +317,14 @@ def _rewrite_epub_metadata(path: str, title: str, author: str) -> None:
     try:
         with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(temp_name, "w") as dst:
             for info in src.infolist():
-                payload = replacement if info.filename == rootfile else src.read(info.filename)
-                dst.writestr(info, payload)
+                if info.filename == rootfile:
+                    dst.writestr(info, replacement)
+                    continue
+                if info.is_dir():
+                    dst.writestr(info, b"")
+                    continue
+                with src.open(info, "r") as source_member, dst.open(info, "w") as destination_member:
+                    shutil.copyfileobj(source_member, destination_member, length=1024 * 1024)
         shutil.copystat(source, temp_name)
         os.replace(temp_name, source)
     except Exception:
@@ -342,7 +336,7 @@ def _rewrite_epub_metadata(path: str, title: str, author: str) -> None:
 
 
 def _epub_preview(result: dict) -> dict:
-    target = _resolve_ebook_target(result["local_path"])
+    target = resolve_ebook_target(result["local_path"])
     if Path(target).suffix.lower() != ".epub":
         return {
             "eligible": False,
@@ -386,7 +380,8 @@ def build_repair_preview(result: dict) -> dict:
     return _epub_preview(result)
 
 
-def _apply_preview(preview: dict) -> None:
+def apply_repair_changes(preview: dict) -> None:
+    """Apply the changes from a preview already approved by a repair safety gate."""
     kind = preview["kind"]
     if kind == "EPUB_METADATA":
         after = preview["after"]
@@ -410,7 +405,8 @@ def _apply_preview(preview: dict) -> None:
     raise RepairError(f"Unsupported repair kind: {kind}")
 
 
-def _verify_preview(preview: dict) -> None:
+def verify_repair_changes(preview: dict) -> None:
+    """Confirm that the current media metadata matches an approved repair preview."""
     if preview["kind"] == "EPUB_METADATA":
         after = preview["after"]
         current = ebook_metadata(after["path"])
@@ -428,6 +424,7 @@ def _verify_preview(preview: dict) -> None:
 
 
 def apply_metadata_repair(result: dict) -> dict:
+    require_current_scan_result(result)
     if settings.metadata_repair_mode != "safe":
         raise RepairError(
             "Metadata repair is not in Safe mode. Use Preview mode to inspect proposals without writing files."
@@ -447,10 +444,11 @@ def apply_metadata_repair(result: dict) -> dict:
             "The media mount is read-only or not writable. Keep Preview mode until you deliberately make the relevant Docker media mount writable."
         )
 
+    require_current_scan_result(result)
     repair_id = create_metadata_repair(result, preview["kind"], preview["before"], preview["after"])
     try:
-        _apply_preview(preview)
-        _verify_preview(preview)
+        apply_repair_changes(preview)
+        verify_repair_changes(preview)
     except Exception as exc:
         finish_metadata_repair(repair_id, "failed", str(exc)[:1000])
         raise RepairError(str(exc)) from exc
@@ -474,8 +472,8 @@ def undo_metadata_repair(repair_id: int) -> dict:
     }
     # Refuse to overwrite later external changes: the current metadata must still
     # match exactly what BookGuard wrote before an undo is allowed.
-    _verify_preview({"kind": repair["repair_kind"], "after": repair["after"]})
-    _apply_preview(preview)
-    _verify_preview({"kind": repair["repair_kind"], "after": repair["before"]})
+    verify_repair_changes({"kind": repair["repair_kind"], "after": repair["after"]})
+    apply_repair_changes(preview)
+    verify_repair_changes({"kind": repair["repair_kind"], "after": repair["before"]})
     mark_metadata_repair_undone(repair_id)
     return {"ok": True, "repair_id": repair_id}

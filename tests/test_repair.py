@@ -1,11 +1,16 @@
 from pathlib import Path
 import zipfile
 
+import pytest
+
 from app.config import Settings, settings
-from app.db import init_local_db, metadata_repair_by_id
+from app.db import create_scan, finish_scan, init_local_db, metadata_repair_by_id
 from app.metadata import ebook_metadata
 from app.repair import (
+    RepairError,
+    _rewrite_epub_metadata,
     apply_metadata_repair,
+    apply_repair_changes,
     build_repair_preview,
     repair_candidate_summary,
     undo_metadata_repair,
@@ -101,6 +106,8 @@ def test_swapped_epub_safe_repair_and_undo(tmp_path):
     settings.config_dir = str(config)
     settings.metadata_repair_mode = "safe"
     init_local_db()
+    create_scan("scan-test", 1)
+    finish_scan("scan-test")
 
     applied = apply_metadata_repair(_result(epub))
     repair_id = applied["repair_id"]
@@ -114,6 +121,28 @@ def test_swapped_epub_safe_repair_and_undo(tmp_path):
     assert restored["title"] == "Patchett, Ann"
     assert restored["author"] == "Bel Canto"
     assert metadata_repair_by_id(repair_id)["status"] == "undone"
+
+
+def test_safe_repair_rejects_a_stale_scan_result_without_writing(tmp_path):
+    epub = tmp_path / "book.epub"
+    config = tmp_path / "config"
+    config.mkdir()
+    _make_epub(epub, "Patchett, Ann", "Bel Canto")
+
+    settings.config_dir = str(config)
+    settings.metadata_repair_mode = "safe"
+    init_local_db()
+    create_scan("scan-test", 1)
+    finish_scan("scan-test")
+    create_scan("newer-scan", 1)
+    finish_scan("newer-scan")
+
+    with pytest.raises(RepairError, match="latest completed scan"):
+        apply_metadata_repair(_result(epub))
+
+    current = ebook_metadata(str(epub))
+    assert current["title"] == "Patchett, Ann"
+    assert current["author"] == "Bel Canto"
 
 
 def test_loose_title_overlap_is_not_safe_to_repair(tmp_path):
@@ -171,3 +200,61 @@ def test_reversed_literal_author_name_can_be_normalized(tmp_path):
     assert preview["before"]["author"] == "Pilkey, Dav"
     assert preview["after"]["author"] == "Dav Pilkey"
     assert preview["before"]["title"] == preview["after"]["title"]
+
+
+def test_epub_rewrite_streams_unrelated_members_without_zipfile_read(tmp_path, monkeypatch):
+    epub = tmp_path / "streaming-rewrite.epub"
+    _make_epub(epub, "Patchett, Ann", "Bel Canto")
+    payload = b"x" * (2 * 1024 * 1024 + 17)
+    with zipfile.ZipFile(epub, "a", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("OEBPS/large-resource.bin", payload)
+
+    def fail_full_member_read(*args, **kwargs):
+        raise AssertionError("EPUB rewrite must not call ZipFile.read() for archive members")
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", fail_full_member_read)
+
+    _rewrite_epub_metadata(str(epub), "Bel Canto", "Ann Patchett")
+
+    with zipfile.ZipFile(epub) as zf:
+        with zf.open("OEBPS/large-resource.bin", "r") as handle:
+            restored = handle.read()
+
+    assert restored == payload
+    current = ebook_metadata(str(epub))
+    assert current["title"] == "Bel Canto"
+    assert current["author"] == "Ann Patchett"
+
+
+def test_epub_repair_can_add_completely_missing_title_and_author(tmp_path):
+    epub = tmp_path / "missing-metadata.epub"
+    container = """<?xml version='1.0'?>
+<container xmlns='urn:oasis:names:tc:opendocument:xmlns:container' version='1.0'>
+  <rootfiles><rootfile full-path='OEBPS/content.opf' media-type='application/oebps-package+xml'/></rootfiles>
+</container>"""
+    package = """<?xml version='1.0' encoding='utf-8'?>
+<package xmlns='http://www.idpf.org/2007/opf'
+         xmlns:dc='http://purl.org/dc/elements/1.1/' version='3.0'>
+  <metadata/>
+  <manifest/>
+  <spine/>
+</package>"""
+    with zipfile.ZipFile(epub, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr("META-INF/container.xml", container)
+        zf.writestr("OEBPS/content.opf", package)
+
+    apply_repair_changes(
+        {
+            "kind": "EPUB_METADATA",
+            "after": {
+                "path": str(epub),
+                "title": "Bel Canto",
+                "author": "Ann Patchett",
+            },
+        }
+    )
+
+    current = ebook_metadata(str(epub))
+    assert current["title"] == "Bel Canto"
+    assert current["author"] == "Ann Patchett"

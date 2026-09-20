@@ -1,0 +1,97 @@
+import pytest
+
+from app.config import (
+    DEFAULT_MAX_STAGED_EBOOK_BYTES,
+    ConfigurationError,
+    Settings,
+    load_auth_settings,
+    load_automation_settings,
+)
+
+
+def test_automation_settings_are_loaded_on_demand(monkeypatch):
+    monkeypatch.setenv("BOOKGUARD_STAGING_ROOT", "/test-staging")
+    monkeypatch.setenv("BOOKGUARD_BINDERY_DROP_FOLDER", "/test-drop")
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_REACQUISITION", "true")
+    monkeypatch.setenv("BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED", "true")
+    monkeypatch.setenv("BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS", "25")
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTIONS_ENABLED", "true")
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTION_ROOT", "/test-actions")
+    monkeypatch.setenv("BOOKGUARD_ADMISSION_ENABLED", "true")
+    monkeypatch.setenv("BOOKGUARD_ADMISSION_ROOT", "/test-admission")
+    monkeypatch.setenv("BOOKGUARD_ADMISSION_BINDERY_ROOT", "/bindery-books")
+    monkeypatch.delenv("BOOKGUARD_MAX_STAGED_EBOOK_BYTES", raising=False)
+
+    configured = load_automation_settings()
+
+    assert configured.staging_root == "/test-staging"
+    assert configured.bindery_drop_folder == "/test-drop"
+    assert configured.automatic_reacquisition is True
+    assert configured.acquisition_coordinator_enabled is True
+    assert configured.acquisition_coordinator_interval_seconds == 25
+    assert configured.max_staged_ebook_bytes == DEFAULT_MAX_STAGED_EBOOK_BYTES
+    assert configured.ebook_actions_enabled is True
+    assert configured.ebook_action_root == "/test-actions"
+    assert configured.admission_enabled is True
+    assert configured.admission_root == "/test-admission"
+    assert configured.admission_bindery_root == "/bindery-books"
+
+
+@pytest.mark.parametrize("value", ["not-a-number", "0", "-1"])
+def test_invalid_staging_size_limit_fails_closed(monkeypatch, value):
+    monkeypatch.setenv("BOOKGUARD_MAX_STAGED_EBOOK_BYTES", value)
+
+    with pytest.raises(ConfigurationError):
+        load_automation_settings()
+
+
+def test_auth_settings_require_a_password(monkeypatch):
+    monkeypatch.delenv("BOOKGUARD_AUTH_PASSWORD", raising=False)
+
+    with pytest.raises(ConfigurationError, match="AUTH_PASSWORD is required"):
+        load_auth_settings()
+
+
+def test_auth_username_cannot_contain_basic_auth_separator(monkeypatch):
+    monkeypatch.setenv("BOOKGUARD_AUTH_USERNAME", "bad:name")
+    monkeypatch.setenv("BOOKGUARD_AUTH_PASSWORD", "secret")
+
+    with pytest.raises(ConfigurationError, match="must not contain a colon"):
+        load_auth_settings()
+
+
+def test_persistable_settings_exclude_secrets_and_deployment_only_tika_url():
+    configured = Settings(
+        bindery_api_key="super-secret",
+        verification_tika_url="http://trusted-tika:9998",
+    )
+
+    persisted = configured.persistable_dict()
+
+    assert "bindery_api_key" not in persisted
+    assert "bindery_api_key_set" not in persisted
+    assert "verification_tika_url" not in persisted
+
+
+
+def test_malware_scanner_endpoint_is_deployment_only():
+    configured = Settings(
+        verification_malware_scan=True,
+        verification_clamd_host="clamd.internal",
+        verification_clamd_port=3310,
+    )
+
+    persisted = configured.persistable_dict()
+
+    assert persisted["verification_malware_scan"] is True
+    assert "verification_clamd_host" not in persisted
+    assert "verification_clamd_port" not in persisted
+
+
+
+def test_verification_snapshot_limit_is_deployment_only():
+    configured = Settings(verification_snapshot_max_bytes=123456789)
+
+    persisted = configured.persistable_dict()
+
+    assert "verification_snapshot_max_bytes" not in persisted

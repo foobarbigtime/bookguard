@@ -1,0 +1,11 @@
+**
+!Dockerfile
+!requirements.txt
+!app/
+!app/**
+!tools/
+!tools/**
+!templates/
+!templates/**
+!static/
+!static/**

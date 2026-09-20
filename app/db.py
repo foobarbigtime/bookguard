@@ -9,6 +9,9 @@ import sqlite3
 from .config import settings
 
 
+NON_PERSISTED_SETTING_KEYS = {"bindery_api_key", "verification_tika_url"}
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -184,6 +187,48 @@ def init_local_db() -> None:
                 completed_at TEXT,
                 error TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS ebook_admissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id INTEGER NOT NULL,
+                scan_id TEXT NOT NULL,
+                book_id INTEGER NOT NULL,
+                staged_relative_path TEXT NOT NULL,
+                staged_sha256 TEXT,
+                stored_path TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                status TEXT NOT NULL,
+                publication_method TEXT,
+                verification_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                error TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS ebook_acquisitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id INTEGER NOT NULL,
+                scan_id TEXT NOT NULL,
+                book_id INTEGER NOT NULL,
+                candidate_guid TEXT NOT NULL,
+                candidate_title TEXT NOT NULL,
+                candidate_indexer TEXT,
+                candidate_protocol TEXT,
+                status TEXT NOT NULL,
+                queue_id INTEGER,
+                queue_status TEXT,
+                grab_response_json TEXT,
+                observed_relative_path TEXT,
+                observed_size INTEGER,
+                observed_modified_ns INTEGER,
+                staged_relative_path TEXT,
+                staged_sha256 TEXT,
+                verification_json TEXT,
+                admission_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                error TEXT
+            );
             """
         )
 
@@ -193,6 +238,15 @@ def init_local_db() -> None:
         if "reason_code" not in columns:
             conn.execute(
                 "ALTER TABLE scan_results ADD COLUMN reason_code TEXT NOT NULL DEFAULT 'UNKNOWN'"
+            )
+
+        admission_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(ebook_admissions)").fetchall()
+        }
+        if "publication_method" not in admission_columns:
+            conn.execute(
+                "ALTER TABLE ebook_admissions ADD COLUMN publication_method TEXT"
             )
 
         conn.executescript(
@@ -211,8 +265,20 @@ def init_local_db() -> None:
                 ON cleanup_actions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_cleanup_actions_result
                 ON cleanup_actions(result_id);
+            CREATE INDEX IF NOT EXISTS idx_ebook_admissions_created
+                ON ebook_admissions(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ebook_admissions_result
+                ON ebook_admissions(result_id);
+            CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_created
+                ON ebook_acquisitions(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_result
+                ON ebook_acquisitions(result_id);
+            CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_status
+                ON ebook_acquisitions(status);
             """
         )
+        for key in NON_PERSISTED_SETTING_KEYS:
+            conn.execute("DELETE FROM app_settings WHERE key=?", (key,))
         conn.commit()
 
 
@@ -221,8 +287,11 @@ def load_persisted_settings() -> dict:
         rows = conn.execute("SELECT key, value_json FROM app_settings").fetchall()
     out = {}
     for row in rows:
+        key = str(row["key"])
+        if key in NON_PERSISTED_SETTING_KEYS:
+            continue
         try:
-            out[row["key"]] = json.loads(row["value_json"])
+            out[key] = json.loads(row["value_json"])
         except json.JSONDecodeError:
             continue
     return out
@@ -231,7 +300,11 @@ def load_persisted_settings() -> dict:
 def save_persisted_settings(values: dict) -> None:
     now = utc_now()
     with local_conn() as conn:
+        for key in NON_PERSISTED_SETTING_KEYS:
+            conn.execute("DELETE FROM app_settings WHERE key=?", (key,))
         for key, value in values.items():
+            if key in NON_PERSISTED_SETTING_KEYS:
+                continue
             conn.execute(
                 """
                 INSERT INTO app_settings(key, value_json, updated_at)
@@ -422,6 +495,254 @@ def result_by_id(result_id: int) -> dict | None:
     if not row:
         return None
     return _decode_results([row])[0]
+
+
+def create_ebook_admission(result: dict, staged_relative_path: str) -> int:
+    now = utc_now()
+    with local_conn() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO ebook_admissions(
+                result_id, scan_id, book_id, staged_relative_path,
+                stored_path, local_path, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'preparing', ?, ?)
+            """,
+            (
+                result["id"],
+                result["scan_id"],
+                result["book_id"],
+                staged_relative_path,
+                result["stored_path"],
+                result["local_path"],
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def update_ebook_admission(
+    admission_id: int,
+    status: str,
+    *,
+    staged_sha256: str | None = None,
+    publication_method: str | None = None,
+    verification: dict | None = None,
+    error: str | None = None,
+) -> None:
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ebook_admissions
+            SET status=?, staged_sha256=COALESCE(?, staged_sha256),
+                publication_method=COALESCE(?, publication_method),
+                verification_json=COALESCE(?, verification_json),
+                updated_at=?, error=?
+            WHERE id=?
+            """,
+            (
+                status,
+                staged_sha256,
+                publication_method,
+                json.dumps(verification, ensure_ascii=False) if verification is not None else None,
+                utc_now(),
+                error,
+                admission_id,
+            ),
+        )
+        conn.commit()
+
+
+def ebook_admission_by_id(admission_id: int) -> dict | None:
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM ebook_admissions WHERE id=?",
+            (admission_id,),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    raw = item.pop("verification_json")
+    item["verification"] = json.loads(raw) if raw else None
+    return item
+
+
+def recent_ebook_admissions(limit: int = 100) -> list[dict]:
+    with local_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ebook_admissions ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit), 500)),),
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        raw = item.pop("verification_json")
+        item["verification"] = json.loads(raw) if raw else None
+        items.append(item)
+    return items
+
+
+def _decode_ebook_acquisition(row) -> dict:
+    item = dict(row)
+    for source, target in (
+        ("grab_response_json", "grab_response"),
+        ("verification_json", "verification"),
+    ):
+        raw = item.pop(source)
+        item[target] = json.loads(raw) if raw else None
+    return item
+
+
+def create_ebook_acquisition(
+    result: dict,
+    candidate: dict,
+) -> int:
+    now = utc_now()
+    with local_conn() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO ebook_acquisitions(
+                result_id, scan_id, book_id, candidate_guid, candidate_title,
+                candidate_indexer, candidate_protocol, status, created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'preparing', ?, ?)
+            """,
+            (
+                result["id"],
+                result["scan_id"],
+                result["book_id"],
+                str(candidate.get("guid") or ""),
+                str(candidate.get("title") or ""),
+                str(candidate.get("indexerName") or candidate.get("indexer") or ""),
+                str(candidate.get("protocol") or ""),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def update_ebook_acquisition(
+    acquisition_id: int,
+    status: str,
+    *,
+    queue_id: int | None = None,
+    queue_status: str | None = None,
+    grab_response: dict | list | None = None,
+    observed_relative_path: str | None = None,
+    observed_size: int | None = None,
+    observed_modified_ns: int | None = None,
+    staged_relative_path: str | None = None,
+    staged_sha256: str | None = None,
+    verification: dict | None = None,
+    admission_id: int | None = None,
+    error: str | None = None,
+) -> None:
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ebook_acquisitions
+            SET status=?,
+                queue_id=COALESCE(?, queue_id),
+                queue_status=COALESCE(?, queue_status),
+                grab_response_json=COALESCE(?, grab_response_json),
+                observed_relative_path=COALESCE(?, observed_relative_path),
+                observed_size=COALESCE(?, observed_size),
+                observed_modified_ns=COALESCE(?, observed_modified_ns),
+                staged_relative_path=COALESCE(?, staged_relative_path),
+                staged_sha256=COALESCE(?, staged_sha256),
+                verification_json=COALESCE(?, verification_json),
+                admission_id=COALESCE(?, admission_id),
+                updated_at=?,
+                error=?
+            WHERE id=?
+            """,
+            (
+                status,
+                queue_id,
+                queue_status,
+                json.dumps(grab_response, ensure_ascii=False)
+                if grab_response is not None
+                else None,
+                observed_relative_path,
+                observed_size,
+                observed_modified_ns,
+                staged_relative_path,
+                staged_sha256,
+                json.dumps(verification, ensure_ascii=False)
+                if verification is not None
+                else None,
+                admission_id,
+                utc_now(),
+                error,
+                acquisition_id,
+            ),
+        )
+        conn.commit()
+
+
+def ebook_acquisition_by_id(acquisition_id: int) -> dict | None:
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM ebook_acquisitions WHERE id=?",
+            (acquisition_id,),
+        ).fetchone()
+    return _decode_ebook_acquisition(row) if row else None
+
+
+def ebook_acquisition_by_admission_id(admission_id: int) -> dict | None:
+    with local_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM ebook_acquisitions
+            WHERE admission_id=?
+            ORDER BY id DESC
+            LIMIT 2
+            """,
+            (admission_id,),
+        ).fetchall()
+    if len(rows) > 1:
+        raise sqlite3.IntegrityError(
+            "Multiple ebook acquisitions reference the same admission."
+        )
+    return _decode_ebook_acquisition(rows[0]) if rows else None
+
+
+def recent_ebook_acquisitions(limit: int = 100) -> list[dict]:
+    with local_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ebook_acquisitions ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit), 500)),),
+        ).fetchall()
+    return [_decode_ebook_acquisition(row) for row in rows]
+
+
+def active_ebook_acquisitions() -> list[dict]:
+    active_statuses = (
+        "preparing",
+        "grab_requested",
+        "queued",
+        "downloading",
+        "awaiting_staging",
+        "staging_observed",
+        "verified",
+        "admitted",
+        "finalizing",
+        "cleanup_required",
+    )
+    placeholders = ",".join("?" for _ in active_statuses)
+    with local_conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM ebook_acquisitions
+            WHERE status IN ({placeholders})
+            ORDER BY id
+            """,
+            active_statuses,
+        ).fetchall()
+    return [_decode_ebook_acquisition(row) for row in rows]
 
 
 def create_cleanup_action(result: dict, action_kind: str) -> int:

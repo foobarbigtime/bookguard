@@ -1,4 +1,8 @@
-import app.verifier_v048_final as verifier
+import app.verification_engine as verifier
+from app.verification_constants import FRONT_TEXT_CHARS
+
+
+# These tests pin the position-aware identity classifier and its safety rules.
 
 
 def sample_result(title="Cat of Death!", author="Aaron Blabey"):
@@ -20,14 +24,13 @@ def sample_result(title="Cat of Death!", author="Aaron Blabey"):
 
 
 def classify(result, metadata, text, front=None):
-    return verifier._classify_identity(
+    return verifier.classify_identity(
         result,
         metadata,
         text,
         [],
-        "test",
         [],
-        front if front is not None else text[: verifier.refined.base.FRONT_TEXT_CHARS],
+        front if front is not None else text[:FRONT_TEXT_CHARS],
     )
 
 
@@ -96,6 +99,38 @@ def test_matching_metadata_with_front_content_is_verified():
     assert verdict == "VERIFIED_CORRECT"
     assert confidence == 99
     assert evidence["metadata_matches_expected"] is True
+
+
+def test_catalog_article_and_generic_novel_suffix_are_identity_equivalent():
+    result = sample_result(title="English Girl", author="Daniel Silva")
+    text = "The English Girl: A Novel Daniel Silva " + ("chapter " * 100)
+
+    verdict, confidence, evidence = classify(
+        result,
+        {"title": "The English Girl: A Novel", "author": "Daniel Silva"},
+        text,
+    )
+
+    assert verdict == "VERIFIED_CORRECT"
+    assert confidence == 99
+    assert evidence["metadata_matches_expected"] is True
+    assert evidence["content"]["expected_signal"]["strong_identity"] is True
+    assert evidence["content"]["embedded_signal"]["strong_identity"] is True
+
+
+def test_substantive_subtitle_is_not_discarded_as_catalogue_noise():
+    result = sample_result(title="English Girl", author="Daniel Silva")
+    text = "The English Girl: Spy Stories Daniel Silva " + ("chapter " * 100)
+
+    verdict, confidence, evidence = classify(
+        result,
+        {"title": "The English Girl: Spy Stories", "author": "Daniel Silva"},
+        text,
+    )
+
+    assert verdict == "INSUFFICIENT_EVIDENCE"
+    assert confidence == 70
+    assert evidence["metadata_matches_expected"] is False
 
 
 def test_same_title_conflicting_author_is_never_auto_rewritten():
@@ -180,3 +215,22 @@ def test_non_collection_bad_metadata_can_still_be_repaired():
     )
     assert verdict == "METADATA_ERROR"
     assert confidence == 97
+
+
+def test_missing_embedded_metadata_can_be_verified_for_repair():
+    result = sample_result(title="Bel Canto", author="Ann Patchett")
+    result["reason_code"] = "NO_METADATA"
+    text = "Bel Canto by Ann Patchett. " + ("story " * 1000)
+
+    verdict, confidence, evidence = classify(
+        result,
+        {},
+        text,
+    )
+
+    assert verdict == "METADATA_ERROR"
+    assert confidence == 97
+    assert evidence["embedded"]["title"] == ""
+    assert evidence["embedded"]["author"] == ""
+    assert evidence["content"]["expected_signal"]["strong_identity"] is True
+    assert evidence["content"]["expected_signal"]["front_proximity"] is True

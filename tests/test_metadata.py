@@ -1,8 +1,13 @@
 import struct
+import subprocess
 import zipfile
 from pathlib import Path
 
-from app.metadata import cbz_metadata, mobi_metadata, rtf_metadata, txt_metadata
+import app.archive_io as archive_io
+import app.metadata as metadata
+import app.pdf_probe as pdf_probe
+from app.metadata import cbz_metadata, epub_metadata, mobi_metadata, pdf_metadata, rtf_metadata, txt_metadata
+from pypdf import PdfWriter
 
 
 def _u32(value: int) -> bytes:
@@ -75,3 +80,164 @@ def test_cbz_comicinfo(tmp_path):
     md = cbz_metadata(str(path))
     assert md["title"] == "Drama"
     assert md["author"] == "Raina Telgemeier"
+
+
+def test_epub_metadata_reads_title_and_author(tmp_path):
+    path = tmp_path / "book.epub"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(
+            "META-INF/container.xml",
+            """<?xml version='1.0'?>
+            <container xmlns='urn:oasis:names:tc:opendocument:xmlns:container'>
+              <rootfiles><rootfile full-path='OEBPS/content.opf'/></rootfiles>
+            </container>""",
+        )
+        zf.writestr(
+            "OEBPS/content.opf",
+            """<?xml version='1.0'?>
+            <package xmlns='http://www.idpf.org/2007/opf'
+                     xmlns:dc='http://purl.org/dc/elements/1.1/'>
+              <metadata>
+                <dc:title>The English Girl</dc:title>
+                <dc:creator>Daniel Silva</dc:creator>
+              </metadata>
+            </package>""",
+        )
+
+    md = epub_metadata(str(path))
+
+    assert md["title"] == "The English Girl"
+    assert md["author"] == "Daniel Silva"
+
+
+def test_epub_metadata_rejects_oversized_package_xml(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive_io, "DEFAULT_XML_MEMBER_LIMIT", 512)
+    path = tmp_path / "oversized.epub"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(
+            "META-INF/container.xml",
+            """<container>
+              <rootfiles><rootfile full-path='OEBPS/content.opf'/></rootfiles>
+            </container>""",
+        )
+        zf.writestr(
+            "OEBPS/content.opf",
+            "<package><metadata>" + ("x" * 2048) + "</metadata></package>",
+        )
+
+    md = epub_metadata(str(path))
+
+    assert md["source"] == "epub"
+    assert "error" in md
+    assert "exceeds the 512-byte metadata limit" in md["error"]
+
+
+def test_pdf_metadata_reads_in_isolated_probe(tmp_path):
+    path = tmp_path / "book.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.add_metadata({"/Title": "The English Girl", "/Author": "Daniel Silva"})
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+    md = pdf_metadata(str(path))
+
+    assert md["title"] == "The English Girl"
+    assert md["author"] == "Daniel Silva"
+    assert md["source"] == "pdf"
+
+
+def test_pdf_metadata_refuses_oversized_routine_parse(tmp_path, monkeypatch):
+    path = tmp_path / "oversized.pdf"
+    path.write_bytes(b"%PDF-1.7\n" + (b"x" * 128) + b"\n%%EOF\n")
+    monkeypatch.setattr(pdf_probe, "MAX_ROUTINE_PDF_BYTES", 64)
+
+    md = pdf_metadata(str(path))
+
+    assert md["source"] == "pdf"
+    assert "error" in md
+    assert "routine metadata limit" in md["error"]
+
+
+def test_mobi_metadata_refuses_oversized_record_zero(tmp_path, monkeypatch):
+    path = tmp_path / "oversized.azw3"
+    build_test_mobi(path)
+    monkeypatch.setattr(metadata, "MAX_MOBI_RECORD0_BYTES", 128)
+
+    md = mobi_metadata(str(path))
+
+    assert md["source"] == "mobi"
+    assert "error" in md
+    assert "routine metadata limit" in md["error"]
+
+
+
+def test_txt_metadata_reads_only_bounded_prefix(tmp_path, monkeypatch):
+    path = tmp_path / "book.txt"
+    path.write_bytes(
+        b"Title: Real Book\nAuthor: Real Author\n"
+        + (b"x" * (1024 * 1024))
+    )
+
+    observed = {}
+    real_reader = metadata.read_file_prefix
+
+    def tracked_reader(target, *, max_bytes):
+        observed["max_bytes"] = max_bytes
+        return real_reader(target, max_bytes=max_bytes)
+
+    monkeypatch.setattr(metadata, "read_file_prefix", tracked_reader)
+
+    md = txt_metadata(str(path))
+
+    assert observed["max_bytes"] == 131072
+    assert md["title"] == "Real Book"
+    assert md["author"] == "Real Author"
+
+
+def test_rtf_metadata_reads_only_bounded_prefix(tmp_path, monkeypatch):
+    path = tmp_path / "book.rtf"
+    path.write_bytes(
+        rb"{\rtf1{\info{\title Test Book}{\author Test Author}} "
+        + (b"x" * (1024 * 1024))
+        + b"}"
+    )
+
+    observed = {}
+    real_reader = metadata.read_file_prefix
+
+    def tracked_reader(target, *, max_bytes):
+        observed["max_bytes"] = max_bytes
+        return real_reader(target, max_bytes=max_bytes)
+
+    monkeypatch.setattr(metadata, "read_file_prefix", tracked_reader)
+
+    md = rtf_metadata(str(path))
+
+    assert observed["max_bytes"] == 262144
+    assert md["title"] == "Test Book"
+    assert md["author"] == "Test Author"
+
+def test_ffprobe_metadata_rejects_oversized_output(monkeypatch):
+    def oversized(*args, **kwargs):
+        raise metadata.ProcessOutputLimitExceeded("stdout", 1024)
+
+    monkeypatch.setattr(metadata, "run_bounded_process", oversized)
+
+    result = metadata.ffprobe_metadata("/tmp/fake-audio.m4b")
+
+    assert result["path"] == "/tmp/fake-audio.m4b"
+    assert result["probe_error"] == "ffprobe stdout exceeded the 1024-byte output limit"
+
+
+def test_ffprobe_metadata_handles_timeout(monkeypatch):
+    def timed_out(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, metadata.FFPROBE_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(metadata, "run_bounded_process", timed_out)
+
+    result = metadata.ffprobe_metadata("/tmp/fake-audio.m4b")
+
+    assert result["path"] == "/tmp/fake-audio.m4b"
+    assert result["probe_error"] == "ffprobe timed out after 30 seconds"
+

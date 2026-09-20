@@ -2,17 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
-import html
 import json
 import os
 from pathlib import Path
-import re
 import threading
 import uuid
-import zipfile
-import xml.etree.ElementTree as ET
-
-import requests
 
 from .config import settings
 from .db import (
@@ -22,21 +16,36 @@ from .db import (
     latest_scan,
     local_conn,
 )
-from .matcher import author_match_strict, author_mentioned_in_text, meaningful_words, normalize
+from .ebook_extraction import extract_ebook_identity
+from .ebook_security import inspect_ebook_security
+from .file_snapshot import (
+    SnapshotError,
+    assert_snapshot_source_current,
+    stable_file_fingerprint,
+    verification_snapshot,
+)
+from .malware_scan import probe_clamd
+from .matcher import normalize
+from .media_discovery import resolve_ebook_target
 from .metadata import ebook_metadata
-from .repair import RepairError, _apply_preview, _verify_preview
+from .repair import (
+    RepairError,
+    apply_repair_changes,
+    require_current_scan_result,
+    verify_repair_changes,
+)
 from .triage import result_signature, triage_state
+from .tika_client import test_connection
+from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "1"
+VERIFIER_VERSION = "18"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
     "WRONG_CONTENT",
     "INSUFFICIENT_EVIDENCE",
-}
-EBOOK_SUFFIXES = {
-    ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".rtf", ".txt", ".cbr", ".lit"
+    "UNSAFE_FILE",
 }
 
 _job_lock = threading.Lock()
@@ -55,6 +64,20 @@ _job_state: dict = {
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def test_tika() -> dict:
+    """Expose the Tika connectivity check through the verifier service API."""
+    return test_connection()
+
+
+def test_malware_scanner() -> dict:
+    """Probe the deployment-configured ClamAV daemon without sending media bytes."""
+    return probe_clamd(
+        host=settings.verification_clamd_host,
+        port=settings.verification_clamd_port,
+        timeout_seconds=min(10, settings.verification_malware_timeout_seconds),
+    )
 
 
 def init_verification_db() -> None:
@@ -91,46 +114,38 @@ def init_verification_db() -> None:
         conn.commit()
 
 
-def _resolve_target(local_path: str) -> str:
-    path = Path(local_path)
-    if path.is_file():
-        return str(path)
-    if not path.is_dir():
-        return str(path)
-    candidates = sorted(
-        (
-            candidate
-            for candidate in path.rglob("*")
-            if candidate.is_file() and candidate.suffix.lower() in EBOOK_SUFFIXES
-        ),
-        key=lambda candidate: str(candidate).casefold(),
-    )
-    return str(candidates[0]) if candidates else str(path)
-
-
 def _file_fingerprint(path: str) -> str:
-    target = Path(path)
-    if not target.is_file():
-        return "missing"
-    stat = target.stat()
-    digest = hashlib.sha256()
-    digest.update(str(target).encode("utf-8", errors="replace"))
-    digest.update(str(stat.st_size).encode())
-    digest.update(str(stat.st_mtime_ns).encode())
     try:
-        with target.open("rb") as fh:
-            digest.update(fh.read(65536))
-            if stat.st_size > 65536:
-                fh.seek(max(0, stat.st_size - 65536))
-                digest.update(fh.read(65536))
-    except OSError:
-        pass
-    return digest.hexdigest()
+        return stable_file_fingerprint(
+            path,
+            max_bytes=settings.verification_snapshot_max_bytes,
+        )
+    except SnapshotError as exc:
+        return f"unsafe:{exc.code}"
 
 
 def _verification_signature(result: dict, target_path: str, fingerprint: str) -> str:
+    policy = json.dumps(
+        {
+            "enabled": settings.verification_enabled,
+            "fileSignatures": settings.verification_file_signatures,
+            "archiveSafety": settings.verification_archive_safety,
+            "epubStructure": settings.verification_epub_structure,
+            "pdfIntegrity": settings.verification_pdf_integrity,
+            "malwareScan": settings.verification_malware_scan,
+            "clamdHost": settings.verification_clamd_host,
+            "clamdPort": settings.verification_clamd_port,
+            "malwareMaxBytes": settings.verification_malware_max_bytes,
+            "snapshotMaxBytes": settings.verification_snapshot_max_bytes,
+            "maxTextChars": settings.verification_max_text_chars,
+            "pdfPages": settings.verification_pdf_pages,
+            "useTika": settings.verification_use_tika,
+            "tikaUrl": settings.verification_tika_url,
+        },
+        sort_keys=True,
+    )
     raw = "|".join(
-        [VERIFIER_VERSION, result_signature(result), target_path, fingerprint]
+        [VERIFIER_VERSION, result_signature(result), target_path, fingerprint, policy]
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
@@ -142,10 +157,12 @@ def _decode_row(row) -> dict:
     return item
 
 
-def verification_for_result(result: dict) -> dict | None:
+def _verification_for_fingerprint(
+    result: dict,
+    target: str,
+    fingerprint: str,
+) -> dict | None:
     init_verification_db()
-    target = _resolve_target(result.get("local_path") or "")
-    fingerprint = _file_fingerprint(target)
     signature = _verification_signature(result, target, fingerprint)
     with local_conn() as conn:
         row = conn.execute(
@@ -153,6 +170,12 @@ def verification_for_result(result: dict) -> dict | None:
             (signature,),
         ).fetchone()
     return _decode_row(row) if row else None
+
+
+def verification_for_result(result: dict) -> dict | None:
+    target = resolve_ebook_target(result.get("local_path") or "")
+    fingerprint = _file_fingerprint(target)
+    return _verification_for_fingerprint(result, target, fingerprint)
 
 
 def _save_verification(
@@ -213,247 +236,75 @@ def _save_verification(
     return item
 
 
-def _strip_html_bytes(raw: bytes) -> str:
-    text = raw.decode("utf-8", errors="replace")
-    text = re.sub(r"<script\b.*?</script>", " ", text, flags=re.I | re.S)
-    text = re.sub(r"<style\b.*?</style>", " ", text, flags=re.I | re.S)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = html.unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _epub_identity(path: str) -> tuple[dict, str, list[str]]:
-    metadata = {"title": "", "author": "", "source": "epub"}
-    identifiers: list[str] = []
-    text_parts: list[str] = []
-    max_chars = settings.verification_max_text_chars
-
-    with zipfile.ZipFile(path) as zf:
-        container = ET.fromstring(zf.read("META-INF/container.xml"))
-        rootfile = ""
-        for elem in container.iter():
-            if elem.tag.endswith("rootfile"):
-                rootfile = elem.attrib.get("full-path", "")
-                if rootfile:
-                    break
-        if rootfile:
-            package = ET.fromstring(zf.read(rootfile))
-            creators: list[str] = []
-            for elem in package.iter():
-                local = elem.tag.rsplit("}", 1)[-1].lower()
-                value = (elem.text or "").strip()
-                if local == "title" and value and not metadata["title"]:
-                    metadata["title"] = value
-                elif local == "creator" and value:
-                    creators.append(value)
-                elif local == "identifier" and value:
-                    identifiers.append(value)
-            metadata["author"] = "; ".join(creators)
-
-        for name in zf.namelist():
-            if len(" ".join(text_parts)) >= max_chars:
-                break
-            lower = name.lower()
-            if not lower.endswith((".xhtml", ".html", ".htm")):
-                continue
-            try:
-                text_parts.append(_strip_html_bytes(zf.read(name)))
-            except Exception:
-                continue
-
-    return metadata, " ".join(text_parts)[:max_chars], identifiers[:25]
-
-
-def _pdf_identity(path: str) -> tuple[dict, str, list[str]]:
-    from pypdf import PdfReader
-
-    metadata = ebook_metadata(path)
-    reader = PdfReader(path)
-    parts: list[str] = []
-    max_chars = settings.verification_max_text_chars
-    page_limit = min(len(reader.pages), settings.verification_pdf_pages)
-    for page in reader.pages[:page_limit]:
-        if sum(len(part) for part in parts) >= max_chars:
-            break
-        try:
-            parts.append(page.extract_text() or "")
-        except Exception:
-            continue
-    return metadata, " ".join(parts)[:max_chars], []
-
-
-def _plain_identity(path: str) -> tuple[dict, str, list[str]]:
-    metadata = ebook_metadata(path)
-    raw = Path(path).read_bytes()[: settings.verification_max_text_chars * 2]
-    text = raw.decode("utf-8", errors="replace")
-    if "\ufffd" in text[:4096]:
-        text = raw.decode("cp1252", errors="replace")
-    if Path(path).suffix.lower() == ".rtf":
-        text = re.sub(r"\\[a-z]+-?\d* ?", " ", text, flags=re.I)
-        text = text.replace("{", " ").replace("}", " ")
-    return metadata, re.sub(r"\s+", " ", text)[: settings.verification_max_text_chars], []
-
-
-def _tika_text(path: str) -> tuple[str, str]:
-    url = str(settings.verification_tika_url or "").rstrip("/")
-    if not settings.verification_use_tika or not url:
-        return "", ""
-    try:
-        with open(path, "rb") as fh:
-            response = requests.put(
-                f"{url}/tika",
-                data=fh,
-                headers={"Accept": "text/plain"},
-                timeout=90,
-            )
-        if response.status_code >= 300:
-            return "", f"Tika returned HTTP {response.status_code}."
-        return response.text[: settings.verification_max_text_chars], ""
-    except Exception as exc:
-        return "", f"Tika unavailable: {exc}"
-
-
-def test_tika() -> dict:
-    url = str(settings.verification_tika_url or "").rstrip("/")
-    if not url:
-        return {"configured": False, "ok": False, "message": "Tika URL is not configured."}
-    try:
-        response = requests.get(f"{url}/version", timeout=10)
-        if response.status_code >= 300:
-            return {
-                "configured": True,
-                "ok": False,
-                "message": f"Tika returned HTTP {response.status_code}.",
-            }
-        return {
-            "configured": True,
-            "ok": True,
-            "message": response.text.strip()[:200] or "Tika responded successfully.",
-        }
-    except Exception as exc:
-        return {"configured": True, "ok": False, "message": str(exc)[:300]}
-
-
-def _phrase_found(value: str, text: str) -> bool:
-    needle = normalize(value)
-    haystack = normalize(text)
-    if not needle or not haystack:
-        return False
-    return f" {needle} " in f" {haystack} "
-
-
-def _embedded_author_found(author: str, text: str) -> bool:
-    candidates = [part.strip() for part in re.split(r"[;|]", author or "") if part.strip()]
-    if not candidates and author:
-        candidates = [author]
-    return any(author_mentioned_in_text(candidate, text) for candidate in candidates)
-
-
-def _title_identity_match(expected: str, observed: str) -> bool:
-    e = normalize(expected)
-    o = normalize(observed)
-    if not e or not o:
-        return False
-    if e == o:
-        return True
-    ew = meaningful_words(expected)
-    ow = meaningful_words(observed)
-    return bool(ew) and ew == ow
-
-
-def _classify_identity(result: dict, metadata: dict, text: str, identifiers: list[str], source: str, notes: list[str]) -> tuple[str, int, dict]:
-    expected_title = str(result.get("title") or "")
-    expected_author = str(result.get("author") or "")
-    embedded_title = str(metadata.get("title") or "")
-    embedded_author = str(metadata.get("author") or "")
-
-    expected_title_found = _phrase_found(expected_title, text)
-    expected_author_found = author_mentioned_in_text(expected_author, text)
-    embedded_title_found = _phrase_found(embedded_title, text)
-    embedded_author_found = _embedded_author_found(embedded_author, text)
-
-    metadata_title_match = _title_identity_match(expected_title, embedded_title)
-    metadata_author_match = author_match_strict(expected_author, embedded_author)
-    metadata_matches_expected = metadata_title_match and metadata_author_match
-
-    evidence = {
-        "expected": {"title": expected_title, "author": expected_author},
-        "embedded": {
-            "title": embedded_title,
-            "author": embedded_author,
-            "identifiers": identifiers,
-        },
-        "content": {
-            "expected_title_found": expected_title_found,
-            "expected_author_found": expected_author_found,
-            "embedded_title_found": embedded_title_found,
-            "embedded_author_found": embedded_author_found,
-            "text_characters_examined": len(text),
-        },
-        "metadata_matches_expected": metadata_matches_expected,
-        "notes": notes,
+def _snapshot_failure_result(
+    result: dict,
+    target: str,
+    exc: SnapshotError,
+) -> dict:
+    unsafe_codes = {
+        "symlink",
+        "non_regular",
+        "changed",
+        "no_nofollow_support",
+        "snapshot_root",
+        "snapshot_write",
     }
-
-    expected_content_match = expected_title_found and expected_author_found
-    embedded_content_match = embedded_title_found and embedded_author_found
-
-    if metadata_matches_expected and expected_content_match:
-        evidence["explanation"] = "Embedded metadata and internal content both identify the expected Bindery book."
-        return "VERIFIED_CORRECT", 99, evidence
-
-    if (
-        not metadata_matches_expected
-        and expected_content_match
-        and not embedded_content_match
-    ):
-        evidence["explanation"] = (
-            "Internal content identifies the expected Bindery book, while the conflicting embedded metadata is not supported by the content."
-        )
-        return "METADATA_ERROR", 97, evidence
-
-    if (
-        not metadata_matches_expected
-        and embedded_title
-        and embedded_author
-        and embedded_content_match
-        and not expected_title_found
-        and not expected_author_found
-    ):
-        evidence["explanation"] = (
-            "Internal content supports the conflicting embedded title and author, while neither expected identity field was found."
-        )
-        return "WRONG_CONTENT", 99, evidence
-
-    if metadata_matches_expected and (expected_title_found or expected_author_found):
-        evidence["explanation"] = (
-            "Embedded metadata matches the expected book and internal content supplies supporting identity evidence, but not both expected fields were found."
-        )
-        return "VERIFIED_CORRECT", 90, evidence
-
-    if expected_content_match and not metadata_matches_expected:
-        evidence["explanation"] = (
-            "Internal content supports the expected book, but conflicting embedded metadata also has some content support. Manual review is safer than rewriting automatically."
-        )
-        return "INSUFFICIENT_EVIDENCE", 70, evidence
-
-    evidence["explanation"] = (
-        "BookGuard could not obtain two independent internal-content identity signals strong enough for an automatic verdict."
+    unsafe = exc.code in unsafe_codes
+    verdict = "UNSAFE_FILE" if unsafe else "INSUFFICIENT_EVIDENCE"
+    confidence = 100 if unsafe else 0
+    fingerprint = f"unsafe:{exc.code}"
+    security = {
+        "safe": False,
+        "message": str(exc),
+        "failures": ["sourceStability"] if unsafe else [],
+        "checks": {
+            "sourceStability": {
+                "status": "failed",
+                "code": exc.code,
+                "message": str(exc),
+            }
+        },
+    }
+    evidence = {
+        "expected": {
+            "title": result.get("title", ""),
+            "author": result.get("author", ""),
+        },
+        "embedded": {},
+        "content": {},
+        "metadata_matches_expected": False,
+        "security": security,
+        "notes": [str(exc)],
+        "explanation": (
+            "Book identity was not accepted because the tracked source could not "
+            "be held stable as one regular file."
+            if unsafe
+            else "Book identity could not be evaluated because no stable readable source snapshot was available."
+        ),
+    }
+    return _save_verification(
+        result,
+        target,
+        fingerprint,
+        verdict,
+        confidence,
+        "source-snapshot",
+        evidence,
     )
-    return "INSUFFICIENT_EVIDENCE", 40, evidence
 
 
 def verify_result(result: dict, force: bool = False) -> dict:
     if not settings.verification_enabled:
         raise RuntimeError("Content verification is disabled in Settings.")
 
-    target = _resolve_target(result.get("local_path") or "")
-    fingerprint = _file_fingerprint(target)
-    if not force:
-        cached = verification_for_result(result)
-        if cached:
-            return cached
+    target = resolve_ebook_target(result.get("local_path") or "")
 
     if result.get("format") != "ebook":
+        fingerprint = _file_fingerprint(target)
+        if not force:
+            cached = _verification_for_fingerprint(result, target, fingerprint)
+            if cached:
+                return cached
         evidence = {
             "expected": {"title": result.get("title", ""), "author": result.get("author", "")},
             "embedded": {},
@@ -466,55 +317,86 @@ def verify_result(result: dict, force: bool = False) -> dict:
             result, target, fingerprint, "INSUFFICIENT_EVIDENCE", 0, "unsupported-audiobook", evidence
         )
 
-    path = Path(target)
-    if not path.is_file():
-        evidence = {
-            "expected": {"title": result.get("title", ""), "author": result.get("author", "")},
-            "embedded": {},
-            "content": {},
-            "metadata_matches_expected": False,
-            "notes": ["The tracked ebook target could not be opened as a file."],
-            "explanation": "No readable ebook file was available for content verification.",
-        }
-        return _save_verification(
-            result, target, fingerprint, "INSUFFICIENT_EVIDENCE", 0, "missing", evidence
-        )
-
-    suffix = path.suffix.lower()
-    metadata: dict = ebook_metadata(str(path))
-    text = ""
-    identifiers: list[str] = []
-    source = "native"
-    notes: list[str] = []
-
+    snapshot_root = Path(settings.config_dir) / ".verification-snapshots"
     try:
-        if suffix == ".epub":
-            metadata, text, identifiers = _epub_identity(str(path))
-            source = "native-epub"
-        elif suffix == ".pdf":
-            metadata, text, identifiers = _pdf_identity(str(path))
-            source = "native-pdf"
-        elif suffix in {".txt", ".rtf"}:
-            metadata, text, identifiers = _plain_identity(str(path))
-            source = f"native-{suffix.lstrip('.')}"
-    except Exception as exc:
-        notes.append(f"Native extraction error: {str(exc)[:300]}")
+        with verification_snapshot(
+            target,
+            temp_root=snapshot_root,
+            max_bytes=settings.verification_snapshot_max_bytes,
+        ) as snapshot:
+            fingerprint = snapshot.fingerprint
+            if not force:
+                cached = _verification_for_fingerprint(result, target, fingerprint)
+                if cached:
+                    assert_snapshot_source_current(snapshot)
+                    return cached
 
-    # Optional Tika fallback only when native extraction did not provide useful text.
-    if len(text.strip()) < 200 and settings.verification_use_tika and settings.verification_tika_url:
-        tika_text, tika_error = _tika_text(str(path))
-        if tika_text:
-            text = tika_text
-            source = f"{source}+tika" if source != "native" else "tika"
-        elif tika_error:
-            notes.append(tika_error)
+            security = inspect_ebook_security(
+                snapshot.path,
+                check_file_signatures=settings.verification_file_signatures,
+                check_archive_safety=settings.verification_archive_safety,
+                check_epub_structure=settings.verification_epub_structure,
+                check_pdf_integrity=settings.verification_pdf_integrity,
+                check_malware=settings.verification_malware_scan,
+                clamd_host=settings.verification_clamd_host,
+                clamd_port=settings.verification_clamd_port,
+                malware_timeout_seconds=settings.verification_malware_timeout_seconds,
+                malware_max_bytes=settings.verification_malware_max_bytes,
+            )
+            security["sourceSnapshot"] = {
+                "sha256": snapshot.sha256,
+                "size": snapshot.size,
+                "sourceStable": True,
+            }
+            if not security["safe"]:
+                assert_snapshot_source_current(snapshot)
+                evidence = {
+                    "expected": {
+                        "title": result.get("title", ""),
+                        "author": result.get("author", ""),
+                    },
+                    "embedded": {},
+                    "content": {},
+                    "metadata_matches_expected": False,
+                    "security": security,
+                    "notes": [security["message"]],
+                    "explanation": (
+                        "Book identity was not evaluated because deterministic file safety "
+                        "or integrity validation failed."
+                    ),
+                }
+                return _save_verification(
+                    result,
+                    target,
+                    fingerprint,
+                    "UNSAFE_FILE",
+                    100,
+                    "deterministic-safety",
+                    evidence,
+                )
 
-    verdict, confidence, evidence = _classify_identity(
-        result, metadata, text, identifiers, source, notes
-    )
-    return _save_verification(
-        result, str(path), fingerprint, verdict, confidence, source, evidence
-    )
+            extracted = extract_ebook_identity(str(snapshot.path))
+            verdict, confidence, evidence = classify_identity(
+                result,
+                extracted.metadata,
+                extracted.text,
+                extracted.identifiers,
+                extracted.notes,
+                extracted.front_text,
+            )
+            assert_snapshot_source_current(snapshot)
+            evidence["security"] = security
+            return _save_verification(
+                result,
+                target,
+                fingerprint,
+                verdict,
+                confidence,
+                extracted.source,
+                evidence,
+            )
+    except SnapshotError as exc:
+        return _snapshot_failure_result(result, target, exc)
 
 
 def verified_repair_preview(result: dict, verification: dict | None = None) -> dict:
@@ -528,7 +410,10 @@ def verified_repair_preview(result: dict, verification: dict | None = None) -> d
             "before": {},
             "after": {},
         }
-    if verification.get("verdict") != "METADATA_ERROR" or int(verification.get("confidence") or 0) < 90:
+
+    verdict = str(verification.get("verdict") or "")
+    confidence = int(verification.get("confidence") or 0)
+    if verdict != "METADATA_ERROR" or confidence < 90:
         return {
             "eligible": False,
             "safe": False,
@@ -538,7 +423,7 @@ def verified_repair_preview(result: dict, verification: dict | None = None) -> d
             "after": {},
         }
 
-    target = _resolve_target(result.get("local_path") or "")
+    target = resolve_ebook_target(result.get("local_path") or "")
     if Path(target).suffix.lower() != ".epub":
         return {
             "eligible": False,
@@ -550,17 +435,80 @@ def verified_repair_preview(result: dict, verification: dict | None = None) -> d
         }
 
     current = ebook_metadata(target)
+    if current.get("error"):
+        return {
+            "eligible": False,
+            "safe": False,
+            "kind": "EPUB_METADATA",
+            "reason": "The current EPUB metadata could not be read safely.",
+            "before": {},
+            "after": {},
+        }
+
     before = {
         "path": target,
         "title": str(current.get("title") or ""),
         "author": str(current.get("author") or ""),
     }
+    missing_metadata = not normalize(before["title"]) and not normalize(before["author"])
+
+    if missing_metadata:
+        evidence = verification.get("evidence") or {}
+        embedded = evidence.get("embedded") or {}
+        expected_signal = (evidence.get("content") or {}).get("expected_signal") or {}
+        independently_verified = all(
+            (
+                confidence >= 97,
+                bool(expected_signal.get("strong_identity")),
+                bool(expected_signal.get("front_proximity")),
+                not normalize(str(embedded.get("title") or "")),
+                not normalize(str(embedded.get("author") or "")),
+            )
+        )
+        if result.get("reason_code") != "NO_METADATA" or not independently_verified:
+            return {
+                "eligible": False,
+                "safe": False,
+                "kind": "EPUB_METADATA",
+                "reason": (
+                    "Missing EPUB metadata is filled only when the latest scan recorded "
+                    "NO_METADATA and title-page-like content independently verifies the "
+                    "expected title and author at 97% confidence or higher."
+                ),
+                "before": before,
+                "after": {},
+            }
+
+        after = {
+            "path": target,
+            "title": result["title"],
+            "author": result["author"],
+        }
+        return {
+            "eligible": True,
+            "safe": True,
+            "kind": "EPUB_METADATA",
+            "repair_reason_code": "MISSING_METADATA",
+            "missing_metadata": True,
+            "reason": (
+                "The EPUB has no usable embedded title or author. Title-page-like "
+                "content independently verifies the Bindery identity, so BookGuard "
+                "can add the missing title and author."
+            ),
+            "before": before,
+            "after": after,
+            "verification_id": verification.get("id"),
+            "verification_confidence": confidence,
+        }
+
     after = {"path": target, "title": result["title"], "author": result["author"]}
     changed = normalize(before["title"]) != normalize(after["title"]) or normalize(before["author"]) != normalize(after["author"])
     return {
         "eligible": changed,
         "safe": changed,
         "kind": "EPUB_METADATA",
+        "repair_reason_code": "CONFLICTING_METADATA",
+        "missing_metadata": False,
         "reason": (
             "Internal book content independently verifies the expected title and author; only the conflicting EPUB metadata will be rewritten."
             if changed
@@ -569,11 +517,12 @@ def verified_repair_preview(result: dict, verification: dict | None = None) -> d
         "before": before,
         "after": after,
         "verification_id": verification.get("id"),
-        "verification_confidence": verification.get("confidence"),
+        "verification_confidence": confidence,
     }
 
 
 def apply_verified_metadata_repair(result: dict) -> dict:
+    require_current_scan_result(result)
     if settings.metadata_repair_mode != "safe":
         raise RepairError("Switch Metadata repair mode to Safe before writing verified metadata repairs.")
 
@@ -587,10 +536,11 @@ def apply_verified_metadata_repair(result: dict) -> dict:
     if not os.access(target, os.W_OK):
         raise RepairError("The ebook media mount is read-only or the EPUB is not writable.")
 
+    require_current_scan_result(result)
     repair_id = create_metadata_repair(result, "EPUB_METADATA", preview["before"], preview["after"])
     try:
-        _apply_preview(preview)
-        _verify_preview(preview)
+        apply_repair_changes(preview)
+        verify_repair_changes(preview)
     except Exception as exc:
         finish_metadata_repair(repair_id, "failed", str(exc)[:1000])
         raise RepairError(str(exc)) from exc
@@ -599,10 +549,28 @@ def apply_verified_metadata_repair(result: dict) -> dict:
 
 
 def verification_summary() -> dict:
+    """Count only the newest verification for each result in the latest scan."""
     init_verification_db()
+    scan = latest_scan()
+    if not scan or not scan.get("id"):
+        return {}
     with local_conn() as conn:
         rows = conn.execute(
-            "SELECT verdict, COUNT(*) AS n FROM content_verifications GROUP BY verdict"
+            """
+            SELECT cv.verdict, COUNT(*) AS n
+            FROM content_verifications AS cv
+            WHERE cv.scan_id = ?
+              AND cv.id = (
+                  SELECT cv2.id
+                  FROM content_verifications AS cv2
+                  WHERE cv2.scan_id = cv.scan_id
+                    AND cv2.result_id = cv.result_id
+                  ORDER BY cv2.updated_at DESC, cv2.id DESC
+                  LIMIT 1
+              )
+            GROUP BY cv.verdict
+            """,
+            (scan["id"],),
         ).fetchall()
     return {str(row["verdict"]): int(row["n"]) for row in rows}
 

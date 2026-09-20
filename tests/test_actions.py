@@ -114,3 +114,24 @@ def test_missing_detach_preview_marks_already_detached_stale_scan(tmp_path, monk
 
     assert preview["safe"] is False
     assert preview["state"] == "already_detached"
+
+
+def test_manual_quarantine_rejects_root_that_contains_media(tmp_path, monkeypatch):
+    media_root = tmp_path / "media"
+    ebook_root = media_root / "books"
+    audiobook_root = tmp_path / "audiobooks"
+    source = ebook_root / "Author" / "Book.epub"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"book")
+    audiobook_root.mkdir()
+
+    monkeypatch.setattr(actions.settings, "ebook_root", str(ebook_root))
+    monkeypatch.setattr(actions.settings, "audiobook_root", str(audiobook_root))
+    monkeypatch.setattr(actions.settings, "quarantine_root", str(media_root))
+
+    try:
+        actions._safe_quarantine_destination(str(source))
+    except actions.ActionError as exc:
+        assert "outside configured media roots" in str(exc)
+    else:
+        raise AssertionError("Overlapping quarantine root was accepted")

@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from fastapi import HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from .config import settings
-from .main import app
-from .db import latest_results, latest_scan, result_by_id
-from .repair import RepairError
-from .verifier_v048_final import (
+from ..config import settings
+from ..db import latest_results
+from ..repair import RepairError
+from ..verifier import (
     apply_verified_metadata_repair,
-    init_verification_db,
     start_verification_job,
+    test_malware_scanner,
     test_tika,
     verification_for_result,
     verification_job_status,
@@ -17,34 +16,19 @@ from .verifier_v048_final import (
     verified_repair_preview,
     verify_result,
 )
+from .dependencies import current_result
+from .models import ConfirmationRequest, require_confirmation
 
 
-app.version = "0.4.9"
+router = APIRouter(prefix="/api/verification", tags=["verification"])
 
 
-@app.on_event("startup")
-def startup_verification() -> None:
-    init_verification_db()
-
-
-def _current_result(result_id: int) -> dict:
-    item = result_by_id(result_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Result not found.")
-    scan = latest_scan()
-    if not scan or scan.get("status") != "complete":
-        raise HTTPException(status_code=409, detail="A completed latest scan is required.")
-    if item.get("scan_id") != scan.get("id"):
-        raise HTTPException(status_code=409, detail="This result is not from the latest completed scan. Refresh first.")
-    return item
-
-
-@app.get("/api/verification/status")
+@router.get("/status")
 def api_verification_status():
     return {"job": verification_job_status(), "summary": verification_summary()}
 
 
-@app.get("/api/verification/cached")
+@router.get("/cached")
 def api_verification_cached(classification: str = "REVIEW", reason_code: str | None = None):
     classification = str(classification or "REVIEW").upper()
     if classification not in {"REVIEW", "REJECT"}:
@@ -62,7 +46,7 @@ def api_verification_cached(classification: str = "REVIEW", reason_code: str | N
     return {"classification": classification, "items": items}
 
 
-@app.post("/api/verification/start")
+@router.post("/start")
 async def api_verification_start(request: Request):
     try:
         payload = await request.json()
@@ -81,23 +65,28 @@ async def api_verification_start(request: Request):
     return {"ok": True, "job_id": job_id}
 
 
-@app.get("/api/verification/tika-test")
+@router.get("/tika-test")
 def api_verification_tika_test():
     return test_tika()
 
 
-@app.get("/api/verification/{result_id}")
+@router.get("/malware-test")
+def api_verification_malware_test():
+    return test_malware_scanner()
+
+
+@router.get("/{result_id}")
 def api_verification_get(result_id: int):
-    item = _current_result(result_id)
+    item = current_result(result_id)
     verification = verification_for_result(item)
     if not verification:
         return {"result_id": result_id, "verified": False}
     return {"result_id": result_id, "verified": True, "verification": verification}
 
 
-@app.post("/api/verification/{result_id}/run")
+@router.post("/{result_id}/run")
 def api_verification_run(result_id: int):
-    item = _current_result(result_id)
+    item = current_result(result_id)
     try:
         verification = verify_result(item, force=True)
     except Exception as exc:
@@ -105,9 +94,9 @@ def api_verification_run(result_id: int):
     return {"ok": True, "verification": verification}
 
 
-@app.get("/api/verification/{result_id}/repair-preview")
+@router.get("/{result_id}/repair-preview")
 def api_verified_repair_preview(result_id: int):
-    item = _current_result(result_id)
+    item = current_result(result_id)
     verification = verification_for_result(item)
     try:
         preview = verified_repair_preview(item, verification)
@@ -116,9 +105,10 @@ def api_verified_repair_preview(result_id: int):
     return {"result_id": result_id, "mode": settings.metadata_repair_mode, **preview}
 
 
-@app.post("/api/verification/{result_id}/repair")
-def api_verified_repair(result_id: int):
-    item = _current_result(result_id)
+@router.post("/{result_id}/repair")
+def api_verified_repair(result_id: int, payload: ConfirmationRequest):
+    require_confirmation(payload, "REPAIR")
+    item = current_result(result_id)
     try:
         result = apply_verified_metadata_repair(item)
     except RepairError as exc:

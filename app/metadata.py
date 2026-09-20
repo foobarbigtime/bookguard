@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections import Counter
 import json
-import os
 from pathlib import Path
 import re
 import struct
@@ -10,43 +9,21 @@ import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
 
+from . import pdf_probe
+from .archive_io import read_zip_member_bounded
+from .file_safety import read_file_prefix
+from .media_discovery import representative_audio_files
+from .subprocess_capture import ProcessOutputLimitExceeded, run_bounded_process
 
-AUDIO_EXTENSIONS = {
-    ".mp3", ".flac", ".m4a", ".m4b", ".aac", ".ogg", ".opus", ".wav", ".mp4"
-}
 
-
-def _representative_paths(paths: list[str], limit: int) -> list[str]:
-    if not paths or limit <= 0:
-        return []
-    if len(paths) <= limit:
-        return paths
-    if limit == 1:
-        return [paths[len(paths) // 2]]
-    indexes = [round(i * (len(paths) - 1) / (limit - 1)) for i in range(limit)]
-    out: list[str] = []
-    seen: set[int] = set()
-    for index in indexes:
-        if index not in seen:
-            seen.add(index)
-            out.append(paths[index])
-    return out
+FFPROBE_TIMEOUT_SECONDS = 30
+FFPROBE_STDOUT_LIMIT_BYTES = 256 * 1024
+FFPROBE_STDERR_LIMIT_BYTES = 64 * 1024
 
 
 def audio_files(path: str, limit: int) -> list[str]:
-    p = Path(path)
-    if p.is_file():
-        return [str(p)] if p.suffix.lower() in AUDIO_EXTENSIONS else []
-    if not p.is_dir():
-        return []
-    found: list[str] = []
-    for root, _, names in os.walk(p):
-        for name in sorted(names):
-            candidate = Path(root) / name
-            if candidate.suffix.lower() in AUDIO_EXTENSIONS:
-                found.append(str(candidate))
-    found.sort(key=str.casefold)
-    return _representative_paths(found, limit)
+    """Return deterministic representative audiobook files for metadata sampling."""
+    return representative_audio_files(path, limit)
 
 
 def ffprobe_metadata(path: str) -> dict:
@@ -55,11 +32,30 @@ def ffprobe_metadata(path: str) -> dict:
         "-show_entries", "format=duration:format_tags=artist,album_artist,author,composer,album,title,genre",
         "-of", "json", path,
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
-    if proc.returncode != 0:
-        return {"probe_error": proc.stderr.strip()[:500], "path": path}
     try:
-        payload = json.loads(proc.stdout or "{}")
+        proc = run_bounded_process(
+            cmd,
+            timeout=FFPROBE_TIMEOUT_SECONDS,
+            stdout_limit=FFPROBE_STDOUT_LIMIT_BYTES,
+            stderr_limit=FFPROBE_STDERR_LIMIT_BYTES,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "probe_error": f"ffprobe timed out after {FFPROBE_TIMEOUT_SECONDS} seconds",
+            "path": path,
+        }
+    except ProcessOutputLimitExceeded as exc:
+        return {
+            "probe_error": f"ffprobe {exc.stream} exceeded the {exc.limit}-byte output limit",
+            "path": path,
+        }
+
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+    if proc.returncode != 0:
+        return {"probe_error": stderr.strip()[:500], "path": path}
+    try:
+        payload = json.loads(stdout or "{}")
     except json.JSONDecodeError:
         return {"probe_error": "ffprobe returned invalid JSON", "path": path}
     fmt = payload.get("format") or {}
@@ -127,7 +123,7 @@ def audio_metadata_summary(samples: list[dict]) -> dict:
 def epub_metadata(path: str) -> dict:
     try:
         with zipfile.ZipFile(path) as zf:
-            container = ET.fromstring(zf.read("META-INF/container.xml"))
+            container = ET.fromstring(read_zip_member_bounded(zf, "META-INF/container.xml"))
             rootfile = None
             for elem in container.iter():
                 if elem.tag.endswith("rootfile"):
@@ -136,7 +132,7 @@ def epub_metadata(path: str) -> dict:
                         break
             if not rootfile:
                 return {"error": "EPUB container does not declare an OPF package."}
-            package = ET.fromstring(zf.read(rootfile))
+            package = ET.fromstring(read_zip_member_bounded(zf, rootfile))
             title = ""
             creators: list[str] = []
             for elem in package.iter():
@@ -151,17 +147,14 @@ def epub_metadata(path: str) -> dict:
 
 
 def pdf_metadata(path: str) -> dict:
-    try:
-        from pypdf import PdfReader
-        reader = PdfReader(path)
-        md = reader.metadata or {}
-        return {
-            "title": str(md.get("/Title") or "").strip(),
-            "author": str(md.get("/Author") or "").strip(),
-            "source": "pdf",
-        }
-    except Exception as exc:
-        return {"error": str(exc)[:500], "source": "pdf"}
+    payload = pdf_probe.probe_pdf(path)
+    if payload.get("error"):
+        return {"error": str(payload["error"])[:500], "source": "pdf"}
+    return {
+        "title": str(payload.get("title") or "").strip(),
+        "author": str(payload.get("author") or "").strip(),
+        "source": "pdf",
+    }
 
 
 def _u32(data: bytes, offset: int) -> int:
@@ -175,22 +168,51 @@ def _decode_mobi_text(raw: bytes, encoding_id: int) -> str:
     return raw.decode(codec, errors="replace").replace("\x00", "").strip()
 
 
+MAX_MOBI_RECORD0_BYTES = 16 * 1024 * 1024
+
+
+def _read_mobi_record0(path: str) -> bytes:
+    """Read only PalmDB record 0, with a hard cap for routine metadata inspection."""
+    target = Path(path)
+    size = target.stat().st_size
+    if size < 86:
+        raise ValueError("File is too small to contain a MOBI header")
+
+    with target.open("rb") as handle:
+        header = handle.read(90)
+        record_count = struct.unpack(">H", header[76:78])[0]
+        if record_count < 1:
+            raise ValueError("MOBI file has no PalmDB records")
+
+        record0_offset = _u32(header, 78)
+        if record_count > 1:
+            if len(header) < 90:
+                raise ValueError("MOBI record table is truncated")
+            record0_end = _u32(header, 86)
+        else:
+            record0_end = size
+
+        if not (0 <= record0_offset < record0_end <= size):
+            raise ValueError("Invalid MOBI record offsets")
+
+        record_size = record0_end - record0_offset
+        if record_size > MAX_MOBI_RECORD0_BYTES:
+            raise ValueError(
+                f"MOBI metadata record exceeds the {MAX_MOBI_RECORD0_BYTES}-byte "
+                "routine metadata limit"
+            )
+
+        handle.seek(record0_offset)
+        record = handle.read(record_size + 1)
+        if len(record) != record_size:
+            raise ValueError("MOBI metadata record is truncated")
+        return record
+
+
 def mobi_metadata(path: str) -> dict:
     """Read title/author from MOBI/AZW/AZW3 PalmDB/EXTH metadata."""
     try:
-        data = Path(path).read_bytes()
-        if len(data) < 86:
-            raise ValueError("File is too small to contain a MOBI header")
-        record_count = struct.unpack(">H", data[76:78])[0]
-        if record_count < 1:
-            raise ValueError("MOBI file has no PalmDB records")
-        record0_offset = _u32(data, 78)
-        record0_end = len(data)
-        if record_count > 1 and len(data) >= 90:
-            record0_end = _u32(data, 86)
-        if not (0 <= record0_offset < record0_end <= len(data)):
-            raise ValueError("Invalid MOBI record offsets")
-        record = data[record0_offset:record0_end]
+        record = _read_mobi_record0(path)
 
         mobi_start = record.find(b"MOBI", 8, min(len(record), 128))
         if mobi_start < 0:
@@ -260,7 +282,7 @@ def cbz_metadata(path: str) -> dict:
             comic_info_name = names.get("comicinfo.xml")
             if not comic_info_name:
                 return {"title": "", "author": "", "source": "cbz"}
-            root = ET.fromstring(zf.read(comic_info_name))
+            root = ET.fromstring(read_zip_member_bounded(zf, comic_info_name))
             values = {child.tag.casefold(): (child.text or "").strip() for child in root}
             author = values.get("writer", "") or values.get("creator", "")
             return {
@@ -274,7 +296,10 @@ def cbz_metadata(path: str) -> dict:
 
 def rtf_metadata(path: str) -> dict:
     try:
-        text = Path(path).read_bytes()[:262144].decode("latin-1", errors="replace")
+        text = read_file_prefix(path, max_bytes=262144).decode(
+            "latin-1",
+            errors="replace",
+        )
         title_match = re.search(r"\\title\s+([^{}\\]+)", text, flags=re.IGNORECASE)
         author_match = re.search(r"\\author\s+([^{}\\]+)", text, flags=re.IGNORECASE)
         return {
@@ -289,7 +314,7 @@ def rtf_metadata(path: str) -> dict:
 def txt_metadata(path: str) -> dict:
     """Use only explicit Title:/Author: headers; never trust the filename as content evidence."""
     try:
-        raw = Path(path).read_bytes()[:131072]
+        raw = read_file_prefix(path, max_bytes=131072)
         text = raw.decode("utf-8", errors="replace")
         if "\ufffd" in text[:4096]:
             text = raw.decode("cp1252", errors="replace")

@@ -51,6 +51,15 @@ def test_triage_preview_separates_detach_and_quarantine(monkeypatch):
     monkeypatch.setattr(triage, "_require_current_triage_result", lambda result: None)
     monkeypatch.setattr(triage, "_exact_bindery_match", lambda result: True)
     monkeypatch.setattr(triage.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(
+        triage,
+        "ebook_action_preview",
+        lambda local_path, stored_path: {
+            "ready": True,
+            "checks": {},
+            "blockers": [],
+        },
+    )
 
     detach = triage.triage_action_preview(item, "detach")
     quarantine = triage.triage_action_preview(item, "quarantine")

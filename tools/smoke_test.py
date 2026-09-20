@@ -1,0 +1,773 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+from typing import Any
+import zipfile
+
+
+class SmokeTestFailure(RuntimeError):
+    pass
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise SmokeTestFailure(message)
+
+
+def _volume_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    services = payload.get("services")
+    if not isinstance(services, dict):
+        raise SmokeTestFailure("Compose output has no services object.")
+    service = services.get("bookguard")
+    if not isinstance(service, dict):
+        raise SmokeTestFailure("Compose output has no bookguard service.")
+    volumes = service.get("volumes")
+    if not isinstance(volumes, list):
+        raise SmokeTestFailure("BookGuard Compose output has no volume list.")
+
+    mapped: dict[str, dict[str, Any]] = {}
+    for volume in volumes:
+        if not isinstance(volume, dict):
+            raise SmokeTestFailure("Compose did not normalize a volume definition.")
+        target = str(volume.get("target") or "")
+        if not target:
+            raise SmokeTestFailure("A Compose volume has no container target.")
+        if target in mapped:
+            raise SmokeTestFailure(f"Compose defines duplicate target {target}.")
+        mapped[target] = volume
+    return mapped
+
+
+def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
+    """Validate base and opt-in writable-alias storage topologies."""
+    if profile not in {"base", "actions", "admission", "malware", "full"}:
+        raise SmokeTestFailure(f"Unknown Compose profile: {profile}.")
+
+    volumes = _volume_map(payload)
+    services = payload.get("services") or {}
+    service = services.get("bookguard") or {}
+    security_opt = service.get("security_opt") or []
+    cap_drop = service.get("cap_drop") or []
+    cap_add = service.get("cap_add") or []
+    runtime_user = str(service.get("user") or "").strip()
+    runtime_uid = runtime_user.split(":", 1)[0].strip() if runtime_user else ""
+    tmpfs = [str(item) for item in (service.get("tmpfs") or [])]
+    tmp_mount = next(
+        (item for item in tmpfs if item == "/tmp" or item.startswith("/tmp:")),
+        "",
+    )
+    checks = {
+        "rootFilesystemReadOnly": bool(service.get("read_only")),
+        "tmpfsPresent": bool(tmp_mount),
+        "tmpfsNoExec": "noexec" in tmp_mount.split(","),
+        "tmpfsNoSuid": "nosuid" in tmp_mount.split(","),
+        "tmpfsNoDev": "nodev" in tmp_mount.split(","),
+        "tmpfsSizeBounded": "size=" in tmp_mount,
+        "noNewPrivilegesEnabled": "no-new-privileges:true" in security_opt,
+        "allCapabilitiesDropped": "ALL" in cap_drop,
+        "runtimeUserConfigured": bool(runtime_user),
+        "runtimeUserNonRoot": runtime_uid not in {"", "0", "root"},
+        "noCapabilitiesAdded": not cap_add,
+        "writeBypassCapabilityAbsent": "DAC_OVERRIDE" not in cap_add,
+        "booksMountedReadOnly": bool(volumes.get("/books", {}).get("read_only")),
+        "audiobooksMountedReadOnly": bool(
+            volumes.get("/audiobooks", {}).get("read_only")
+        ),
+        "binderyDatabaseMountedReadOnly": bool(
+            volumes.get("/bindery", {}).get("read_only")
+        ),
+        "stagingMountedWritable": (
+            "/staging" in volumes and not bool(volumes["/staging"].get("read_only"))
+        ),
+        "quarantineMountedWritable": (
+            "/quarantine" in volumes
+            and not bool(volumes["/quarantine"].get("read_only"))
+        ),
+        "configMountedWritable": (
+            "/config" in volumes and not bool(volumes["/config"].get("read_only"))
+        ),
+        "stagingSeparateFromLibrary": (
+            volumes.get("/staging", {}).get("source")
+            != volumes.get("/books", {}).get("source")
+        ),
+        "quarantineSeparateFromLibrary": (
+            volumes.get("/quarantine", {}).get("source")
+            != volumes.get("/books", {}).get("source")
+        ),
+    }
+
+    action = volumes.get("/action-books")
+    action_expected = profile in {"actions", "full"}
+    if not action_expected:
+        checks["writableActionAliasAbsent"] = action is None
+    else:
+        checks.update({
+            "writableActionAliasPresent": action is not None,
+            "writableActionAliasWritable": (
+                action is not None and not bool(action.get("read_only"))
+            ),
+            "actionAliasMapsLibrary": (
+                action is not None
+                and action.get("source") == volumes.get("/books", {}).get("source")
+            ),
+        })
+
+    admission = volumes.get("/admission-books")
+    admission_expected = profile in {"admission", "full"}
+    if not admission_expected:
+        checks["writableAdmissionAliasAbsent"] = admission is None
+    else:
+        checks.update({
+            "writableAdmissionAliasPresent": admission is not None,
+            "writableAdmissionAliasWritable": (
+                admission is not None and not bool(admission.get("read_only"))
+            ),
+            "admissionAliasMapsLibrary": (
+                admission is not None
+                and admission.get("source") == volumes.get("/books", {}).get("source")
+            ),
+        })
+
+    if profile == "malware":
+        clamav = services.get("clamav")
+        environment = service.get("environment") or {}
+        clamav_volumes = (clamav or {}).get("volumes") or []
+        allowed_targets = {"/var/lib/clamav"}
+        checks.update({
+            "clamavServicePresent": isinstance(clamav, dict),
+            "malwareScanEnabledByOverlay": (
+                str(environment.get("BOOKGUARD_VERIFICATION_MALWARE_SCAN", "")).lower()
+                == "true"
+            ),
+            "clamdHostUsesPrivateServiceName": (
+                environment.get("BOOKGUARD_CLAMD_HOST") == "clamav"
+            ),
+            "clamavNoPublishedPorts": not bool((clamav or {}).get("ports")),
+            "clamavNotPrivileged": not bool((clamav or {}).get("privileged")),
+            "clamavNoNewPrivileges": (
+                "no-new-privileges:true" in ((clamav or {}).get("security_opt") or [])
+            ),
+            "clamavHasNoMediaMounts": all(
+                isinstance(volume, dict)
+                and volume.get("type") == "volume"
+                and volume.get("target") in allowed_targets
+                for volume in clamav_volumes
+            ),
+        })
+
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise SmokeTestFailure(
+            f"Compose {profile} safety checks failed: {', '.join(failed)}"
+        )
+    return checks
+
+
+class FakeBinderyClient:
+    def __init__(self, stored_path: str) -> None:
+        self.stored_path = stored_path
+        self.import_mode = "auto"
+        self.auto_grab = "false"
+        self.registered = False
+        self.queue: list[dict[str, Any]] = []
+        self.scan_requests = 0
+        self.removals: list[tuple[int, bool, bool]] = []
+        self.candidate = {
+            "guid": "bookguard-smoke-guid",
+            "title": "Ann Patchett - Bel Canto retail epub",
+            "nzbUrl": "https://invalid.example/bookguard-smoke.nzb",
+            "size": 4096,
+            "approved": True,
+            "mediaType": "ebook",
+            "protocol": "usenet",
+            "indexerId": 1,
+            "indexerName": "Isolated smoke test",
+        }
+
+    def get_setting(self, key: str) -> str:
+        values = {
+            "import.mode": self.import_mode,
+            "import.drop_folder": "/isolated/bookguard-staging",
+            "import.drop_layout": "flat",
+            "import.drop_link_mode": "copy",
+            "autoGrab.enabled": self.auto_grab,
+        }
+        return values[key]
+
+    def list_queue(self) -> dict[str, Any]:
+        return {"items": list(self.queue), "partial": False}
+
+    def get_book(self, book_id: int) -> dict[str, Any]:
+        return {
+            "id": int(book_id),
+            "title": "Bel Canto",
+            "author": {"name": "Ann Patchett"},
+            "ebookFilePath": self.stored_path if self.registered else "",
+            "bookFiles": (
+                [{"format": "ebook", "path": self.stored_path}]
+                if self.registered
+                else []
+            ),
+        }
+
+    def search_book(self, book_id: int) -> dict[str, Any]:
+        return {"results": [dict(self.candidate)]}
+
+    def list_history(
+        self,
+        book_id: int,
+        event_type: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        return {"items": []}
+
+    def grab(self, book_id: int, candidate: dict[str, Any]) -> dict[str, Any]:
+        self.queue = [{
+            "id": 77,
+            "bookId": int(book_id),
+            "title": candidate["title"],
+            "status": "downloading",
+            "protocol": candidate["protocol"],
+        }]
+        return {"queueItem": dict(self.queue[0])}
+
+    def scan_library(self) -> dict[str, str]:
+        self.scan_requests += 1
+        return {"message": "isolated scan requested"}
+
+    def remove_queue_item(
+        self,
+        queue_id: int,
+        *,
+        remove_from_client: bool = False,
+        delete_files: bool = False,
+    ) -> None:
+        self.removals.append((queue_id, remove_from_client, delete_files))
+        self.queue = [
+            item for item in self.queue if int(item.get("id") or 0) != int(queue_id)
+        ]
+
+
+def _write_epub(path: Path) -> None:
+    container = """<?xml version="1.0"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"""
+    package = """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Bel Canto</dc:title>
+    <dc:creator>Ann Patchett</dc:creator>
+    <dc:identifier>bookguard-isolated-smoke-test</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="chapter"/></spine>
+</package>
+"""
+    body = "Bel Canto by Ann Patchett. " + ("An isolated fictional passage. " * 100)
+    chapter = (
+        '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+        f"<h1>Bel Canto</h1><p>by Ann Patchett</p><p>{body}</p>"
+        "</body></html>"
+    )
+    with zipfile.ZipFile(path, "x") as archive:
+        archive.writestr(
+            zipfile.ZipInfo("mimetype"),
+            "application/epub+zip",
+            compress_type=zipfile.ZIP_STORED,
+        )
+        archive.writestr("META-INF/container.xml", container)
+        archive.writestr("OEBPS/content.opf", package)
+        archive.writestr("OEBPS/chapter.xhtml", chapter)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def run_workflow_smoke_test() -> dict[str, Any]:
+    """Exercise the full workflow entirely inside a temporary filesystem."""
+    from app import acquisition
+    from app.admission import reconcile_admission
+    from app.config import settings
+    from app.db import (
+        active_ebook_acquisitions,
+        add_result,
+        create_scan,
+        finish_scan,
+        init_local_db,
+        latest_results,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="bookguard-smoke-") as raw_root:
+        root = Path(raw_root)
+        config = root / "config"
+        books = root / "books"
+        staging = root / "staging"
+        quarantine = root / "quarantine"
+        audiobooks = root / "audiobooks"
+        relative = Path("Ann Patchett/Bel Canto (2001)/Bel Canto - Ann Patchett.epub")
+        for directory in (config, books, staging, quarantine, audiobooks):
+            directory.mkdir()
+        (books / relative.parent).mkdir(parents=True)
+
+        settings.config_dir = str(config)
+        settings.ebook_root = str(books)
+        settings.ebook_bindery_prefix = "/data/media/books"
+        settings.audiobook_root = str(audiobooks)
+        settings.quarantine_root = str(quarantine)
+        settings.verification_use_tika = False
+        settings.allow_actions = False
+
+        os.environ.update({
+            "BOOKGUARD_STAGING_ROOT": str(staging),
+            "BOOKGUARD_BINDERY_DROP_FOLDER": "/isolated/bookguard-staging",
+            "BOOKGUARD_AUTOMATIC_REACQUISITION": "false",
+            "BOOKGUARD_ADMISSION_ENABLED": "false",
+            "BOOKGUARD_ADMISSION_ROOT": str(books),
+            "BOOKGUARD_ADMISSION_BINDERY_ROOT": "/data/media/books",
+            "BOOKGUARD_MAX_STAGED_EBOOK_BYTES": str(8 * 1024 * 1024),
+        })
+
+        init_local_db()
+        create_scan("isolated-smoke-scan", 1)
+        add_result("isolated-smoke-scan", {
+            "file_id": 1,
+            "book_id": 42,
+            "author": "Ann Patchett",
+            "title": "Bel Canto",
+            "format": "ebook",
+            "stored_path": str(Path("/data/media/books") / relative),
+            "local_path": str(books / relative),
+            "classification": "REVIEW",
+            "risk_score": 80,
+            "reason_code": "MISMATCH",
+            "reasons": ["isolated smoke-test record"],
+            "metadata": {},
+        })
+        finish_scan("isolated-smoke-scan")
+        result = latest_results(limit=1)[0]
+        client = FakeBinderyClient(result["stored_path"])
+
+        disabled = acquisition.acquisition_readiness(client)
+        _require(not disabled["ready"], "Default acquisition gate unexpectedly opened.")
+        _require(
+            {"automaticReacquisitionEnabled", "binderyExternalImport", "actionsEnabled"}
+            <= set(disabled["blockers"]),
+            "Default acquisition blockers were incomplete.",
+        )
+
+        settings.allow_actions = True
+        client.import_mode = "external"
+        os.environ["BOOKGUARD_AUTOMATIC_REACQUISITION"] = "true"
+        os.environ["BOOKGUARD_ADMISSION_ENABLED"] = "true"
+
+        started = acquisition.start_ebook_acquisition(
+            result,
+            client.candidate["guid"],
+            client,
+        )
+        acquisition_id = int(started["acquisition"]["id"])
+        _require(
+            started["acquisition"]["status"] == "queued",
+            "Acquisition was not durably queued.",
+        )
+
+        staged = staging / relative.name
+        _write_epub(staged)
+        expected_hash = _sha256(staged)
+
+        downloading = acquisition.reconcile_ebook_acquisition(acquisition_id, client)
+        _require(
+            downloading["acquisition"]["status"] == "downloading"
+            and downloading["acquisition"]["staged_sha256"] is None,
+            "Staged bytes were accepted before Bindery completed its handoff.",
+        )
+
+        client.queue[0]["status"] = "importExternal"
+        observed = acquisition.reconcile_ebook_acquisition(acquisition_id, client)
+        _require(
+            observed["acquisition"]["status"] == "staging_observed",
+            "Stable-file observation was skipped.",
+        )
+        verified = acquisition.reconcile_ebook_acquisition(acquisition_id, client)
+        _require(
+            verified["acquisition"]["status"] == "verified"
+            and verified["acquisition"]["staged_sha256"] == expected_hash,
+            "Staged-byte verification did not reach the verified state.",
+        )
+
+        admitted = acquisition.admit_ebook_acquisition(acquisition_id, client)
+        admission_id = int(admitted["admission"]["admissionId"])
+        library = books / relative
+        _require(
+            library.is_file()
+            and not library.is_symlink()
+            and _sha256(library) == expected_hash,
+            "Admission did not publish an independent verified library copy.",
+        )
+        _require(
+            library.stat().st_ino != staged.stat().st_ino,
+            "The library copy is tied to the staged inode.",
+        )
+
+        client.registered = True
+        registration = reconcile_admission(admission_id, client)
+        _require(registration["registered"], "Bindery registration was not recorded.")
+
+        finalized = acquisition.finalize_ebook_acquisition(acquisition_id, client)
+        _require(
+            finalized["acquisition"]["status"] == "finalized",
+            "Acquisition finalization did not reach its terminal state.",
+        )
+        _require(not staged.exists(), "Finalization retained the verified staging copy.")
+        _require(
+            library.is_file() and _sha256(library) == expected_hash,
+            "Finalization changed the admitted library file.",
+        )
+        _require(client.queue == [], "Finalization retained the terminal queue record.")
+        _require(
+            client.removals == [(77, False, False)],
+            "Finalization requested unsafe download-client cleanup flags.",
+        )
+        _require(
+            active_ebook_acquisitions() == [],
+            "A finalized acquisition remained active.",
+        )
+
+        return {
+            "ok": True,
+            "isolated": True,
+            "networkRequired": False,
+            "phases": [
+                "default gates",
+                "explicit acquisition",
+                "completed-handoff enforcement",
+                "stable staged-byte verification",
+                "atomic admission",
+                "Bindery registration",
+                "explicit safe finalization",
+            ],
+            "sha256": expected_hash,
+            "queueRemoval": {
+                "removeFromClient": False,
+                "deleteFiles": False,
+            },
+            "temporaryWorkspaceRemovedOnExit": True,
+        }
+
+
+
+def _configure_recovery_root(root: Path) -> tuple[Path, Path, Path]:
+    """Configure one persistent isolated root shared across smoke-test processes."""
+    from app.config import settings
+
+    config = root / "config"
+    books = root / "books"
+    staging = root / "staging"
+    quarantine = root / "quarantine"
+    audiobooks = root / "audiobooks"
+    for directory in (config, books, staging, quarantine, audiobooks):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    settings.config_dir = str(config)
+    settings.ebook_root = str(books)
+    settings.ebook_bindery_prefix = "/data/media/books"
+    settings.audiobook_root = str(audiobooks)
+    settings.quarantine_root = str(quarantine)
+    settings.verification_use_tika = False
+    settings.allow_actions = True
+
+    os.environ.update({
+        "BOOKGUARD_STAGING_ROOT": str(staging),
+        "BOOKGUARD_BINDERY_DROP_FOLDER": "/isolated/bookguard-staging",
+        "BOOKGUARD_AUTOMATIC_REACQUISITION": "true",
+        "BOOKGUARD_ADMISSION_ENABLED": "true",
+        "BOOKGUARD_ADMISSION_ROOT": str(books),
+        "BOOKGUARD_ADMISSION_BINDERY_ROOT": "/data/media/books",
+        "BOOKGUARD_MAX_STAGED_EBOOK_BYTES": str(8 * 1024 * 1024),
+    })
+    return books, staging, config
+
+
+def prepare_restart_recovery(root: Path) -> dict[str, Any]:
+    """Persist an intentionally interrupted finalization for a fresh process."""
+    from app import acquisition
+    from app.admission import reconcile_admission
+    from app.db import (
+        add_result,
+        create_scan,
+        finish_scan,
+        init_local_db,
+        latest_results,
+        update_ebook_acquisition,
+    )
+
+    books, staging, _ = _configure_recovery_root(root)
+    init_local_db()
+
+    relative = Path("Ann Patchett/Bel Canto (2001)/Bel Canto - Ann Patchett.epub")
+    (books / relative.parent).mkdir(parents=True, exist_ok=True)
+
+    create_scan("isolated-recovery-scan", 1)
+    add_result("isolated-recovery-scan", {
+        "file_id": 1,
+        "book_id": 42,
+        "author": "Ann Patchett",
+        "title": "Bel Canto",
+        "format": "ebook",
+        "stored_path": str(Path("/data/media/books") / relative),
+        "local_path": str(books / relative),
+        "classification": "REVIEW",
+        "risk_score": 80,
+        "reason_code": "MISMATCH",
+        "reasons": ["isolated restart-recovery smoke-test record"],
+        "metadata": {},
+    })
+    finish_scan("isolated-recovery-scan")
+    result = latest_results(limit=1)[0]
+    client = FakeBinderyClient(result["stored_path"])
+    client.import_mode = "external"
+
+    started = acquisition.start_ebook_acquisition(
+        result,
+        client.candidate["guid"],
+        client,
+    )
+    acquisition_id = int(started["acquisition"]["id"])
+
+    staged = staging / relative.name
+    _write_epub(staged)
+    expected_hash = _sha256(staged)
+
+    client.queue[0]["status"] = "importExternal"
+    acquisition.reconcile_ebook_acquisition(acquisition_id, client)
+    verified = acquisition.reconcile_ebook_acquisition(acquisition_id, client)
+    _require(
+        verified["acquisition"]["status"] == "verified",
+        "Recovery preparation did not reach verified state.",
+    )
+
+    admitted = acquisition.admit_ebook_acquisition(acquisition_id, client)
+    admission_id = int(admitted["admission"]["admissionId"])
+    library = books / relative
+    _require(
+        library.is_file() and _sha256(library) == expected_hash,
+        "Recovery preparation did not publish the verified library copy.",
+    )
+
+    client.registered = True
+    registered = reconcile_admission(admission_id, client)
+    _require(
+        registered["registered"],
+        "Recovery preparation did not record Bindery registration.",
+    )
+
+    # Simulate a hard process interruption after both safe cleanup operations
+    # succeeded but before the final durable state transition was committed.
+    client.remove_queue_item(77, remove_from_client=False, delete_files=False)
+    staged.unlink()
+    update_ebook_acquisition(
+        acquisition_id,
+        "cleanup_required",
+        queue_status="removed",
+        error="simulated interruption after safe cleanup",
+    )
+
+    state = {
+        "acquisitionId": acquisition_id,
+        "admissionId": admission_id,
+        "storedPath": result["stored_path"],
+        "relativePath": str(relative),
+        "sha256": expected_hash,
+    }
+    (root / "recovery-state.json").write_text(
+        json.dumps(state, sort_keys=True, indent=2),
+        encoding="utf-8",
+    )
+
+    return {
+        "ok": True,
+        "phase": "prepare",
+        "acquisitionId": acquisition_id,
+        "status": "cleanup_required",
+        "queueRemovedSafely": client.removals == [(77, False, False)],
+        "stagingRemovedBeforeInterruption": not staged.exists(),
+        "libraryRetained": library.is_file() and _sha256(library) == expected_hash,
+        "durableStateWritten": True,
+    }
+
+
+def resume_restart_recovery(root: Path) -> dict[str, Any]:
+    """Resume the interrupted durable state in a completely new process."""
+    from app import acquisition
+    from app.db import active_ebook_acquisitions, ebook_acquisition_by_id, init_local_db
+
+    books, staging, _ = _configure_recovery_root(root)
+    init_local_db()
+
+    state_path = root / "recovery-state.json"
+    _require(state_path.is_file(), "Recovery state file is missing.")
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    acquisition_id = int(state["acquisitionId"])
+    expected_hash = str(state["sha256"])
+    relative = Path(str(state["relativePath"]))
+
+    before = acquisition.ebook_acquisition_by_id(acquisition_id)
+    _require(
+        before is not None and before["status"] == "cleanup_required",
+        "Interrupted acquisition state was not durable across the process boundary.",
+    )
+
+    client = FakeBinderyClient(str(state["storedPath"]))
+    client.import_mode = "external"
+    client.registered = True
+    client.queue = []
+
+    recovered = acquisition.finalize_ebook_acquisition(acquisition_id, client)
+    library = books / relative
+    staged = staging / relative.name
+
+    _require(
+        recovered["acquisition"]["status"] == "finalized",
+        "Restart recovery did not reach finalized state.",
+    )
+    _require(
+        recovered.get("cleanupAlreadyComplete") is True,
+        "Restart recovery did not recognize the already-completed cleanup.",
+    )
+    _require(
+        client.removals == [],
+        "Restart recovery attempted to remove an already-absent queue record.",
+    )
+    _require(
+        not staged.exists(),
+        "Restart recovery unexpectedly recreated or retained staging bytes.",
+    )
+    _require(
+        library.is_file() and _sha256(library) == expected_hash,
+        "Restart recovery changed the admitted library bytes.",
+    )
+    _require(
+        active_ebook_acquisitions() == [],
+        "Recovered finalized acquisition remained active.",
+    )
+
+    after = ebook_acquisition_by_id(acquisition_id)
+    return {
+        "ok": True,
+        "phase": "resume",
+        "processBoundaryRecovered": True,
+        "statusBefore": before["status"],
+        "statusAfter": after["status"] if after else None,
+        "cleanupAlreadyComplete": True,
+        "queueRemovalRepeated": False,
+        "librarySha256": expected_hash,
+        "temporaryStateIsolated": True,
+    }
+
+
+def validate_runtime_rootfs() -> dict[str, bool]:
+    """Prove the image root is immutable while the temporary workspace is writable."""
+    root_probe = Path("/app/.bookguard-rootfs-write-test")
+    tmp_probe = Path("/tmp/bookguard-tmp-write-test")
+
+    root_blocked = False
+    try:
+        root_probe.write_text("must not be writable", encoding="utf-8")
+    except OSError:
+        root_blocked = True
+    else:
+        root_probe.unlink(missing_ok=True)
+
+    tmp_probe.write_text("temporary writes are allowed", encoding="utf-8")
+    tmp_writable = tmp_probe.read_text(encoding="utf-8") == "temporary writes are allowed"
+    tmp_probe.unlink()
+
+    checks = {
+        "applicationRootWriteBlocked": root_blocked,
+        "temporaryWorkspaceWritable": tmp_writable,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise SmokeTestFailure(
+            f"Runtime root-filesystem checks failed: {', '.join(failed)}"
+        )
+    return checks
+
+
+def _read_json_stdin() -> dict[str, Any]:
+    try:
+        payload = json.load(sys.stdin)
+    except (json.JSONDecodeError, OSError) as exc:
+        raise SmokeTestFailure(f"Unable to read Compose JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SmokeTestFailure("Compose JSON must be an object.")
+    return payload
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run isolated BookGuard smoke tests.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    compose_parser = subparsers.add_parser("compose")
+    compose_parser.add_argument(
+        "profile",
+        choices=("base", "actions", "admission", "malware", "full"),
+    )
+    subparsers.add_parser("workflow")
+    subparsers.add_parser("rootfs")
+    recovery_parser = subparsers.add_parser("recovery")
+    recovery_parser.add_argument("phase", choices=("prepare", "resume"))
+    recovery_parser.add_argument("root")
+    args = parser.parse_args(argv)
+
+    try:
+        if args.command == "compose":
+            result = {
+                "ok": True,
+                "profile": args.profile,
+                "checks": validate_compose(_read_json_stdin(), args.profile),
+            }
+        elif args.command == "rootfs":
+            result = {
+                "ok": True,
+                "checks": validate_runtime_rootfs(),
+            }
+        elif args.command == "recovery":
+            recovery_root = Path(args.root).resolve()
+            result = (
+                prepare_restart_recovery(recovery_root)
+                if args.phase == "prepare"
+                else resume_restart_recovery(recovery_root)
+            )
+        else:
+            result = run_workflow_smoke_test()
+    except Exception as exc:
+        print(json.dumps({
+            "ok": False,
+            "error": str(exc),
+            "errorType": type(exc).__name__,
+        }, indent=2))
+        return 1
+
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

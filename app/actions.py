@@ -2,20 +2,24 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import shutil
 import time
-from urllib.parse import quote
 
-import requests
-
+from .action_paths import EbookActionSafetyError, mount_is_writable, resolve_writable_ebook_path
+from .bindery_client import BinderyClient, BinderyClientError, discover_api_key
 from .config import settings
 from .db import (
     associations_inside_path,
-    bindery_conn,
     bindery_file_by_id,
     create_cleanup_action,
     finish_cleanup_action,
     latest_scan,
+)
+from .file_safety import allocate_unique_destination, is_within, roots_overlap
+from .quarantine_fs import (
+    QuarantineCommitError,
+    QuarantineMoveError,
+    commit_quarantine_or_rollback,
+    move_to_quarantine,
 )
 
 
@@ -23,47 +27,12 @@ class ActionError(RuntimeError):
     pass
 
 
-def _quoted_identifier(value: str) -> str:
-    return '"' + value.replace('"', '""') + '"'
-
-
 def resolve_bindery_api_key() -> str:
     """Return a configured key, or discover Bindery's persisted auth.api_key read-only."""
-    configured = str(settings.bindery_api_key or "").strip()
-    if configured:
-        return configured
-
     try:
-        with bindery_conn() as conn:
-            tables = [
-                str(row["name"])
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-                ).fetchall()
-            ]
-            for table in tables:
-                quoted = _quoted_identifier(table)
-                columns = {
-                    str(row["name"])
-                    for row in conn.execute(f"PRAGMA table_info({quoted})").fetchall()
-                }
-                if "key" not in columns or "value" not in columns:
-                    continue
-                row = conn.execute(
-                    f"SELECT value FROM {quoted} WHERE key=? LIMIT 1",
-                    ("auth.api_key",),
-                ).fetchone()
-                if row and row["value"]:
-                    value = str(row["value"]).strip()
-                    if value:
-                        return value
-    except Exception as exc:
-        raise ActionError(f"Unable to read Bindery's stored API key: {exc}") from exc
-
-    raise ActionError(
-        "Bindery API key is unavailable. Configure BINDERY_API_KEY or ensure "
-        "BookGuard can read Bindery's auth.api_key from the mounted database."
-    )
+        return discover_api_key()
+    except BinderyClientError as exc:
+        raise ActionError(str(exc)) from exc
 
 
 def _require_actions() -> str:
@@ -73,17 +42,10 @@ def _require_actions() -> str:
 
 
 def _delete_bindery_path(book_id: int, stored_path: str, api_key: str) -> None:
-    url = f"{settings.bindery_url}/api/v1/book/{book_id}/file?path={quote(stored_path, safe='')}"
     try:
-        response = requests.delete(
-            url,
-            headers={"X-Api-Key": api_key},
-            timeout=30,
-        )
-    except Exception as exc:
-        raise ActionError(f"Bindery detach request failed: {exc}") from exc
-    if response.status_code >= 300:
-        raise ActionError(f"Bindery detach failed ({response.status_code}): {response.text[:500]}")
+        BinderyClient(api_key=api_key, timeout=30).deregister_file(book_id, stored_path)
+    except BinderyClientError as exc:
+        raise ActionError(str(exc)) from exc
 
 
 def detach(book_id: int, stored_path: str) -> None:
@@ -200,27 +162,20 @@ def detach_missing(result: dict) -> int:
 def _safe_quarantine_destination(local_path: str) -> str:
     source = Path(local_path).resolve()
     allowed = [Path(settings.audiobook_root).resolve(), Path(settings.ebook_root).resolve()]
-    if not any(source == root or root in source.parents for root in allowed):
+    if not any(is_within(source, root) for root in allowed):
         raise ActionError("Refusing to quarantine a path outside configured media roots.")
 
     qroot = Path(settings.quarantine_root).resolve()
-    qroot.mkdir(parents=True, exist_ok=True)
-    dest = qroot / source.name
-    if dest.exists():
-        stem = source.stem
-        suffix = source.suffix
-        i = 2
-        while True:
-            candidate = qroot / f"{stem}-{i}{suffix}"
-            if not candidate.exists():
-                dest = candidate
-                break
-            i += 1
-    return str(dest)
+    if any(roots_overlap(qroot, root) for root in allowed):
+        raise ActionError("Quarantine root must be outside configured media roots.")
+    try:
+        return str(allocate_unique_destination(qroot, source))
+    except RuntimeError as exc:
+        raise ActionError(str(exc)) from exc
 
 
 def quarantine(book_id: int, stored_path: str, local_path: str) -> str:
-    _require_actions()
+    api_key = _require_actions()
     if not os.path.exists(local_path):
         raise ActionError("The physical path is already missing.")
 
@@ -231,12 +186,44 @@ def quarantine(book_id: int, stored_path: str, local_path: str) -> str:
         )
 
     destination = _safe_quarantine_destination(local_path)
-    detach(book_id, stored_path)
+    read_source = Path(local_path).resolve()
+    ebook_root = Path(settings.ebook_root).resolve()
+    if is_within(read_source, ebook_root):
+        try:
+            mutation_source = resolve_writable_ebook_path(local_path, stored_path)
+        except EbookActionSafetyError as exc:
+            raise ActionError(str(exc)) from exc
+    else:
+        mutation_source = read_source
+        if not mount_is_writable(mutation_source):
+            raise ActionError("The source media mount is read-only.")
+
+    destination_path = Path(destination)
     try:
-        shutil.move(local_path, destination)
-    except Exception as exc:
+        move_to_quarantine(
+            mutation_source,
+            read_source,
+            destination_path,
+        )
+    except QuarantineMoveError as exc:
         raise ActionError(
-            "Bindery was detached, but moving the file/folder failed. Manual attention is required: "
-            f"{exc}"
+            f"Quarantine move failed before Bindery was changed: {exc}"
+        ) from exc
+
+    try:
+        commit_quarantine_or_rollback(
+            lambda: _delete_bindery_path(book_id, stored_path, api_key),
+            mutation_source,
+            read_source,
+            destination_path,
+        )
+    except QuarantineCommitError as exc:
+        rollback_error = (
+            f" Rollback also failed: {exc.rollback_error}"
+            if exc.rollback_error is not None
+            else ""
+        )
+        raise ActionError(
+            f"Bindery detach failed after quarantine: {exc.cause}.{rollback_error}"
         ) from exc
     return destination
