@@ -43,6 +43,67 @@
     {% endfor %}
   </section>
 
+  <section class="table-card diagnostic-environment">
+    <div class="section-title">
+      <h2>Deployment environment</h2>
+      <p>Read-only runtime, provenance, malware-scanner, and mount checks. Media contents are not inspected.</p>
+    </div>
+
+    <div class="diagnostic-environment-grid">
+      <div class="diagnostic-environment-card">
+        <span class="label">Runtime</span>
+        <strong>UID {{ diagnostics.deployment.runtime.uid }} : GID {{ diagnostics.deployment.runtime.gid }}</strong>
+        <small>Python {{ diagnostics.deployment.runtime.pythonVersion }} · {{ "non-root" if diagnostics.deployment.runtime.nonRoot else "root" }}</small>
+      </div>
+      <div class="diagnostic-environment-card">
+        <span class="label">Build provenance</span>
+        <strong>{{ diagnostics.deployment.build.imageVersion }}</strong>
+        <small>
+          Revision
+          {% if diagnostics.deployment.build.revision == "unknown" %}
+            unknown
+          {% else %}
+            <code>{{ diagnostics.deployment.build.revision[:12] }}</code>
+          {% endif %}
+        </small>
+        <span class="workflow-state {{ 'workflow-state-ready' if diagnostics.deployment.build.provenanceComplete else 'workflow-state-review' }}">
+          {{ "stamped" if diagnostics.deployment.build.provenanceComplete else "not stamped" }}
+        </span>
+      </div>
+      <div class="diagnostic-environment-card">
+        <span class="label">ClamAV</span>
+        <strong>{{ diagnostics.deployment.malware.status|replace('_',' ') }}</strong>
+        <small>{{ diagnostics.deployment.malware.message }}</small>
+        {% if diagnostics.deployment.malware.version %}
+        <small>{{ diagnostics.deployment.malware.version }}</small>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="diagnostic-mount-table">
+        <thead>
+          <tr><th>Purpose</th><th>Path</th><th>Expected</th><th>Observed</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+        {% for mount in diagnostics.deployment.mounts %}
+          <tr>
+            <td><strong>{{ mount.label }}</strong></td>
+            <td class="path">{{ mount.path or "—" }}</td>
+            <td>{{ mount.expectedMode }}</td>
+            <td>{{ mount.observedMode }}</td>
+            <td>
+              <span class="workflow-state {{ 'workflow-state-ready' if mount.expectationMet else 'workflow-state-review' }}">
+                {{ "matches" if mount.expectationMet else "review" }}
+              </span>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
   <section class="diagnostic-sections">
     {% for section in diagnostics.sections %}
     <article class="table-card diagnostic-section">
