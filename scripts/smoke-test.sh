@@ -87,4 +87,33 @@ docker run \
   python -m tools.smoke_test workflow
 
 echo
+echo "=== ISOLATED PROCESS-BOUNDARY RECOVERY ==="
+RECOVERY_ROOT=$(mktemp -d -t bookguard-recovery-XXXXXX)
+trap 'rm -rf "${RECOVERY_ROOT}"' EXIT
+chmod 0777 "${RECOVERY_ROOT}"
+
+docker run \
+  --rm \
+  --network none \
+  --user 99:100 \
+  --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+  --mount "type=bind,source=${RECOVERY_ROOT},target=/recovery" \
+  "${SMOKE_IMAGE}" \
+  python -m tools.smoke_test recovery prepare /recovery
+
+docker run \
+  --rm \
+  --network none \
+  --user 99:100 \
+  --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+  --mount "type=bind,source=${RECOVERY_ROOT},target=/recovery" \
+  "${SMOKE_IMAGE}" \
+  python -m tools.smoke_test recovery resume /recovery
+
+rm -rf "${RECOVERY_ROOT}"
+trap - EXIT
+
+echo
 echo "PASS: BookGuard smoke tests completed without mounting live data or using a network."
