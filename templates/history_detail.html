@@ -100,6 +100,60 @@
     {% endif %}
   </section>
 
+  {% if detail.verificationSummary %}
+  {% set vs = detail.verificationSummary %}
+  <section class="table-card history-detail-card">
+    <div class="section-title">
+      <h2>Media evidence summary</h2>
+      <p>The important verification evidence, summarized from the durable record.</p>
+    </div>
+
+    <div class="history-detail-summary">
+      <article>
+        <span class="label">Expected by Bindery</span>
+        <strong>{{ vs.expectedKind|replace('_',' ')|title or 'Unknown media' }}</strong>
+        <small>{{ vs.expectedTitle or 'Unknown title' }}{% if vs.expectedAuthor %} · {{ vs.expectedAuthor }}{% endif %}</small>
+      </article>
+      <article>
+        <span class="label">Actually detected</span>
+        <strong>{{ vs.detectedKind|replace('_',' ')|title or 'Not established' }}</strong>
+        <small>
+          {% if vs.detectedFormats %}{{ vs.detectedFormats|join(', ') }}{% else %}No deterministic format recorded{% endif %}
+          {% if vs.candidateCount %} · {{ vs.candidateCount }} candidate file{{ '' if vs.candidateCount == 1 else 's' }}{% endif %}
+        </small>
+      </article>
+      <article>
+        <span class="label">Detected identity</span>
+        <strong>{{ vs.detectedTitle or 'Not established' }}</strong>
+        <small>{{ vs.detectedAuthor or 'No independent author identity established' }}</small>
+      </article>
+      <article>
+        <span class="label">Technical integrity</span>
+        <strong>{{ vs.technicalVerdict|replace('_',' ')|title or 'Not applicable' }}</strong>
+        <small>
+          {% if vs.fileCount %}{{ vs.readableFileCount }}/{{ vs.fileCount }} readable{% endif %}
+          {% if vs.durationSeconds %} · {{ (vs.durationSeconds / 3600)|round(2) }} h{% endif %}
+          {% if vs.chapterCount %} · {{ vs.chapterCount }} chapters{% endif %}
+          {% if vs.codecs %} · {{ vs.codecs|join(', ') }}{% endif %}
+        </small>
+      </article>
+    </div>
+
+    {% if vs.explanation %}
+      <div class="history-detail-summary-note">
+        <strong>Why BookGuard reached this verdict</strong>
+        <p>{{ vs.explanation }}</p>
+      </div>
+    {% endif %}
+
+    <div class="operator-guidance history-detail-guidance">
+      <strong>{{ vs.planLabel }}</strong>
+      <small><b>Planned Automatic Mode behavior:</b> {{ vs.planText }}</small>
+      <small>This page is read-only; no repair or mutation is performed here.</small>
+    </div>
+  </section>
+  {% endif %}
+
   <section class="table-card history-detail-card">
     <div class="section-title">
       <h2>Stored fields</h2>
