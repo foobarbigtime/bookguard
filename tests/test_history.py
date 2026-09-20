@@ -142,7 +142,11 @@ def _seed(tmp_path):
             );
             """
         )
-        snapshot = json.dumps({"source": "/staging/Bel Canto.epub"})
+        snapshot = json.dumps({
+            "source": "/staging/Bel Canto.epub",
+            "wrong": {"title": "Wrong Book", "author": "Other Author"},
+            "retained": {"title": "Bel Canto", "author": "Ann Patchett"},
+        })
         cursor = conn.execute(
             """
             INSERT INTO hardlink_corrections(
@@ -267,6 +271,10 @@ def test_operation_detail_reads_all_supported_durable_record_types(tmp_path):
     assert details["verification"]["title"] == "Bel Canto"
     assert details["hardlink-correction"]["path"] == "/staging/Bel Canto.epub"
     assert details["hardlink-cleanup"]["path"] == "/staging/Bel Canto.epub"
+    assert details["hardlink-correction"]["title"] == "Bel Canto"
+    assert details["hardlink-correction"]["author"] == "Ann Patchett"
+    assert "Wrong Book" in details["hardlink-correction"]["summary"]
+    assert "Bel Canto" in details["hardlink-correction"]["summary"]
 
 
 def test_operation_detail_decodes_stored_evidence(tmp_path):
