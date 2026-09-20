@@ -262,7 +262,7 @@ validate_health_endpoint() {
 run_clamav_acceptance() {
   echo "===== LIVE CLAMAV ACCEPTANCE ====="
   docker compose "${compose_files[@]}" \
-    exec -T "$container" python -m tools.clamav_acceptance
+    exec -T bookguard python -m tools.clamav_acceptance
 }
 
 verify_deployment() {
@@ -298,7 +298,6 @@ verify_deployment() {
 
 verify_current_deployment() {
   source_state_check
-  resolve_candidate_image
 
   local deployed_image_id deployed_version deployed_revision
   deployed_image_id="$(docker inspect "$container" --format '{{.Image}}')"
@@ -310,7 +309,7 @@ verify_current_deployment() {
     exit 1
   fi
 
-  verify_deployment "$deployed_image_id" "$deployed_version" "$deployed_revision" "$candidate_image_ref"
+  verify_deployment "$deployed_image_id" "$deployed_version" "$deployed_revision" "$deployed_image_id"
 }
 
 upgrade_failure_message() {
