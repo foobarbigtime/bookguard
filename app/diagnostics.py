@@ -9,6 +9,17 @@ from .config import ConfigurationError, load_automation_settings, settings
 from .preimport import preimport_readiness
 
 
+_GATE_LABELS = {
+    "actionsEnabled": "Bindery actions",
+    "automaticReacquisitionEnabled": "Automatic reacquisition",
+    "coordinatorEnabled": "Supervised coordinator",
+    "admissionEnabled": "Direct admission",
+    "ebookActionsEnabled": "Ebook file actions",
+    "malwareScanningEnabled": "Malware scanning",
+    "malwareScannerConfigured": "Malware scanner configured",
+}
+
+
 _BLOCKER_HELP: dict[str, tuple[str, str, str]] = {
     "automaticReacquisitionEnabled": (
         "Automatic reacquisition is disabled",
@@ -167,6 +178,17 @@ def explain_blockers(blockers: list[str] | tuple[str, ...] | None) -> list[dict[
     return explained
 
 
+def _gate_cards(gates: dict[str, bool]) -> list[dict[str, object]]:
+    return [
+        {
+            "key": key,
+            "label": _GATE_LABELS.get(key, _humanize(key)),
+            "enabled": bool(enabled),
+        }
+        for key, enabled in gates.items()
+    ]
+
+
 def _readiness_section(
     key: str,
     label: str,
@@ -257,6 +279,7 @@ def diagnostics_snapshot() -> dict[str, Any]:
         "ok": deployment_error is None,
         "deploymentError": deployment_error,
         "gates": gates,
+        "gateCards": _gate_cards(gates),
         "sections": sections,
         "secretsIncluded": False,
     }
