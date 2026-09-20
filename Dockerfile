@@ -1,5 +1,14 @@
 FROM python:3.12-slim
 
+ARG BOOKGUARD_VERSION=0.5.0
+ARG BOOKGUARD_VCS_REF=unknown
+
+LABEL org.opencontainers.image.title="BookGuard" \
+      org.opencontainers.image.description="Conservative validation, quarantine, and metadata-repair companion for Bindery" \
+      org.opencontainers.image.version="${BOOKGUARD_VERSION}" \
+      org.opencontainers.image.revision="${BOOKGUARD_VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/foobarbigtime/bookguard"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
