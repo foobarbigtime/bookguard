@@ -304,8 +304,6 @@ def verify_result(result: dict, force: bool = False) -> dict:
     if not settings.verification_enabled:
         raise RuntimeError("Content verification is disabled in Settings.")
 
-    target = resolve_ebook_target(result.get("local_path") or "")
-
     if result.get("format") == "audiobook":
         target = str(result.get("local_path") or "")
         fingerprint = media_set_fingerprint(target)
@@ -329,6 +327,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
             f"Unsupported media format for content verification: {result.get('format')!r}"
         )
 
+    target = resolve_ebook_target(result.get("local_path") or "")
     snapshot_root = Path(settings.config_dir) / ".verification-snapshots"
     try:
         with verification_snapshot(
