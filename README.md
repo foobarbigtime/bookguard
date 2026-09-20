@@ -220,9 +220,48 @@ bash scripts/build-with-provenance.sh
 docker compose -f compose.yaml -f compose.actions.yaml up -d --no-build
 ```
 
+### Observe Mode (v0.6 foundation)
+
+Observe Mode is the first stage of BookGuard's safe automation work. It is
+deployment-only and fail-closed:
+
+```env
+BOOKGUARD_AUTOMATION_MODE=manual
+```
+
+Supported values are currently `manual` and `observe`. Any other value is a
+configuration error. `manual` preserves the existing explicitly confirmed
+workflow. `observe` records durable decisions about what a future Automatic
+Mode would do, using existing BookGuard database state, but does not invoke
+Bindery mutation, queue mutation, staging cleanup, quarantine, metadata writes,
+or library publication.
+
+While `observe` is active, the supervised acquisition coordinator is disabled
+even if its older mutation gates are enabled, and mutating endpoints under
+`/api/automatic` return a conflict instead of running. Read-only inspection and
+verification endpoints remain available.
+
+Observe decisions are idempotently journaled in `automation_observations`,
+appear in unified History, and the latest decision for a subject appears in
+Attention when the decision is `attention`. A later safe/terminal state records
+a resolving `no_action` decision so stale Observe Mode attention does not remain
+active.
+
+```text
+GET  /api/automatic/observe
+POST /api/automatic/observe/run
+```
+
+The run endpoint requires the exact confirmation token
+`RUN_OBSERVE_MODE`. Running it may write only BookGuard's own durable decision
+journal; the source scan, verification, acquisition, admission, repair, cleanup,
+Bindery, queue, staging, quarantine, and library state are not changed by the
+Observe decision engine.
+
 ### Automatic reacquisition
 
 ```env
+BOOKGUARD_AUTOMATION_MODE=manual
 BOOKGUARD_STAGING_ROOT=/staging
 BOOKGUARD_BINDERY_DROP_FOLDER=/data/bookguard-staging
 BOOKGUARD_AUTOMATIC_REACQUISITION=false
@@ -692,6 +731,7 @@ app/staging.py              Read-only staged-byte verification
 app/admission.py            Atomic direct-admission transaction and recovery
 app/acquisition.py          One-at-a-time Bindery queue-to-staging workflow
 app/acquisition_coordinator.py Restart-safe supervised workflow advancement
+app/observe.py              Non-mutating automation decision journal and policy
 app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery
 app/file_safety.py          Shared filesystem hashing/safety helpers
