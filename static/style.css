@@ -207,3 +207,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #4e8bc7
   .reason-chips { padding: .65rem .7rem .75rem; }
   .candidate-card { grid-template-columns: 1fr; }
 }
+
+.diagnostic-environment { margin-bottom:1rem; overflow:hidden; }
+.diagnostic-environment-grid { display:grid; gap:.8rem; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); padding:0 1rem 1rem; }
+.diagnostic-environment-card { border:1px solid var(--border); background:#101820; border-radius:.65rem; padding:.8rem .9rem; }
+.diagnostic-environment-card strong { display:block; margin:.25rem 0; }
+.diagnostic-environment-card small { margin-top:.25rem; line-height:1.4; }
+.diagnostic-environment-card .workflow-state { margin-top:.55rem; }
+.diagnostic-mount-table { min-width:860px; }
