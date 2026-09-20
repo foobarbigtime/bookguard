@@ -9,12 +9,15 @@ usage() {
 Usage:
   scripts/bookguard-backup.sh create [backup-root]
   scripts/bookguard-backup.sh validate <backup-bundle>
+  scripts/bookguard-backup.sh restore-validate <backup-bundle>
 
 The helper reuses the exact image and runtime UID:GID of the existing BookGuard
 container. Creation mounts /config read-only and only the backup destination
-writable. Validation mounts the selected backup parent read-only. Both commands
-run with no network, a read-only image root, no added capabilities, and
-no-new-privileges.
+writable. Validation mounts the selected backup parent read-only. Restore validation
+copies the validated database only into a disposable container tmpfs and runs
+the current BookGuard startup database initialization against that copy. These
+commands run with no network, a read-only image root, no added capabilities,
+and no-new-privileges.
 EOF
 }
 
@@ -33,6 +36,8 @@ fi
 
 image_id="${BOOKGUARD_BACKUP_IMAGE:-$(docker inspect "$container" --format '{{.Image}}')}"
 runtime_user="$(docker inspect "$container" --format '{{.Config.User}}')"
+runtime_uid="${runtime_user%%:*}"
+runtime_gid="${runtime_user##*:}"
 config_source="$(
   docker inspect "$container"     --format '{{range .Mounts}}{{if eq .Destination "/config"}}{{.Source}}{{end}}{{end}}'
 )"
@@ -108,7 +113,29 @@ case "$command_name" in
     parent="$(dirname "$bundle")"
     name="$(basename "$bundle")"
 
-    docker run "${common_args[@]}"       -v "$parent:/backup-parent:ro"       "$image_id"       python -m tools.bookguard_backup validate "/backup-parent/$name"
+    docker run "${common_args[@]}" -v "$parent:/backup-parent:ro" "$image_id" python -m tools.bookguard_backup validate "/backup-parent/$name"
+    ;;
+
+  restore-validate)
+    if [[ $# -ne 1 ]]; then
+      usage >&2
+      exit 2
+    fi
+    bundle="$(readlink -f "$1")"
+    if [[ ! -d "$bundle" ]]; then
+      echo "Backup bundle is not a directory: $1" >&2
+      exit 1
+    fi
+    parent="$(dirname "$bundle")"
+    name="$(basename "$bundle")"
+
+    docker run "${common_args[@]}" \
+      --tmpfs "/restore:rw,nosuid,nodev,noexec,size=512m,uid=$runtime_uid,gid=$runtime_gid,mode=0700" \
+      -v "$parent:/backup-parent:ro" \
+      "$image_id" \
+      python -m tools.bookguard_backup restore-validate \
+        "/backup-parent/$name" \
+        --restore-dir /restore
     ;;
 
   *)
