@@ -95,7 +95,7 @@ def _acquisition_events(conn, limit: int) -> list[dict[str, Any]]:
                 author=book["author"],
                 path=path,
                 message=str(row["error"] or row["candidate_title"] or ""),
-                detail_href="",
+                detail_href=f"/history/acquisition/{row['id']}",
             )
         )
     return items
@@ -128,7 +128,7 @@ def _admission_events(conn, limit: int) -> list[dict[str, Any]]:
                 author=book["author"],
                 path=str(row["stored_path"] or row["local_path"] or ""),
                 message=str(row["error"] or row["publication_method"] or ""),
-                detail_href="",
+                detail_href=f"/history/admission/{row['id']}",
             )
         )
     return items
@@ -168,7 +168,7 @@ def _cleanup_events(conn, limit: int) -> list[dict[str, Any]]:
                 author=str(row["author"] or ""),
                 path=str(row["stored_path"] or row["local_path"] or ""),
                 message=str(row["error"] or action.replace("_", " ").title()),
-                detail_href="",
+                detail_href=f"/history/cleanup/{row['id']}",
             )
         )
     return items
@@ -202,7 +202,7 @@ def _repair_events(conn, limit: int) -> list[dict[str, Any]]:
                 author=book["author"],
                 path=str(row["stored_path"] or row["local_path"] or ""),
                 message=str(row["error"] or str(row["repair_kind"] or "").replace("_", " ").title()),
-                detail_href="",
+                detail_href=f"/history/repair/{row['id']}",
             )
         )
     return items
@@ -232,7 +232,7 @@ def _verification_events(conn, limit: int) -> list[dict[str, Any]]:
             author=str(row["author"] or ""),
             path=str(row["target_path"] or ""),
             message=f"{int(row['confidence'])}% confidence via {row['source']}",
-            detail_href="",
+            detail_href=f"/history/verification/{row['id']}",
         )
         for row in rows
     ]
@@ -266,7 +266,7 @@ def _hardlink_events(conn, limit: int) -> list[dict[str, Any]]:
                     timestamp=row["completed_at"] or row["created_at"],
                     path=path,
                     message=str(row["error"] or f"Bindery file #{row['file_id']}"),
-                    detail_href="",
+                    detail_href=f"/history/hardlink-correction/{row['id']}",
                 )
             )
     if _table_exists(conn, "hardlink_alias_cleanups"):
@@ -295,7 +295,7 @@ def _hardlink_events(conn, limit: int) -> list[dict[str, Any]]:
                     timestamp=row["completed_at"] or row["created_at"],
                     path=path,
                     message=str(row["error"] or "Hard-link alias cleanup"),
-                    detail_href="",
+                    detail_href=f"/history/hardlink-cleanup/{row['correction_id']}",
                 )
             )
     return items
@@ -324,7 +324,7 @@ def _triage_events(conn, limit: int) -> list[dict[str, Any]]:
             author=str(row["author"] or ""),
             path=str(row["stored_path"] or ""),
             message="Durable operator triage decision.",
-            detail_href="",
+            detail_href=f"/history/triage/{row['id']}",
         )
         for row in rows
     ]
@@ -355,4 +355,214 @@ def operation_history(limit: int = 250) -> dict[str, Any]:
         "generatedAt": utc_now(),
         "count": len(items),
         "items": items,
+    }
+
+
+_DETAIL_SPECS: dict[str, dict[str, Any]] = {
+    "acquisition": {
+        "table": "ebook_acquisitions",
+        "pk": "id",
+        "label": "Acquisition",
+        "status": "status",
+        "json": {"verification_json": "Verification evidence"},
+        "omit": {"grab_response_json"},
+    },
+    "admission": {
+        "table": "ebook_admissions",
+        "pk": "id",
+        "label": "Admission",
+        "status": "status",
+        "json": {"verification_json": "Verification evidence"},
+        "omit": set(),
+    },
+    "cleanup": {
+        "table": "cleanup_actions",
+        "pk": "id",
+        "label": "Cleanup / quarantine",
+        "status": "status",
+        "json": {},
+        "omit": set(),
+    },
+    "repair": {
+        "table": "metadata_repairs",
+        "pk": "id",
+        "label": "Metadata repair",
+        "status": "status",
+        "json": {
+            "before_json": "Before",
+            "after_json": "After",
+        },
+        "omit": set(),
+    },
+    "verification": {
+        "table": "content_verifications",
+        "pk": "id",
+        "label": "Verification",
+        "status": "verdict",
+        "json": {"evidence_json": "Verification evidence"},
+        "omit": set(),
+    },
+    "hardlink-correction": {
+        "table": "hardlink_corrections",
+        "pk": "id",
+        "label": "Hard-link correction",
+        "status": "status",
+        "json": {"snapshot_json": "Correction snapshot"},
+        "omit": set(),
+    },
+    "hardlink-cleanup": {
+        "table": "hardlink_alias_cleanups",
+        "pk": "correction_id",
+        "label": "Staging-link cleanup",
+        "status": "status",
+        "json": {"snapshot_json": "Cleanup snapshot"},
+        "omit": set(),
+    },
+    "triage": {
+        "table": "triage_decisions",
+        "pk": "id",
+        "label": "Triage decision",
+        "status": "decision",
+        "json": {},
+        "omit": {"signature"},
+    },
+}
+
+
+def _field_label(name: str) -> str:
+    special = {
+        "id": "ID",
+        "result_id": "Result ID",
+        "scan_id": "Scan ID",
+        "file_id": "File ID",
+        "book_id": "Book ID",
+        "queue_id": "Queue ID",
+        "admission_id": "Admission ID",
+        "candidate_guid": "Candidate GUID",
+        "staged_sha256": "Staged SHA-256",
+        "file_fingerprint": "File fingerprint",
+        "observed_modified_ns": "Observed modified ns",
+    }
+    if name in special:
+        return special[name]
+    return name.replace("_", " ").strip().title()
+
+
+def _decode_json_detail(raw: Any) -> tuple[Any, str | None]:
+    if raw in (None, ""):
+        return None, None
+    try:
+        return json.loads(str(raw)), None
+    except json.JSONDecodeError as exc:
+        return str(raw), f"Stored JSON could not be decoded: {exc}"
+
+
+def _detail_book(row: dict[str, Any]) -> dict[str, str]:
+    title = str(row.get("title") or "")
+    author = str(row.get("author") or "")
+    if title or author:
+        return {"title": title, "author": author}
+    result_id = row.get("result_id")
+    return _book_context(int(result_id)) if result_id else {"title": "", "author": ""}
+
+
+def _detail_path(row: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
+    for key in (
+        "stored_path",
+        "target_path",
+        "local_path",
+        "staged_relative_path",
+        "observed_relative_path",
+    ):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    for block in evidence:
+        value = block.get("value")
+        if isinstance(value, dict):
+            for key in ("source", "destination", "path"):
+                candidate = str(value.get(key) or "").strip()
+                if candidate:
+                    return candidate
+    return ""
+
+
+def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
+    """Read one durable operation record without creating tables or mutating state."""
+    kind = str(kind or "").casefold().strip()
+    spec = _DETAIL_SPECS.get(kind)
+    if not spec:
+        return None
+
+    table = str(spec["table"])
+    primary_key = str(spec["pk"])
+    with local_conn() as conn:
+        if not _table_exists(conn, table):
+            return None
+        row = conn.execute(
+            f"SELECT * FROM {table} WHERE {primary_key}=? LIMIT 1",
+            (int(record_id),),
+        ).fetchone()
+    if row is None:
+        return None
+
+    raw = dict(row)
+    evidence: list[dict[str, Any]] = []
+    json_fields: dict[str, str] = spec["json"]
+    for field, label in json_fields.items():
+        value, parse_error = _decode_json_detail(raw.get(field))
+        if value is None and not parse_error:
+            continue
+        evidence.append(
+            {
+                "label": label,
+                "value": value,
+                "parseError": parse_error,
+                "pretty": (
+                    json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True)
+                    if not isinstance(value, str)
+                    else value
+                ),
+            }
+        )
+
+    omitted = set(spec["omit"]) | set(json_fields)
+    fields = []
+    for name, value in raw.items():
+        if name in omitted or value is None or value == "":
+            continue
+        fields.append(
+            {
+                "name": name,
+                "label": _field_label(name),
+                "value": value,
+            }
+        )
+
+    book = _detail_book(raw)
+    error = str(raw.get("error") or "").strip()
+    status_field = str(spec["status"])
+    status = str(raw.get(status_field) or "").casefold()
+    path = _detail_path(raw, evidence)
+
+    notes = []
+    if kind == "acquisition" and raw.get("grab_response_json"):
+        notes.append(
+            "The stored grab-provider response is intentionally omitted from this "
+            "read-only view because it may contain provider-specific request data."
+        )
+
+    return {
+        "kind": kind,
+        "kindLabel": str(spec["label"]),
+        "id": raw.get(primary_key),
+        "status": status,
+        "title": book["title"],
+        "author": book["author"],
+        "path": path,
+        "error": error,
+        "fields": fields,
+        "evidence": evidence,
+        "notes": notes,
+        "historyHref": "/history",
     }
