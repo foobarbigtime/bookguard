@@ -533,6 +533,21 @@ Validation mounts the backup read-only and checks the manifest, SHA-256, byte
 count, SQLite integrity, and required BookGuard tables. Validation never
 overwrites or restores production state.
 
+To prove that a validated backup can be opened by the current BookGuard code
+without touching production, run:
+
+```bash
+bash scripts/bookguard-backup.sh restore-validate \
+  /mnt/cache/appdata/bookguard-backups/bookguard-YYYYMMDDTHHMMSSZ
+```
+
+Restore validation mounts the backup read-only, copies its database into a
+disposable 512 MiB container tmpfs, and runs BookGuard's current startup
+database initialization against that copy. The one-shot container has no
+network, the image root remains read-only, and no production config or media
+path is writable. The disposable restore copy disappears when the command
+exits.
+
 ## Updating
 
 Before deploying this security update, add the required access credentials to
