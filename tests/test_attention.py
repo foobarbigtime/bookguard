@@ -61,6 +61,24 @@ def test_attention_snapshot_collects_only_intervention_states(monkeypatch):
     assert ("acquisition", "finalized") not in statuses
     assert ("admission", "registered") not in statuses
 
+    acquisition = next(
+        item
+        for item in snapshot["items"]
+        if item["kind"] == "acquisition" and item["status"] == "cleanup_required"
+    )
+    assert acquisition["guidance"]["label"] == "Final cleanup needs recovery"
+    assert acquisition["detailHref"] == "/history/acquisition/1"
+
+    admission = next(
+        item
+        for item in snapshot["items"]
+        if item["kind"] == "admission"
+    )
+    assert admission["guidance"]["label"] == (
+        "Bindery registration conflicts with the intended book"
+    )
+    assert admission["detailHref"] == "/history/admission/4"
+
 
 def test_attention_snapshot_zero_state(monkeypatch):
     monkeypatch.setattr(attention, "recent_ebook_acquisitions", lambda limit: [])
@@ -97,7 +115,13 @@ def test_attention_template_renders_item_list():
                     "title": "Example Book",
                     "author": "Example Author",
                     "message": "Cleanup needs operator review.",
+                    "guidance": {
+                        "label": "Final cleanup needs recovery",
+                        "why": "Temporary cleanup could not be proven complete.",
+                        "nextStep": "Review the durable acquisition and recover cleanup.",
+                    },
                     "updatedAt": "2026-09-20T11:29:00Z",
+                    "detailHref": "/history/acquisition/1",
                     "href": "/triage#acquisitionPanel",
                 }
             ],
@@ -107,3 +131,8 @@ def test_attention_template_renders_item_list():
     assert "Example Book" in rendered
     assert "cleanup required" in rendered
     assert "Open guarded workflow" in rendered
+    assert "Final cleanup needs recovery" in rendered
+    assert "Why BookGuard stopped" in rendered
+    assert "Next step" in rendered
+    assert "Audit detail" in rendered
+    assert "/history/acquisition/1" in rendered
