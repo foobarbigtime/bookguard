@@ -606,6 +606,7 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
 
     notes = []
     summary = ""
+    guidance = operation_guidance(kind, status, error)
     if kind in {"hardlink-correction", "hardlink-cleanup"}:
         snapshot_value, _ = _decode_json_detail(raw.get("snapshot_json"))
         if isinstance(snapshot_value, dict):
@@ -618,6 +619,30 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
                     f"Shared EPUB association corrected away from {wrong_title} "
                     f"and retained for {retained_title}."
                 )
+
+    if kind == "observe":
+        summary = (
+            f"Observe Mode proposed: {status.replace('_', ' ')}. "
+            "This durable record did not authorize or perform an external mutation."
+        )
+        observed_evidence = next(
+            (
+                block.get("value")
+                for block in evidence
+                if block.get("label") == "Observed evidence"
+                and isinstance(block.get("value"), dict)
+            ),
+            {},
+        )
+        if status == "attention":
+            guidance = {
+                "label": str(raw.get("reason_code") or "Observe Mode attention")
+                .replace("_", " ")
+                .title(),
+                "why": str(raw.get("reason") or ""),
+                "nextStep": str(observed_evidence.get("nextStep") or ""),
+                "recordedError": "",
+            }
 
     if kind == "acquisition" and raw.get("grab_response_json"):
         notes.append(
@@ -635,7 +660,7 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
         "path": path,
         "error": error,
         "summary": summary,
-        "guidance": operation_guidance(kind, status, error),
+        "guidance": guidance,
         "fields": fields,
         "evidence": evidence,
         "notes": notes,
