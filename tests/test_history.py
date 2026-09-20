@@ -386,3 +386,47 @@ def test_operation_detail_explains_review_state(tmp_path):
     assert detail["guidance"] is not None
     assert detail["guidance"]["label"] == "Verification evidence is insufficient"
     assert "manual review" in detail["guidance"]["nextStep"]
+
+
+
+def test_observe_decision_appears_in_history_and_detail(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        with local_conn() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO automation_observations(
+                    signature, policy_version, mode, subject_kind, subject_id,
+                    result_id, book_id, title, author, path, state, decision,
+                    reason_code, reason, evidence_json, first_seen_at,
+                    last_seen_at, observed_count
+                ) VALUES (
+                    'observe-history', '1', 'observe', 'result', '1',
+                    1, 20, 'Bel Canto', 'Ann Patchett',
+                    '/data/media/books/Bel Canto.epub',
+                    'insufficient_evidence', 'attention',
+                    'INSUFFICIENT_EVIDENCE',
+                    'Not enough deterministic identity evidence.',
+                    '{"nextStep":"Review verification evidence."}',
+                    '2026-09-20T12:22:00+00:00',
+                    '2026-09-20T12:22:00+00:00', 1
+                )
+                """
+            )
+            observe_id = int(cursor.lastrowid)
+            conn.commit()
+
+        history = operation_history(100)
+        detail = operation_detail("observe", observe_id)
+    finally:
+        settings.config_dir = original
+
+    observed = next(item for item in history["items"] if item["kind"] == "observe")
+    assert observed["status"] == "attention"
+    assert observed["detailHref"] == f"/history/observe/{observe_id}"
+
+    assert detail is not None
+    assert detail["title"] == "Bel Canto"
+    assert detail["status"] == "attention"
+    assert "did not authorize or perform" in detail["summary"]
+    assert detail["guidance"]["nextStep"] == "Review verification evidence."
