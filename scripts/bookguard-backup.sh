@@ -31,7 +31,7 @@ if ! docker inspect "$container" >/dev/null 2>&1; then
   exit 1
 fi
 
-image_id="$(docker inspect "$container" --format '{{.Image}}')"
+image_id="${BOOKGUARD_BACKUP_IMAGE:-$(docker inspect "$container" --format '{{.Image}}')}"
 runtime_user="$(docker inspect "$container" --format '{{.Config.User}}')"
 config_source="$(
   docker inspect "$container"     --format '{{range .Mounts}}{{if eq .Destination "/config"}}{{.Source}}{{end}}{{end}}'
@@ -39,6 +39,10 @@ config_source="$(
 
 if [[ -z "$image_id" ]]; then
   echo "Unable to determine the BookGuard container image." >&2
+  exit 1
+fi
+if ! docker image inspect "$image_id" >/dev/null 2>&1; then
+  echo "BookGuard backup image was not found locally: $image_id" >&2
   exit 1
 fi
 if [[ -z "$runtime_user" || "$runtime_user" == "0" || "$runtime_user" == "root" ]]; then
