@@ -159,13 +159,15 @@ def test_audiobook_evidence_rejects_consistent_different_identity(monkeypatch):
             ],
         },
     )
+    expected = _result()
+    expected["author"] = "Example Writer"
     wrong = [
         _probe(
             f"/audio/{i}.mp3",
             album="Different Book",
-            author="Different Author",
-            artist="Different Author",
-            album_artist="Different Author",
+            author="Different Narrator",
+            artist="Different Narrator",
+            album_artist="Different Narrator",
         )
         for i in range(1, 4)
     ]
@@ -189,7 +191,7 @@ def test_audiobook_evidence_rejects_consistent_different_identity(monkeypatch):
         },
     )
 
-    result = audiobook_evidence.build_audiobook_evidence(_result(), "/audio")
+    result = audiobook_evidence.build_audiobook_evidence(expected, "/audio")
 
     assert result["verdict"] == "WRONG_CONTENT"
     assert result["confidence"] >= 95
