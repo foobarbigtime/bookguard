@@ -69,9 +69,9 @@ def probe_audio_file(
         "-show_entries",
         (
             "format=format_name,duration,bit_rate:"
-            "format_tags=artist,album_artist,author,composer,album,title,genre,language:"
+            "format_tags=artist,album_artist,author,composer,narrator,performer,album,title,genre,language,track,disc:"
             "stream=index,codec_type,codec_name,sample_rate,channels,bit_rate,duration:"
-            "stream_tags=artist,album_artist,author,composer,album,title,genre,language:"
+            "stream_tags=artist,album_artist,author,composer,narrator,performer,album,title,genre,language,track,disc:"
             "chapter=id,start_time,end_time"
         ),
         "-of", "json",
@@ -152,10 +152,14 @@ def probe_audio_file(
         "album_artist": tag("album_artist"),
         "author": tag("author"),
         "composer": tag("composer"),
+        "narrator": tag("narrator"),
+        "performer": tag("performer"),
         "album": tag("album"),
         "title": tag("title"),
         "genre": tag("genre"),
         "language": tag("language"),
+        "track": tag("track"),
+        "disc": tag("disc"),
     }
 
 
@@ -383,13 +387,14 @@ def _raise_if_cancelled(cancel_check: CancelCheck | None) -> None:
         raise AudiobookVerificationCancelled("Audiobook verification stopped by user.")
 
 
-def verify_audiobook(
-    path: str,
+def verify_audio_files(
+    files: list[str],
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
+    """Verify an explicit deterministic file set, including renamed audio containers."""
     _raise_if_cancelled(cancel_check)
-    files = discover_audio_files(path)
+    files = sorted({str(path) for path in files}, key=str.casefold)
     total = len(files)
     _emit_progress(
         progress_callback,
@@ -443,3 +448,17 @@ def verify_audiobook(
         cache_misses=cache_misses,
     )
     return result
+
+
+
+def verify_audiobook(
+    path: str,
+    progress_callback: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
+) -> dict[str, Any]:
+    """Verify all conventionally named audio files below one audiobook path."""
+    return verify_audio_files(
+        discover_audio_files(path),
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+    )

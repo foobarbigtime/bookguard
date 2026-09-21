@@ -41,7 +41,7 @@
 
     {% set status_class =
       'ready' if detail.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed', 'keep', 'no_action']
-      else 'error' if detail.status in ['failed', 'wrong_content', 'unsafe_file', 'registration_conflict']
+      else 'error' if detail.status in ['failed', 'wrong_content', 'wrong_media_type', 'unsafe_file', 'registration_conflict']
       else 'review' if detail.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting', 'attention']
       else 'idle'
     %}
@@ -99,6 +99,84 @@
       {% endfor %}
     {% endif %}
   </section>
+
+  {% if detail.verificationSummary %}
+  {% set vs = detail.verificationSummary %}
+  <section class="table-card history-detail-card">
+    <div class="section-title">
+      <h2>Media evidence summary</h2>
+      <p>The important verification evidence, summarized from the durable record.</p>
+    </div>
+
+    <div class="history-detail-summary">
+      <article>
+        <span class="label">Expected by Bindery</span>
+        <strong>{{ vs.expectedKind|replace('_',' ')|title or 'Unknown media' }}</strong>
+        <small>{{ vs.expectedTitle or 'Unknown title' }}{% if vs.expectedAuthor %} · {{ vs.expectedAuthor }}{% endif %}</small>
+      </article>
+      <article>
+        <span class="label">Actually detected</span>
+        <strong>{{ vs.detectedKind|replace('_',' ')|title or 'Not established' }}</strong>
+        <small>
+          {% if vs.detectedFormats %}{{ vs.detectedFormats|join(', ') }}{% else %}No deterministic format recorded{% endif %}
+          {% if vs.candidateCount %} · {{ vs.candidateCount }} candidate file{{ '' if vs.candidateCount == 1 else 's' }}{% endif %}
+        </small>
+      </article>
+      <article>
+        <span class="label">{{ 'Whole-set identity' if vs.mixedContent else 'Detected identity' }}</span>
+        {% if vs.mixedContent %}
+          <strong>Mixed audiobook set</strong>
+          <small>
+            {{ vs.wholeSetTitleMatchCount }} expected-title ·
+            {{ vs.wholeSetTitleMismatchCount }} conflicting ·
+            {{ vs.wholeSetReadableCount }} readable
+          </small>
+          {% if vs.topMismatchTitles %}
+            <small>
+              Conflicts:
+              {% for item in vs.topMismatchTitles[:3] %}
+                {{ item.title }}{% if item.count > 1 %} ({{ item.count }}){% endif %}{% if not loop.last %} · {% endif %}
+              {% endfor %}
+            </small>
+          {% endif %}
+        {% elif vs.filenameStrong and not vs.detectedTitle %}
+          <strong>Filename identity verified</strong>
+          <small>
+            {{ vs.filenamePairMatchCount }}/{{ vs.filenameFileCount }}
+            filename{{ '' if vs.filenameFileCount == 1 else 's' }} support
+            {{ vs.expectedTitle }}{% if vs.expectedAuthor %} · {{ vs.expectedAuthor }}{% endif %}
+          </small>
+        {% else %}
+          <strong>{{ vs.detectedTitle or 'Not established' }}</strong>
+          <small>{{ vs.detectedAuthor or 'No independent author identity established' }}</small>
+        {% endif %}
+      </article>
+      <article>
+        <span class="label">Technical integrity</span>
+        <strong>{{ vs.technicalVerdict|replace('_',' ')|title or 'Not applicable' }}</strong>
+        <small>
+          {% if vs.fileCount %}{{ vs.readableFileCount }}/{{ vs.fileCount }} readable{% endif %}
+          {% if vs.durationSeconds %} · {{ (vs.durationSeconds / 3600)|round(2) }} h{% endif %}
+          {% if vs.chapterCount %} · {{ vs.chapterCount }} chapters{% endif %}
+          {% if vs.codecs %} · {{ vs.codecs|join(', ') }}{% endif %}
+        </small>
+      </article>
+    </div>
+
+    {% if vs.explanation %}
+      <div class="history-detail-summary-note">
+        <strong>Why BookGuard reached this verdict</strong>
+        <p>{{ vs.explanation }}</p>
+      </div>
+    {% endif %}
+
+    <div class="operator-guidance history-detail-guidance">
+      <strong>{{ vs.planLabel }}</strong>
+      <small><b>Planned Automatic Mode behavior:</b> {{ vs.planText }}</small>
+      <small>This page is read-only; no repair or mutation is performed here.</small>
+    </div>
+  </section>
+  {% endif %}
 
   <section class="table-card history-detail-card">
     <div class="section-title">

@@ -259,6 +259,11 @@ _OPERATION_HELP: dict[tuple[str, str], tuple[str, str, str]] = {
         "The file may be structurally safe, but BookGuard does not have enough identity evidence to prove it belongs to the expected book.",
         "Review the stored verification evidence. Leave the item for manual review unless stronger deterministic evidence becomes available.",
     ),
+    ("verification", "wrong_media_type"): (
+        "Tracked media is the wrong kind",
+        "BookGuard deterministically identified a different media family than Bindery expects, such as readable audio where an ebook is registered.",
+        "Review the stored media-kind evidence. Automatic recovery may reassign proven media and reacquire the missing expected format once that repair path is enabled.",
+    ),
     ("verification", "wrong_content"): (
         "Verification found different content",
         "The extracted identity evidence points away from the expected book.",

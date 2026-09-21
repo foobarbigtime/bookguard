@@ -8,6 +8,7 @@ from app.audiobook_verification import (
     discover_audio_files,
     summarize_audiobook_verification,
     verify_audiobook,
+    verify_audio_files,
 )
 
 
@@ -261,3 +262,23 @@ def test_probe_audio_file_preserves_cancellation(tmp_path, monkeypatch):
     with pytest.raises(AudiobookVerificationCancelled):
         verification_module.probe_audio_file(str(path), cancel_check=lambda: True)
 
+
+
+
+def test_verify_audio_files_accepts_explicit_renamed_container(tmp_path, monkeypatch):
+    path = tmp_path / "actually-audio.epub"
+    path.write_bytes(b"audio")
+    monkeypatch.setattr(
+        verification_module,
+        "cached_or_probe_audio_file",
+        lambda value, cancel_check=None: (
+            _probe(value, format_name="mp3", codec="mp3", cache_hit=False),
+            False,
+        ),
+    )
+
+    result = verify_audio_files([str(path)])
+
+    assert result["verdict"] == "PASS"
+    assert result["file_count"] == 1
+    assert result["files"][0]["path"] == str(path)

@@ -261,6 +261,38 @@ journal; the source scan, verification, acquisition, admission, repair, cleanup,
 Bindery, queue, staging, quarantine, and library state are not changed by the
 Observe decision engine.
 
+#### Unified media evidence (v0.6 E2)
+
+The v0.6 evidence engine extends content verification to audiobooks and detects
+media-kind mismatches from the actual bytes/containers rather than trusting the
+Bindery format or filename. Common audiobook containers discovered by BookGuard
+are probed with ffprobe, including MP3, M4A/M4B, FLAC, AAC, Ogg/Opus, WAV, MP4,
+WMA, AIFF, APE, MKA, AC3, AMR, AU, CAF, AA, and AAX.
+
+Audiobook evidence combines:
+
+- deterministic container/codec readability and duration checks;
+- track/file count, chapter count, sample-rate/channel/codec consistency;
+- filename disc/track continuity checks;
+- embedded title/album, author/artist/album-artist, narrator/performer,
+  language, track, and disc tags;
+- cross-file identity consensus;
+- actual-media detection for ebook/audio cross-assignment;
+- durable media-set fingerprints for idempotent verification.
+
+The same `content_verifications` journal now accepts audiobook evidence.
+A proven readable audiobook that matches the expected title/author becomes
+`VERIFIED_CORRECT`; strong consistent different identity becomes
+`WRONG_CONTENT`; unreadable/corrupt expected audio becomes `UNSAFE_FILE`;
+and deterministic ebook/audio cross-assignment becomes `WRONG_MEDIA_TYPE`.
+Weak or contradictory identity evidence remains `INSUFFICIENT_EVIDENCE`.
+
+Observe Mode treats missing audiobook evidence as `would_verify_audiobook`
+instead of Attention. Proven wrong content, wrong media kind, unsafe media, and
+safe metadata repairs are also represented as proposed future automatic work,
+while true insufficient evidence remains Attention. These E2 decisions still
+perform no library or Bindery mutation.
+
 ### Automatic reacquisition
 
 ```env

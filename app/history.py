@@ -546,6 +546,155 @@ def _detail_path(row: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
     return ""
 
 
+def _verification_ui_summary(
+    raw: dict[str, Any],
+    evidence_blocks: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if str(raw.get("verdict") or "") == "":
+        return None
+    evidence = next(
+        (
+            block.get("value")
+            for block in evidence_blocks
+            if block.get("label") == "Verification evidence"
+            and isinstance(block.get("value"), dict)
+        ),
+        {},
+    )
+    if not isinstance(evidence, dict):
+        return None
+
+    expected = evidence.get("expected")
+    if not isinstance(expected, dict):
+        expected = {}
+    actual = evidence.get("actualMedia")
+    if not isinstance(actual, dict):
+        actual = {}
+    identity = evidence.get("identity")
+    if not isinstance(identity, dict):
+        identity = {}
+    technical = evidence.get("technical")
+    if not isinstance(technical, dict):
+        technical = {}
+    whole_set = identity.get("wholeSet")
+    if not isinstance(whole_set, dict):
+        whole_set = {}
+    filename_support = identity.get("filenameSupport")
+    if not isinstance(filename_support, dict):
+        filename_support = {}
+    top_mismatch_titles = whole_set.get("topMismatchTitles")
+    if not isinstance(top_mismatch_titles, list):
+        top_mismatch_titles = []
+    top_mismatch_titles = [
+        {
+            "title": str(item.get("title") or ""),
+            "count": int(item.get("count") or 0),
+        }
+        for item in top_mismatch_titles[:5]
+        if isinstance(item, dict) and str(item.get("title") or "")
+    ]
+    filename_examples = filename_support.get("examples")
+    if not isinstance(filename_examples, list):
+        filename_examples = []
+
+    detected_items = actual.get("detected")
+    if not isinstance(detected_items, list):
+        detected_items = []
+    counts = actual.get("counts")
+    if not isinstance(counts, dict):
+        counts = {}
+
+    detected_kind = str(evidence.get("observedMediaKind") or "")
+    if not detected_kind and counts:
+        detected_kind = max(
+            ((str(key), int(value or 0)) for key, value in counts.items()),
+            key=lambda item: item[1],
+            default=("", 0),
+        )[0]
+    if not detected_kind and detected_items:
+        first = detected_items[0]
+        if isinstance(first, dict):
+            detected_kind = str(first.get("kind") or "")
+
+    detected_formats = evidence.get("observedFormats")
+    if not isinstance(detected_formats, list):
+        detected_formats = sorted(
+            {
+                str(item.get("detectedFormat") or "")
+                for item in detected_items
+                if isinstance(item, dict) and str(item.get("detectedFormat") or "")
+            }
+        )
+
+    verdict = str(raw.get("verdict") or "").upper()
+    plans = {
+        "VERIFIED_CORRECT": (
+            "No repair required",
+            "The expected media identity is verified. Automatic Mode should leave it unchanged.",
+        ),
+        "METADATA_ERROR": (
+            "Repair verified metadata",
+            "Re-verify at the write boundary, then apply the guarded metadata-only correction.",
+        ),
+        "WRONG_CONTENT": (
+            "Resolve wrong content",
+            "Resolve the proven wrong association and reacquire/verify the expected media.",
+        ),
+        "WRONG_MEDIA_TYPE": (
+            "Resolve media mismatch",
+            "Correct the proven ebook/audiobook mismatch, then reacquire and verify any media still missing.",
+        ),
+        "UNSAFE_FILE": (
+            "Quarantine and replace",
+            "Remove the exact proven unsafe media from active use through quarantine-first recovery, then reacquire if needed.",
+        ),
+        "INSUFFICIENT_EVIDENCE": (
+            "Collect stronger evidence",
+            "Do not mutate this item until additional independent evidence resolves the ambiguity.",
+        ),
+    }
+    plan_label, plan_text = plans.get(
+        verdict,
+        ("No automatic plan", "This verification state is not currently mapped to an automatic recovery plan."),
+    )
+
+    return {
+        "expectedKind": str(expected.get("mediaKind") or raw.get("format") or ""),
+        "expectedTitle": str(expected.get("title") or raw.get("title") or ""),
+        "expectedAuthor": str(expected.get("author") or raw.get("author") or ""),
+        "detectedKind": detected_kind,
+        "detectedFormats": detected_formats,
+        "candidateCount": int(actual.get("candidateCount") or 0),
+        "detectedTitle": str(identity.get("detected_title") or ""),
+        "detectedAuthor": str(identity.get("detected_author") or ""),
+        "identityReasonCode": str(identity.get("reasonCode") or evidence.get("reasonCode") or ""),
+        "mixedContent": bool(whole_set.get("mixedContent")),
+        "wholeSetReadableCount": int(whole_set.get("readableCount") or 0),
+        "wholeSetTitleMatchCount": int(whole_set.get("titleMatchCount") or 0),
+        "wholeSetTitleMismatchCount": int(whole_set.get("titleMismatchCount") or 0),
+        "wholeSetForeignPairCount": int(whole_set.get("foreignPairCount") or 0),
+        "wholeSetDistinctMismatchTitleCount": int(
+            whole_set.get("distinctMismatchTitleCount") or 0
+        ),
+        "topMismatchTitles": top_mismatch_titles,
+        "filenameStrong": bool(filename_support.get("strong")),
+        "filenameFileCount": int(filename_support.get("fileCount") or 0),
+        "filenamePairMatchCount": int(filename_support.get("pairMatchCount") or 0),
+        "filenameRequiredPairCount": int(filename_support.get("requiredPairCount") or 0),
+        "filenameExamples": [str(value) for value in filename_examples[:5] if str(value)],
+        "technicalVerdict": str(technical.get("verdict") or ""),
+        "technicalReasonCode": str(technical.get("reason_code") or ""),
+        "fileCount": int(technical.get("file_count") or 0),
+        "readableFileCount": int(technical.get("readable_file_count") or 0),
+        "durationSeconds": float(technical.get("total_duration_seconds") or 0),
+        "chapterCount": int(technical.get("chapter_count") or 0),
+        "codecs": list(technical.get("codecs") or []),
+        "explanation": str(evidence.get("explanation") or ""),
+        "planLabel": plan_label,
+        "planText": plan_text,
+    }
+
+
 def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
     """Read one durable operation record without creating tables or mutating state."""
     kind = str(kind or "").casefold().strip()
@@ -603,6 +752,11 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
     status_field = str(spec["status"])
     status = str(raw.get(status_field) or "").casefold()
     path = _detail_path(raw, evidence)
+    verification_summary = (
+        _verification_ui_summary(raw, evidence)
+        if kind == "verification"
+        else None
+    )
 
     notes = []
     summary = ""
@@ -663,6 +817,7 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
         "guidance": guidance,
         "fields": fields,
         "evidence": evidence,
+        "verificationSummary": verification_summary,
         "notes": notes,
         "historyHref": "/history",
     }

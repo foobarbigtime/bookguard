@@ -158,7 +158,7 @@ def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 decision="no_action",
                 reason_code="VERIFIED_CORRECT_NO_ACTION",
                 reason=(
-                    "Durable content verification now confirms the expected ebook "
+                    "Durable content verification confirms the expected media "
                     "identity, so Observe Mode proposes no remediation."
                 ),
                 next_step="No automatic remediation is proposed for this result.",
@@ -168,15 +168,33 @@ def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:
             decisions.append(_decision(
                 **common,
                 state=verdict,
-                decision="attention",
+                decision="would_resolve_wrong_content",
                 reason_code="VERIFIED_WRONG_CONTENT",
                 reason=(
-                    "Content verification identifies this ebook as different from "
+                    "Content verification identifies the media as different from "
                     "the expected Bindery book."
                 ),
                 next_step=(
-                    "Review the verification evidence and guarded wrong-content "
-                    "workflow. Observe Mode will not quarantine, detach, grab, or admit anything."
+                    "A future Automatic Mode should quarantine/detach the proven "
+                    "wrong association, resolve any proven owner, and reacquire the "
+                    "missing expected media. Observe Mode records the plan only."
+                ),
+                evidence=evidence,
+            ))
+        elif verdict == "WRONG_MEDIA_TYPE":
+            decisions.append(_decision(
+                **common,
+                state=verdict,
+                decision="would_resolve_media_mismatch",
+                reason_code="WRONG_MEDIA_TYPE",
+                reason=(
+                    "Deterministic media inspection proves that the tracked bytes are "
+                    "a different media kind than Bindery expects."
+                ),
+                next_step=(
+                    "A future Automatic Mode should correct the proven association, "
+                    "then reacquire and verify whichever expected media remains missing. "
+                    "Observe Mode performs no mutation."
                 ),
                 evidence=evidence,
             ))
@@ -184,12 +202,13 @@ def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:
             decisions.append(_decision(
                 **common,
                 state=verdict,
-                decision="attention",
+                decision="would_quarantine_unsafe",
                 reason_code="UNSAFE_FILE",
                 reason="A deterministic file-safety or integrity check failed.",
                 next_step=(
-                    "Keep the file out of automatic handling and review the stored "
-                    "safety evidence before taking any guarded action."
+                    "A future Automatic Mode should remove the exact proven unsafe "
+                    "media from active use through the quarantine-first workflow and "
+                    "reacquire a verified replacement when required."
                 ),
                 evidence=evidence,
             ))
@@ -213,15 +232,16 @@ def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:
             decisions.append(_decision(
                 **common,
                 state=verdict,
-                decision="attention",
+                decision="would_repair_metadata",
                 reason_code="METADATA_REPAIR_REVIEW",
                 reason=(
                     "Content identity appears usable but the durable verification "
                     "record reports a metadata problem."
                 ),
                 next_step=(
-                    "Review the verified metadata-repair preview. Observe Mode records "
-                    "the condition but never writes metadata."
+                    "A future Automatic Mode should apply the existing guarded "
+                    "metadata repair after re-verifying the same evidence at the "
+                    "write boundary. Observe Mode records the plan only."
                 ),
                 evidence=evidence,
             ))
@@ -247,13 +267,17 @@ def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 decisions.append(_decision(
                     **common,
                     state=classification,
-                    decision="attention",
-                    reason_code="AUDIOBOOK_AUTOMATION_NOT_SUPPORTED",
+                    decision="would_verify_audiobook",
+                    reason_code="AUDIOBOOK_VERIFICATION_REQUIRED",
                     reason=(
-                        "This result requires review, and automatic audiobook content "
-                        "verification is not implemented."
+                        "The latest scan requires review, but no durable audiobook "
+                        "evidence result is available for this item."
                     ),
-                    next_step="Keep this audiobook in the manual triage workflow.",
+                    next_step=(
+                        "A future Automatic Mode should run the read-only audiobook "
+                        "media-kind, technical-integrity, and identity evidence engine. "
+                        "Observe Mode records that proposal without reading library bytes."
+                    ),
                     evidence=evidence,
                 ))
     return decisions

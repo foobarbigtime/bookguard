@@ -1,5 +1,12 @@
 from app.config import Settings, settings
-from app.matcher import author_match, classify_audio, classify_ebook, title_match
+from app.matcher import (
+    analyze_audio_identity_set,
+    author_match,
+    catalogue_member_title_match,
+    classify_audio,
+    classify_ebook,
+    title_match,
+)
 
 
 def _reset_settings():
@@ -193,3 +200,52 @@ def test_richard_bachman_alias_blocks_false_strong_reject():
     )
     assert state == "REVIEW"
     assert code == "PARTIAL_MATCH"
+
+
+
+def test_catalogue_member_title_accepts_explicit_box_set_member():
+    expected = (
+        "Daniel Silva - Gabriel Allon Series: Books 5-7: "
+        "Prince of Fire / The Messenger / The Secret Servant"
+    )
+    assert catalogue_member_title_match(expected, "The Messenger")
+    assert catalogue_member_title_match(expected, "Prince of Fire")
+    assert not catalogue_member_title_match(expected, "The Defector")
+
+
+def test_whole_set_detects_same_author_mixed_books():
+    summary = analyze_audio_identity_set(
+        "1st to Die",
+        "James Patterson",
+        [
+            {"album": "WMC 01 - 1st to Die", "author": "James Patterson"},
+            {"album": "WMC 01 - 1st to Die", "author": "James Patterson"},
+            {"album": "WMC 02 - 2nd Chance", "author": "James Patterson"},
+            {"album": "WMC 03 - 3rd Degree", "author": "James Patterson"},
+        ],
+    )
+
+    assert summary["titleMatchCount"] == 2
+    assert summary["titleMismatchCount"] == 2
+    assert summary["distinctMismatchTitleCount"] == 2
+    assert summary["mixedContent"] is True
+    assert summary["hasEmbeddedContradiction"] is True
+
+
+def test_whole_set_does_not_call_box_set_members_mixed():
+    expected = (
+        "Gabriel Allon Series: Books 5-7: "
+        "Prince of Fire / The Messenger / The Secret Servant"
+    )
+    summary = analyze_audio_identity_set(
+        expected,
+        "Daniel Silva",
+        [
+            {"album": "Prince of Fire", "author": "Daniel Silva"},
+            {"album": "The Messenger", "author": "Daniel Silva"},
+            {"album": "The Secret Servant", "author": "Daniel Silva"},
+        ],
+    )
+
+    assert summary["titleMismatchCount"] == 0
+    assert summary["mixedContent"] is False
