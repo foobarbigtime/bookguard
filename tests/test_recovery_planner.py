@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+import json
+
+from app.config import settings
+from app.db import add_result, create_scan, finish_scan, init_local_db, local_conn
+from app.observe import run_observe_cycle
+from app.recovery_planner import recovery_plan_snapshot
+from app.verifier import init_verification_db
+
+
+def _seed_result(
+    tmp_path,
+    *,
+    verdict: str = "WRONG_CONTENT",
+    reason_code: str = "MIXED_AUDIO_CONTENT",
+    source: str = "audiobook-whole-set-evidence",
+):
+    original = settings.config_dir
+    settings.config_dir = str(tmp_path / "config")
+    init_local_db()
+    init_verification_db()
+
+    create_scan("planner-scan", 1)
+    add_result(
+        "planner-scan",
+        {
+            "file_id": 1052,
+            "book_id": 6993,
+            "author": "James Patterson",
+            "title": "1st to Die",
+            "format": "audiobook",
+            "stored_path": "/audiobooks/James Patterson/1st to Die (2001)",
+            "local_path": "/audiobooks/James Patterson/1st to Die (2001)",
+            "classification": "REVIEW",
+            "risk_score": 95,
+            "reason_code": "MISMATCH",
+            "reasons": ["fixture"],
+            "metadata": {},
+        },
+    )
+    finish_scan("planner-scan")
+
+    with local_conn() as conn:
+        result_id = int(
+            conn.execute(
+                "SELECT id FROM scan_results WHERE scan_id='planner-scan'"
+            ).fetchone()["id"]
+        )
+        evidence = {
+            "expected": {
+                "title": "1st to Die",
+                "author": "James Patterson",
+                "mediaKind": "audiobook",
+            },
+            "reasonCode": reason_code,
+            "identity": {
+                "wholeSet": {
+                    "readableCount": 24,
+                    "titleMatchCount": 8,
+                    "titleMismatchCount": 16,
+                    "mixedContent": reason_code == "MIXED_AUDIO_CONTENT",
+                }
+            },
+        }
+        conn.execute(
+            """
+            INSERT INTO content_verifications(
+                signature, result_id, scan_id, file_id, book_id, format,
+                author, title, target_path, file_fingerprint, verdict,
+                confidence, source, evidence_json, created_at, updated_at
+            ) VALUES (
+                'planner-verification', ?, 'planner-scan', 1052, 6993,
+                'audiobook', 'James Patterson', '1st to Die',
+                '/audiobooks/James Patterson/1st to Die (2001)',
+                'media-set:fixture', ?, 98, ?, ?,
+                '2026-09-21T20:00:00+00:00',
+                '2026-09-21T20:00:00+00:00'
+            )
+            """,
+            (result_id, verdict, source, json.dumps(evidence)),
+        )
+        conn.commit()
+
+    return original, result_id
+
+
+def test_mixed_wrong_content_creates_non_executable_recovery_plan(monkeypatch, tmp_path):
+    original, result_id = _seed_result(tmp_path)
+    try:
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+
+        observed = run_observe_cycle()
+        snapshot = recovery_plan_snapshot()
+    finally:
+        settings.config_dir = original
+
+    assert observed["decisionCount"] == 1
+    assert observed["planCount"] == 1
+    assert len(observed["plans"]) == 1
+
+    plan = observed["plans"][0]
+    assert plan["resultId"] == result_id
+    assert plan["planKind"] == "RECOVER_MIXED_AUDIO_CONTENT"
+    assert plan["reasonCode"] == "MIXED_AUDIO_CONTENT"
+    assert plan["state"] == "planned"
+    assert plan["executionAllowed"] is False
+    assert plan["preconditions"]["verification"]["verdict"] == "WRONG_CONTENT"
+    assert plan["preconditions"]["subject"]["fileId"] == 1052
+
+    codes = [step["code"] for step in plan["steps"]]
+    assert codes == [
+        "revalidate_whole_set",
+        "derive_file_disposition",
+        "resolve_proven_associations",
+        "quarantine_proven_foreign_media",
+        "reacquire_missing_expected_media",
+        "verify_replacement_set",
+        "reconcile_final_state",
+    ]
+    assert any(step["externalMutation"] for step in plan["steps"])
+    assert snapshot["count"] == 1
+    assert snapshot["items"][0]["id"] == plan["id"]
+
+
+def test_recovery_plan_is_idempotent_for_unchanged_evidence(monkeypatch, tmp_path):
+    original, _ = _seed_result(tmp_path)
+    try:
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+
+        first = run_observe_cycle()
+        second = run_observe_cycle()
+
+        with local_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, signature, state FROM recovery_plans ORDER BY id"
+            ).fetchall()
+    finally:
+        settings.config_dir = original
+
+    assert first["plans"][0]["id"] == second["plans"][0]["id"]
+    assert len(rows) == 1
+    assert rows[0]["state"] == "planned"
+
+
+def test_attention_supersedes_previously_authorized_plan(monkeypatch, tmp_path):
+    original, result_id = _seed_result(tmp_path)
+    try:
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+        first = run_observe_cycle()
+        assert first["planCount"] == 1
+
+        with local_conn() as conn:
+            conn.execute(
+                """
+                UPDATE content_verifications
+                SET verdict='INSUFFICIENT_EVIDENCE',
+                    confidence=40,
+                    evidence_json=?,
+                    updated_at='2026-09-21T20:05:00+00:00'
+                WHERE result_id=?
+                """,
+                (
+                    json.dumps(
+                        {
+                            "reasonCode": "PARTIAL_MATCH",
+                            "explanation": "Evidence became ambiguous.",
+                        }
+                    ),
+                    result_id,
+                ),
+            )
+            conn.commit()
+
+        second = run_observe_cycle()
+        with local_conn() as conn:
+            row = conn.execute(
+                "SELECT state, last_error FROM recovery_plans ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+    finally:
+        settings.config_dir = original
+
+    assert second["records"][0]["decision"] == "attention"
+    assert second["planCount"] == 0
+    assert row["state"] == "superseded"
+    assert "no longer authorizes" in row["last_error"]
+
+
+def test_verified_correct_supersedes_old_plan(monkeypatch, tmp_path):
+    original, result_id = _seed_result(tmp_path)
+    try:
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+        run_observe_cycle()
+
+        with local_conn() as conn:
+            conn.execute(
+                """
+                UPDATE content_verifications
+                SET verdict='VERIFIED_CORRECT',
+                    confidence=99,
+                    evidence_json=?,
+                    updated_at='2026-09-21T20:06:00+00:00'
+                WHERE result_id=?
+                """,
+                (
+                    json.dumps({"reasonCode": "AUDIOBOOK_IDENTITY_VERIFIED"}),
+                    result_id,
+                ),
+            )
+            conn.commit()
+
+        observed = run_observe_cycle()
+        snapshot = recovery_plan_snapshot()
+    finally:
+        settings.config_dir = original
+
+    assert observed["records"][0]["decision"] == "no_action"
+    assert observed["planCount"] == 0
+    assert snapshot["items"][0]["state"] == "superseded"
+
+
+def test_manual_mode_does_not_create_recovery_plan(monkeypatch, tmp_path):
+    original, _ = _seed_result(tmp_path)
+    try:
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "manual")
+        observed = run_observe_cycle()
+        snapshot = recovery_plan_snapshot()
+    finally:
+        settings.config_dir = original
+
+    assert observed["enabled"] is False
+    assert observed["planCount"] == 0
+    assert observed["plans"] == []
+    assert snapshot["count"] == 0
