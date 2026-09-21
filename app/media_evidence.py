@@ -9,7 +9,7 @@ import zipfile
 from typing import Any
 
 from .archive_io import read_zip_member_bounded
-from .audiobook_verification import probe_audio_file
+from .audiobook_verification import cached_or_probe_audio_file
 from .media_discovery import AUDIO_EXTENSIONS, EBOOK_EXTENSIONS
 
 
@@ -157,7 +157,10 @@ def detect_file_media_kind(
             "source": "signature+epub-mimetype",
         }
 
-    probe = audio_probe if audio_probe is not None else probe_audio_file(path)
+    if audio_probe is not None:
+        probe = audio_probe
+    else:
+        probe, _ = cached_or_probe_audio_file(path)
     if not probe.get("probe_error") and int(probe.get("audio_stream_count") or 0) > 0:
         return {
             "path": path,
