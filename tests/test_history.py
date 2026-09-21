@@ -505,3 +505,140 @@ def test_verification_detail_builds_media_evidence_gui_summary(tmp_path):
     assert summary["detectedTitle"] == "Bel Canto"
     assert summary["detectedAuthor"] == "Ann Patchett"
     assert summary["planLabel"] == "No repair required"
+
+def test_verification_detail_surfaces_mixed_whole_set_and_filename_evidence(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        mixed_evidence = {
+            "expected": {
+                "title": "1st to Die",
+                "author": "James Patterson",
+                "mediaKind": "audiobook",
+            },
+            "actualMedia": {
+                "candidateCount": 25,
+                "counts": {"audiobook": 24, "unknown": 1},
+            },
+            "technical": {
+                "verdict": "REVIEW",
+                "file_count": 24,
+                "readable_file_count": 24,
+            },
+            "identity": {
+                "detected_title": "WMC 01 - 1st to Die",
+                "detected_author": "James Patterson",
+                "wholeSet": {
+                    "readableCount": 24,
+                    "titleMatchCount": 8,
+                    "titleMismatchCount": 16,
+                    "foreignPairCount": 0,
+                    "distinctMismatchTitleCount": 6,
+                    "mixedContent": True,
+                    "topMismatchTitles": [
+                        {"title": "WMC 02 - 2nd Chance", "count": 2},
+                        {"title": "WMC 03 - 3rd Degree", "count": 2},
+                    ],
+                },
+                "filenameSupport": {
+                    "fileCount": 24,
+                    "pairMatchCount": 8,
+                    "requiredPairCount": 20,
+                    "strong": False,
+                    "examples": [],
+                },
+            },
+            "reasonCode": "MIXED_AUDIO_CONTENT",
+            "explanation": "Multiple embedded work identities were found.",
+        }
+        with local_conn() as conn:
+            conn.execute(
+                """
+                UPDATE content_verifications
+                SET format='audiobook',
+                    title='1st to Die',
+                    author='James Patterson',
+                    verdict='WRONG_CONTENT',
+                    confidence=98,
+                    source='audiobook-whole-set-evidence',
+                    evidence_json=?
+                WHERE id=1
+                """,
+                (json.dumps(mixed_evidence),),
+            )
+            conn.commit()
+
+        mixed = operation_detail("verification", 1)
+        assert mixed is not None
+        summary = mixed["verificationSummary"]
+        assert summary["mixedContent"] is True
+        assert summary["wholeSetReadableCount"] == 24
+        assert summary["wholeSetTitleMatchCount"] == 8
+        assert summary["wholeSetTitleMismatchCount"] == 16
+        assert summary["topMismatchTitles"][0] == {
+            "title": "WMC 02 - 2nd Chance",
+            "count": 2,
+        }
+
+        filename_evidence = {
+            "expected": {
+                "title": "Finders Keepers",
+                "author": "Stephen King",
+                "mediaKind": "audiobook",
+            },
+            "actualMedia": {
+                "candidateCount": 1,
+                "counts": {"audiobook": 1},
+            },
+            "technical": {
+                "verdict": "PASS",
+                "file_count": 1,
+                "readable_file_count": 1,
+            },
+            "identity": {
+                "detected_title": "",
+                "detected_author": "",
+                "wholeSet": {
+                    "readableCount": 1,
+                    "titleMatchCount": 0,
+                    "titleMismatchCount": 0,
+                    "mixedContent": False,
+                },
+                "filenameSupport": {
+                    "fileCount": 1,
+                    "pairMatchCount": 1,
+                    "requiredPairCount": 1,
+                    "strong": True,
+                    "examples": ["Stephen King - Finders Keepers (2015).mp3"],
+                },
+            },
+            "reasonCode": "AUDIOBOOK_FILENAME_IDENTITY_VERIFIED",
+            "explanation": "Leaf filename supports the expected identity.",
+        }
+        with local_conn() as conn:
+            conn.execute(
+                """
+                UPDATE content_verifications
+                SET title='Finders Keepers',
+                    author='Stephen King',
+                    verdict='VERIFIED_CORRECT',
+                    confidence=90,
+                    source='audiobook-filename-evidence',
+                    evidence_json=?
+                WHERE id=1
+                """,
+                (json.dumps(filename_evidence),),
+            )
+            conn.commit()
+
+        filename = operation_detail("verification", 1)
+    finally:
+        settings.config_dir = original
+
+    assert filename is not None
+    summary = filename["verificationSummary"]
+    assert summary["mixedContent"] is False
+    assert summary["filenameStrong"] is True
+    assert summary["filenamePairMatchCount"] == 1
+    assert summary["filenameFileCount"] == 1
+    assert summary["filenameExamples"] == ["Stephen King - Finders Keepers (2015).mp3"]
+
