@@ -195,3 +195,118 @@ def test_audiobook_evidence_rejects_consistent_different_identity(monkeypatch):
 
     assert result["verdict"] == "WRONG_CONTENT"
     assert result["confidence"] >= 95
+
+
+
+def test_audiobook_evidence_rejects_mixed_same_author_directory(monkeypatch):
+    monkeypatch.setattr(
+        audiobook_evidence,
+        "inspect_media_path",
+        lambda path: {
+            "candidateCount": 4,
+            "counts": {"audiobook": 4},
+            "items": [
+                {
+                    "path": f"/audio/{i}.mp3",
+                    "kind": "audiobook",
+                    "detectedFormat": "mp3",
+                    "confidence": 100,
+                    "source": "ffprobe",
+                }
+                for i in range(1, 5)
+            ],
+        },
+    )
+    probes = [
+        _probe("/audio/1.mp3", album="The Example Book"),
+        _probe("/audio/2.mp3", album="The Example Book"),
+        _probe("/audio/3.mp3", album="Different Book"),
+        _probe("/audio/4.mp3", album="Another Book"),
+    ]
+    monkeypatch.setattr(
+        audiobook_evidence,
+        "verify_audio_files",
+        lambda paths: {
+            "verdict": "PASS",
+            "reason_code": "AUDIO_TECHNICAL_PASS",
+            "reasons": ["ok"],
+            "file_count": 4,
+            "readable_file_count": 4,
+            "total_duration_seconds": 14400.0,
+            "codecs": ["mp3"],
+            "sample_rates": [44100],
+            "channels": [2],
+            "chapter_count": 0,
+            "cache_hits": 4,
+            "cache_misses": 0,
+            "files": probes,
+        },
+    )
+
+    result = audiobook_evidence.build_audiobook_evidence(_result(), "/audio")
+
+    assert result["verdict"] == "WRONG_CONTENT"
+    assert result["confidence"] == 98
+    assert result["evidence"]["reasonCode"] == "MIXED_AUDIO_CONTENT"
+    assert result["evidence"]["identity"]["wholeSet"]["mixedContent"] is True
+
+
+def test_audiobook_evidence_uses_leaf_filename_when_embedded_tags_are_blank(monkeypatch):
+    path = "/audio/Stephen King - Finders Keepers (2015).mp3"
+    monkeypatch.setattr(
+        audiobook_evidence,
+        "inspect_media_path",
+        lambda _path: {
+            "candidateCount": 1,
+            "counts": {"audiobook": 1},
+            "items": [
+                {
+                    "path": path,
+                    "kind": "audiobook",
+                    "detectedFormat": "mp3",
+                    "confidence": 100,
+                    "source": "ffprobe",
+                }
+            ],
+        },
+    )
+    blank_probe = _probe(
+        path,
+        album="",
+        title="",
+        author="",
+        artist="",
+        album_artist="",
+        composer="",
+        genre="",
+    )
+    monkeypatch.setattr(
+        audiobook_evidence,
+        "verify_audio_files",
+        lambda paths: {
+            "verdict": "PASS",
+            "reason_code": "AUDIO_TECHNICAL_PASS",
+            "reasons": ["ok"],
+            "file_count": 1,
+            "readable_file_count": 1,
+            "total_duration_seconds": 3600.0,
+            "codecs": ["mp3"],
+            "sample_rates": [44100],
+            "channels": [2],
+            "chapter_count": 0,
+            "cache_hits": 1,
+            "cache_misses": 0,
+            "files": [blank_probe],
+        },
+    )
+    expected = _result()
+    expected["title"] = "Finders Keepers"
+    expected["author"] = "Stephen King"
+
+    result = audiobook_evidence.build_audiobook_evidence(expected, "/audio")
+
+    assert result["verdict"] == "VERIFIED_CORRECT"
+    assert result["confidence"] == 90
+    assert result["source"] == "audiobook-filename-evidence"
+    assert result["evidence"]["reasonCode"] == "AUDIOBOOK_FILENAME_IDENTITY_VERIFIED"
+    assert result["evidence"]["identity"]["filenameSupport"]["strong"] is True
