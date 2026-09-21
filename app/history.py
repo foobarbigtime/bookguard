@@ -576,6 +576,26 @@ def _verification_ui_summary(
     technical = evidence.get("technical")
     if not isinstance(technical, dict):
         technical = {}
+    whole_set = identity.get("wholeSet")
+    if not isinstance(whole_set, dict):
+        whole_set = {}
+    filename_support = identity.get("filenameSupport")
+    if not isinstance(filename_support, dict):
+        filename_support = {}
+    top_mismatch_titles = whole_set.get("topMismatchTitles")
+    if not isinstance(top_mismatch_titles, list):
+        top_mismatch_titles = []
+    top_mismatch_titles = [
+        {
+            "title": str(item.get("title") or ""),
+            "count": int(item.get("count") or 0),
+        }
+        for item in top_mismatch_titles[:5]
+        if isinstance(item, dict) and str(item.get("title") or "")
+    ]
+    filename_examples = filename_support.get("examples")
+    if not isinstance(filename_examples, list):
+        filename_examples = []
 
     detected_items = actual.get("detected")
     if not isinstance(detected_items, list):
@@ -648,6 +668,20 @@ def _verification_ui_summary(
         "detectedTitle": str(identity.get("detected_title") or ""),
         "detectedAuthor": str(identity.get("detected_author") or ""),
         "identityReasonCode": str(identity.get("reasonCode") or evidence.get("reasonCode") or ""),
+        "mixedContent": bool(whole_set.get("mixedContent")),
+        "wholeSetReadableCount": int(whole_set.get("readableCount") or 0),
+        "wholeSetTitleMatchCount": int(whole_set.get("titleMatchCount") or 0),
+        "wholeSetTitleMismatchCount": int(whole_set.get("titleMismatchCount") or 0),
+        "wholeSetForeignPairCount": int(whole_set.get("foreignPairCount") or 0),
+        "wholeSetDistinctMismatchTitleCount": int(
+            whole_set.get("distinctMismatchTitleCount") or 0
+        ),
+        "topMismatchTitles": top_mismatch_titles,
+        "filenameStrong": bool(filename_support.get("strong")),
+        "filenameFileCount": int(filename_support.get("fileCount") or 0),
+        "filenamePairMatchCount": int(filename_support.get("pairMatchCount") or 0),
+        "filenameRequiredPairCount": int(filename_support.get("requiredPairCount") or 0),
+        "filenameExamples": [str(value) for value in filename_examples[:5] if str(value)],
         "technicalVerdict": str(technical.get("verdict") or ""),
         "technicalReasonCode": str(technical.get("reason_code") or ""),
         "fileCount": int(technical.get("file_count") or 0),
