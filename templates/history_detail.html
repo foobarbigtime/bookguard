@@ -123,9 +123,33 @@
         </small>
       </article>
       <article>
-        <span class="label">Detected identity</span>
-        <strong>{{ vs.detectedTitle or 'Not established' }}</strong>
-        <small>{{ vs.detectedAuthor or 'No independent author identity established' }}</small>
+        <span class="label">{{ 'Whole-set identity' if vs.mixedContent else 'Detected identity' }}</span>
+        {% if vs.mixedContent %}
+          <strong>Mixed audiobook set</strong>
+          <small>
+            {{ vs.wholeSetTitleMatchCount }} expected-title ·
+            {{ vs.wholeSetTitleMismatchCount }} conflicting ·
+            {{ vs.wholeSetReadableCount }} readable
+          </small>
+          {% if vs.topMismatchTitles %}
+            <small>
+              Conflicts:
+              {% for item in vs.topMismatchTitles[:3] %}
+                {{ item.title }}{% if item.count > 1 %} ({{ item.count }}){% endif %}{% if not loop.last %} · {% endif %}
+              {% endfor %}
+            </small>
+          {% endif %}
+        {% elif vs.filenameStrong and not vs.detectedTitle %}
+          <strong>Filename identity verified</strong>
+          <small>
+            {{ vs.filenamePairMatchCount }}/{{ vs.filenameFileCount }}
+            filename{{ '' if vs.filenameFileCount == 1 else 's' }} support
+            {{ vs.expectedTitle }}{% if vs.expectedAuthor %} · {{ vs.expectedAuthor }}{% endif %}
+          </small>
+        {% else %}
+          <strong>{{ vs.detectedTitle or 'Not established' }}</strong>
+          <small>{{ vs.detectedAuthor or 'No independent author identity established' }}</small>
+        {% endif %}
       </article>
       <article>
         <span class="label">Technical integrity</span>
