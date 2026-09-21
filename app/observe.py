@@ -6,6 +6,7 @@ from typing import Any
 
 from .config import load_automation_settings
 from .db import local_conn, utc_now
+from .recovery_planner import record_recovery_plans
 
 
 POLICY_VERSION = "1"
@@ -629,7 +630,9 @@ def run_observe_cycle(limit: int = 500) -> dict[str, Any]:
             "state": "disabled",
             "policyVersion": POLICY_VERSION,
             "decisionCount": 0,
+            "planCount": 0,
             "records": [],
+            "plans": [],
             "message": (
                 "Observe Mode is disabled. Set BOOKGUARD_AUTOMATION_MODE=observe "
                 "to record non-mutating automation decisions."
@@ -649,6 +652,7 @@ def run_observe_cycle(limit: int = 500) -> dict[str, Any]:
             + _result_decisions(conn, limit)
         )
         records = [_persist_decision(conn, item, now) for item in decisions]
+        plans = record_recovery_plans(conn, decisions, now=now)
         conn.commit()
 
     return {
@@ -657,10 +661,13 @@ def run_observe_cycle(limit: int = 500) -> dict[str, Any]:
         "state": "observed",
         "policyVersion": POLICY_VERSION,
         "decisionCount": len(records),
+        "planCount": len(plans),
         "records": records,
+        "plans": plans,
         "message": (
-            "Observe Mode recorded proposed decisions only. No Bindery, queue, "
-            "staging, quarantine, metadata, or library mutation was attempted."
+            "Observe Mode recorded proposed decisions and non-executable recovery "
+            "plans only. No Bindery, queue, staging, quarantine, metadata, or "
+            "library mutation was attempted."
         ),
     }
 
