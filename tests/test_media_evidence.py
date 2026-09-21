@@ -13,7 +13,11 @@ def test_pdf_bytes_are_detected_as_ebook_even_with_audio_extension(tmp_path, mon
     def should_not_probe(_path):
         raise AssertionError("Known ebook signature should not need ffprobe")
 
-    monkeypatch.setattr(media_evidence, "probe_audio_file", should_not_probe)
+    monkeypatch.setattr(
+        media_evidence,
+        "cached_or_probe_audio_file",
+        lambda path: (should_not_probe(path), False),
+    )
 
     result = media_evidence.detect_file_media_kind(str(path))
 
@@ -28,13 +32,16 @@ def test_audio_container_is_detected_by_ffprobe_even_with_ebook_extension(tmp_pa
 
     monkeypatch.setattr(
         media_evidence,
-        "probe_audio_file",
-        lambda _path: {
-            "audio_stream_count": 1,
-            "format_name": "mp3",
-            "codec": "mp3",
-            "duration_seconds": 3600.0,
-        },
+        "cached_or_probe_audio_file",
+        lambda _path: (
+            {
+                "audio_stream_count": 1,
+                "format_name": "mp3",
+                "codec": "mp3",
+                "duration_seconds": 3600.0,
+            },
+            False,
+        ),
     )
 
     result = media_evidence.detect_file_media_kind(str(path))
@@ -68,3 +75,29 @@ def test_discovery_ignores_cover_art_but_includes_ebook_and_audio_candidates(tmp
     found = media_evidence.discover_media_candidates(str(tmp_path))
 
     assert {Path(value).name for value in found} == {"book.m4b", "book.epub"}
+
+
+
+def test_media_detection_uses_cached_probe_path(tmp_path, monkeypatch):
+    path = tmp_path / "track.mp3"
+    path.write_bytes(b"audio")
+    calls = []
+
+    def cached(path_value):
+        calls.append(path_value)
+        return (
+            {
+                "audio_stream_count": 1,
+                "format_name": "mp3",
+                "codec": "mp3",
+                "duration_seconds": 60.0,
+            },
+            True,
+        )
+
+    monkeypatch.setattr(media_evidence, "cached_or_probe_audio_file", cached)
+
+    result = media_evidence.detect_file_media_kind(str(path))
+
+    assert result["kind"] == "audiobook"
+    assert calls == [str(path)]
