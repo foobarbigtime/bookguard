@@ -5,10 +5,60 @@ from typing import Any
 
 from .audiobook_verification import verify_audio_files
 from .config import settings
-from .matcher import classify_audio
+from .matcher import (
+    analyze_audio_identity_set,
+    author_mentioned_in_text,
+    classify_audio,
+    title_match,
+)
 from .media_discovery import AUDIO_EXTENSIONS, representative_items
 from .media_evidence import inspect_media_path
 from .metadata import audio_metadata_summary
+
+
+def _filename_identity_support(
+    expected_title: str,
+    expected_author: str,
+    audio_paths: list[str],
+) -> dict[str, Any]:
+    """Use leaf filenames only as supporting identity evidence.
+
+    Parent directories can be derived from catalogue assignment, so they are not
+    treated as independent proof. A filename must support both expected title and
+    full author/alias, and most files in a multi-file audiobook must agree.
+    """
+    title_matches = 0
+    author_matches = 0
+    pair_matches = 0
+    examples: list[str] = []
+
+    for path in audio_paths:
+        stem = Path(path).stem
+        title_supported = title_match(expected_title, stem)
+        author_supported = author_mentioned_in_text(expected_author, stem)
+        if title_supported:
+            title_matches += 1
+        if author_supported:
+            author_matches += 1
+        if title_supported and author_supported:
+            pair_matches += 1
+            if len(examples) < 5:
+                examples.append(Path(path).name)
+
+    file_count = len(audio_paths)
+    required_pairs = 0
+    if file_count:
+        required_pairs = file_count if file_count <= 3 else max(1, (file_count * 80 + 99) // 100)
+
+    return {
+        "fileCount": file_count,
+        "titleMatchCount": title_matches,
+        "authorMatchCount": author_matches,
+        "pairMatchCount": pair_matches,
+        "requiredPairCount": required_pairs,
+        "strong": bool(file_count and pair_matches >= required_pairs),
+        "examples": examples,
+    }
 
 
 def build_audiobook_evidence(result: dict[str, Any], path: str) -> dict[str, Any]:
@@ -111,13 +161,21 @@ def build_audiobook_evidence(result: dict[str, Any], path: str) -> dict[str, Any
 
     technical = verify_audio_files(audio_paths)
     probes = list(technical.get("files") or [])
+    expected_title = str(result.get("title") or "")
+    expected_author = str(result.get("author") or "")
+    whole_set = analyze_audio_identity_set(expected_title, expected_author, probes)
+    filename_support = _filename_identity_support(
+        expected_title,
+        expected_author,
+        audio_paths,
+    )
     samples = representative_items(
         probes,
         max(3, int(settings.sample_files)),
     )
     identity_classification, risk_score, reason_code, reasons = classify_audio(
-        str(result.get("title") or ""),
-        str(result.get("author") or ""),
+        expected_title,
+        expected_author,
         samples,
     )
 
@@ -137,6 +195,8 @@ def build_audiobook_evidence(result: dict[str, Any], path: str) -> dict[str, Any
             "reasons": list(reasons),
             **metadata_summary,
             "sampleCount": len(samples),
+            "wholeSet": whole_set,
+            "filenameSupport": filename_support,
         },
         "sampleFiles": [
             {
@@ -174,11 +234,39 @@ def build_audiobook_evidence(result: dict[str, Any], path: str) -> dict[str, Any
             "evidence": evidence,
         }
 
+    if whole_set.get("mixedContent"):
+        evidence["reasonCode"] = "MIXED_AUDIO_CONTENT"
+        evidence["explanation"] = (
+            "The tracked audiobook path contains multiple embedded work identities "
+            "that cannot all belong to the expected single catalogue assignment."
+        )
+        return {
+            "verdict": "WRONG_CONTENT",
+            "confidence": 98,
+            "source": "audiobook-whole-set-evidence",
+            "evidence": evidence,
+        }
+
     if identity_classification == "PASS":
+        if whole_set.get("hasEmbeddedContradiction"):
+            evidence["reasonCode"] = "CONFLICTING_AUDIO_IDENTITY"
+            evidence["explanation"] = (
+                "Representative metadata supports the expected audiobook, but one or "
+                "more other readable files carry a conflicting work title. The item "
+                "is not safe to mark verified until the conflict is resolved."
+            )
+            return {
+                "verdict": "INSUFFICIENT_EVIDENCE",
+                "confidence": 80,
+                "source": "audiobook-whole-set-evidence",
+                "evidence": evidence,
+            }
+
         evidence["reasonCode"] = "AUDIOBOOK_IDENTITY_VERIFIED"
         evidence["explanation"] = (
             "Readable audiobook containers and embedded identity evidence support "
-            "the expected Bindery title and author."
+            "the expected Bindery title and author without contradictory work titles "
+            "elsewhere in the verified file set."
         )
         confidence = 95 if technical.get("verdict") == "PASS" else 90
         return {
@@ -198,6 +286,23 @@ def build_audiobook_evidence(result: dict[str, Any], path: str) -> dict[str, Any
             "verdict": "WRONG_CONTENT",
             "confidence": max(95, int(risk_score)),
             "source": "audiobook-evidence",
+            "evidence": evidence,
+        }
+
+    if (
+        not whole_set.get("hasEmbeddedContradiction")
+        and filename_support.get("strong")
+    ):
+        evidence["reasonCode"] = "AUDIOBOOK_FILENAME_IDENTITY_VERIFIED"
+        evidence["explanation"] = (
+            "The audio is technically readable, embedded metadata does not "
+            "contradict the assignment, and leaf filenames consistently contain "
+            "both the expected title and full author identity."
+        )
+        return {
+            "verdict": "VERIFIED_CORRECT",
+            "confidence": 90 if technical.get("verdict") == "PASS" else 85,
+            "source": "audiobook-filename-evidence",
             "evidence": evidence,
         }
 
