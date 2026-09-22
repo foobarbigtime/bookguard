@@ -702,10 +702,18 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             "message": str(exc),
         }
 
+    replayed = bool(result.get("replayed"))
+    reconciled = bool(result.get("reconciled"))
     return {
         **result,
-        "state": "executed",
-        "externalMutationAttempted": True,
+        "state": (
+            "reconciled"
+            if reconciled
+            else "replayed"
+            if replayed
+            else "executed"
+        ),
+        "externalMutationAttempted": not replayed,
     }
 
 
