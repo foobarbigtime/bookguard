@@ -4,8 +4,9 @@ from types import SimpleNamespace
 from app import acquisition_coordinator as coordinator_module
 
 
-def _configured(*, enabled=True, automatic=True):
+def _configured(*, enabled=True, automatic=True, mode="manual"):
     return SimpleNamespace(
+        automation_mode=mode,
         acquisition_coordinator_enabled=enabled,
         acquisition_coordinator_interval_seconds=10,
         automatic_reacquisition=automatic,
@@ -38,6 +39,25 @@ def test_disabled_coordinator_does_not_read_active_state(monkeypatch):
 
     assert status["state"] == "disabled"
     assert status["blockers"] == ["coordinatorEnabled"]
+
+
+def test_automatic_mode_disables_legacy_coordinator_each_cycle(monkeypatch):
+    worker = coordinator_module.SupervisedAcquisitionCoordinator()
+    monkeypatch.setattr(
+        coordinator_module,
+        "load_automation_settings",
+        lambda: _configured(mode="automatic"),
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "active_ebook_acquisitions",
+        lambda: (_ for _ in ()).throw(AssertionError("active state was read")),
+    )
+
+    status = worker.run_once(object())
+
+    assert status["state"] == "disabled"
+    assert status["blockers"] == ["automaticModeUsesRecoveryExecutor"]
 
 
 def test_coordinator_requires_both_mutation_gates(monkeypatch):
