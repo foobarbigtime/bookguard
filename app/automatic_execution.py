@@ -8,6 +8,7 @@ from .acquisition import (
     _result_and_book,
     _search_candidate,
     acquisition_readiness,
+    reconcile_ebook_acquisition,
     retry_failed_ebook_acquisition,
 )
 from .bindery_client import BinderyClient
@@ -180,6 +181,133 @@ class _TransientAcquisitionRetryExecutor:
             "checks": checks,
             "acquisitionId": acquisition_id,
             "candidateGuid": str(acquisition.get("candidate_guid") or ""),
+        }
+
+    def reconcile_uncertain(
+        self,
+        plan: dict[str, Any],
+        step: dict[str, Any],
+        existing: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Adopt a proven remote grab after an interrupted running execution.
+
+        A running journal row means the process may have died after Bindery
+        accepted the grab. Never send the grab again. Reconcile only when the
+        current Bindery queue contains exactly one item matching the durable
+        book, candidate title, and protocol.
+        """
+        acquisition_id = int(plan["subjectId"])
+        acquisition = ebook_acquisition_by_id(acquisition_id)
+        if not acquisition:
+            raise AutomaticExecutionBlocked(
+                "SUBJECT_IDENTITY_CHANGED",
+                "The interrupted acquisition no longer exists.",
+            )
+        if str(acquisition.get("status") or "").casefold() != "grab_requested":
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                "Interrupted grab cannot be adopted because the durable acquisition "
+                "is not in grab_requested state.",
+            )
+
+        client = BinderyClient()
+        try:
+            payload = client.list_queue()
+        except Exception as exc:
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                f"Interrupted grab outcome could not be checked safely: {exc}",
+            ) from exc
+
+        if isinstance(payload, list):
+            items = [item for item in payload if isinstance(item, dict)]
+            partial = False
+            structurally_complete = len(items) == len(payload)
+        elif isinstance(payload, dict):
+            raw_items = payload.get("items")
+            structurally_complete = isinstance(raw_items, list)
+            items = (
+                [item for item in raw_items if isinstance(item, dict)]
+                if structurally_complete
+                else []
+            )
+            structurally_complete = (
+                structurally_complete and len(items) == len(raw_items)
+            )
+            partial = bool(payload.get("partial", False))
+        else:
+            items = []
+            partial = False
+            structurally_complete = False
+
+        if not structurally_complete or partial:
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                "Interrupted grab outcome cannot be adopted from a partial or invalid "
+                "Bindery queue response.",
+            )
+
+        expected_book = str(acquisition.get("book_id") or "")
+        expected_title = str(acquisition.get("candidate_title") or "").strip().casefold()
+        expected_protocol = (
+            str(acquisition.get("candidate_protocol") or "").strip().casefold()
+        )
+        matches = []
+        for item in items:
+            item_protocol = str(item.get("protocol") or "").strip().casefold()
+            if (
+                str(item.get("bookId") or "") == expected_book
+                and str(item.get("title") or "").strip().casefold() == expected_title
+                and (not expected_protocol or item_protocol == expected_protocol)
+            ):
+                matches.append(item)
+
+        if len(matches) != 1 or matches[0].get("id") is None:
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                "Interrupted grab was not proven by exactly one current Bindery queue "
+                "item with the durable book, candidate title, and protocol.",
+            )
+
+        expected_queue_id = matches[0].get("id")
+        try:
+            reconciled = reconcile_ebook_acquisition(acquisition_id, client)
+        except AcquisitionSafetyError as exc:
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                f"Interrupted grab queue proof could not be reconciled safely: {exc}",
+            ) from exc
+
+        updated = reconciled.get("acquisition") or {}
+        adopted_status = str(updated.get("status") or "")
+        adopted_queue_id = updated.get("queue_id")
+        if (
+            adopted_status
+            not in {
+                "queued",
+                "downloading",
+                "awaiting_staging",
+                "staging_observed",
+                "verified",
+            }
+            or str(adopted_queue_id or "") != str(expected_queue_id)
+        ):
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                "Interrupted grab queue proof did not reconcile to the same durable "
+                "queue item.",
+            )
+
+        return {
+            "acquisitionId": acquisition_id,
+            "status": adopted_status,
+            "queueId": adopted_queue_id,
+            "reconciledAfterRestart": True,
+            "proof": {
+                "bookId": int(acquisition["book_id"]),
+                "candidateTitle": str(acquisition.get("candidate_title") or ""),
+                "candidateProtocol": str(acquisition.get("candidate_protocol") or ""),
+            },
         }
 
     def execute(
@@ -516,6 +644,20 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
     try:
         result = attempt_automatic_step(plan_id)
     except AutomaticExecutionBlocked as exc:
+        if exc.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME":
+            blocked = block_recovery_plan(
+                plan_id,
+                "Interrupted external mutation outcome could not be proven safely: "
+                + str(exc),
+            )
+            return {
+                "ok": False,
+                "state": "blocked",
+                "plan": blocked,
+                "externalMutationAttempted": False,
+                "reasonCode": exc.reason_code,
+                "message": str(exc),
+            }
         if exc.reason_code != "EXECUTION_FAILED":
             raise
 
@@ -603,15 +745,6 @@ def attempt_automatic_step(plan_id: int) -> dict[str, Any]:
             f"Recovery step '{action_code}' is not allowlisted.",
         )
 
-    existing = _existing(str(plan["signature"]), action_code, step_index)
-    if existing and existing["state"] == "succeeded":
-        return {
-            "ok": True,
-            "replayed": True,
-            "execution": existing,
-            "plan": record_recovery_step_success(int(plan_id), step_index),
-        }
-
     executor = _EXECUTORS.get(action_code)
     if executor is None:
         _record(
@@ -625,6 +758,67 @@ def attempt_automatic_step(plan_id: int) -> dict[str, Any]:
             "EXECUTOR_NOT_REGISTERED",
             f"'{action_code}' has no registered live executor; nothing was mutated.",
         )
+
+    existing = _existing(str(plan["signature"]), action_code, step_index)
+    if existing and existing["state"] == "succeeded":
+        return {
+            "ok": True,
+            "replayed": True,
+            "execution": existing,
+            "plan": record_recovery_step_success(int(plan_id), step_index),
+        }
+
+    if existing and existing["state"] == "running":
+        reconciler = getattr(executor, "reconcile_uncertain", None)
+        if not callable(reconciler):
+            message = (
+                "A prior external mutation attempt is still recorded as running; "
+                "automatic replay is forbidden until its outcome is proven."
+            )
+            _record(
+                plan,
+                action_code,
+                step_index,
+                "blocked",
+                boundary=existing.get("boundary") or {},
+                error=message,
+            )
+            raise AutomaticExecutionBlocked("UNCERTAIN_EXTERNAL_OUTCOME", message)
+        try:
+            result = reconciler(plan, step, existing) or {}
+        except Exception as exc:
+            message = str(exc)
+            _record(
+                plan,
+                action_code,
+                step_index,
+                "blocked",
+                boundary=existing.get("boundary") or {},
+                error=message,
+            )
+            if isinstance(exc, AutomaticExecutionBlocked):
+                raise
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                message,
+            ) from exc
+
+        execution = _record(
+            plan,
+            action_code,
+            step_index,
+            "succeeded",
+            boundary=existing.get("boundary") or {},
+            external_result=result,
+        )
+        updated_plan = record_recovery_step_success(int(plan_id), step_index)
+        return {
+            "ok": True,
+            "replayed": True,
+            "reconciled": True,
+            "execution": execution,
+            "plan": updated_plan,
+        }
 
     try:
         boundary = executor.revalidate(plan, step)
