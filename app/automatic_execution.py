@@ -8,6 +8,11 @@ from .automatic import (
     quarantine_unsafe_media,
     unsafe_media_preview,
 )
+from .admission import (
+    AdmissionSafetyError,
+    admission_reconcile_preview,
+    reconcile_admission,
+)
 from .acquisition import (
     AcquisitionSafetyError,
     _result_and_book,
@@ -18,8 +23,14 @@ from .acquisition import (
 )
 from .bindery_client import BinderyClient
 from .config import AUTOMATIC_ACTION_CODES, load_automation_settings
-from .db import ebook_acquisition_by_id, local_conn, result_by_id, utc_now
-from .observe import _acquisition_decisions, _result_decisions
+from .db import (
+    ebook_acquisition_by_id,
+    ebook_admission_by_id,
+    local_conn,
+    result_by_id,
+    utc_now,
+)
+from .observe import _acquisition_decisions, _admission_decisions, _result_decisions
 from .recovery_classifier import classify_acquisition_failure
 from .verifier import verify_result
 from .recovery_planner import (
@@ -491,8 +502,218 @@ class _UnsafeMediaQuarantineExecutor:
         }
 
 
+class _KnownAdmissionReconcileExecutor:
+    action_code = "reconcile_known_admission"
+
+    def _current_plan(self, admission_id: int) -> dict[str, Any] | None:
+        with local_conn() as conn:
+            decisions = _admission_decisions(conn, 500)
+            current_decision = next(
+                (
+                    item
+                    for item in decisions
+                    if str(item.get("subjectKind") or "") == "admission"
+                    and str(item.get("subjectId") or "") == str(admission_id)
+                ),
+                None,
+            )
+            return _build_plan(conn, current_decision) if current_decision else None
+
+    def revalidate(
+        self,
+        plan: dict[str, Any],
+        step: dict[str, Any],
+    ) -> dict[str, Any]:
+        if str(plan.get("planKind") or "") != "RECONCILE_ADMISSION":
+            raise AutomaticExecutionBlocked(
+                "PLAN_KIND_MISMATCH",
+                "reconcile_known_admission is valid only for RECONCILE_ADMISSION.",
+            )
+        if str(plan.get("subjectKind") or "") != "admission":
+            raise AutomaticExecutionBlocked(
+                "SUBJECT_KIND_MISMATCH",
+                "Live admission reconciliation requires an admission subject.",
+            )
+        if str(plan.get("reasonCode") or "") != "REGISTRATION_SCAN_PENDING":
+            raise AutomaticExecutionBlocked(
+                "REASON_CODE_MISMATCH",
+                "Live admission reconciliation is limited to REGISTRATION_SCAN_PENDING.",
+            )
+
+        admission_id = int(plan["subjectId"])
+        admission = ebook_admission_by_id(admission_id)
+        if not admission:
+            raise AutomaticExecutionBlocked(
+                "SUBJECT_IDENTITY_CHANGED",
+                "The planned admission no longer exists.",
+            )
+
+        current_plan = self._current_plan(admission_id)
+        if not current_plan:
+            raise AutomaticExecutionBlocked(
+                "DECISION_NO_LONGER_AUTHORIZED",
+                "The current decision policy no longer authorizes admission reconciliation.",
+            )
+
+        try:
+            preview = admission_reconcile_preview(admission_id, BinderyClient())
+        except AdmissionSafetyError as exc:
+            raise AutomaticExecutionBlocked(
+                "ADMISSION_RECONCILE_PREFLIGHT_FAILED",
+                str(exc),
+            ) from exc
+
+        preview_checks = dict(preview.get("checks") or {})
+        checks = [
+            {
+                "code": "SUBJECT_IDENTITY_UNCHANGED",
+                "ok": (
+                    str(current_plan.get("subjectId") or "") == str(plan.get("subjectId") or "")
+                    and current_plan.get("resultId") == plan.get("resultId")
+                    and current_plan.get("bookId") == plan.get("bookId")
+                    and int(preview.get("admissionId") or 0) == admission_id
+                ),
+            },
+            {
+                "code": "PATH_UNCHANGED",
+                "ok": str(current_plan.get("path") or "") == str(plan.get("path") or ""),
+            },
+            {
+                "code": "EVIDENCE_REVISION_UNCHANGED",
+                "ok": str(current_plan.get("evidenceRevision") or "")
+                == str(plan.get("evidenceRevision") or ""),
+            },
+            {
+                "code": "DECISION_STILL_AUTHORIZED",
+                "ok": str(current_plan.get("signature") or "")
+                == str(plan.get("signature") or ""),
+            },
+            {
+                "code": "WORKFLOW_STATE_UNCHANGED",
+                "ok": bool(preview_checks.get("workflowStateScanRequested")),
+            },
+            {
+                "code": "PUBLISHED_BYTES_UNCHANGED",
+                "ok": bool(preview_checks.get("publishedBytesCurrent")),
+            },
+            {
+                "code": "STAGED_BYTES_UNCHANGED",
+                "ok": bool(preview_checks.get("stagedBytesCurrent")),
+            },
+            {
+                "code": "RESULT_IDENTITY_UNCHANGED",
+                "ok": bool(preview_checks.get("resultIdentityUnchanged")),
+            },
+            {
+                "code": "BINDERY_OWNERSHIP_CONSISTENT",
+                "ok": bool(preview_checks.get("binderyOwnershipConsistent")),
+            },
+            {
+                "code": "ADMISSION_ACTIONS_ENABLED",
+                "ok": bool(preview_checks.get("actionsEnabled")),
+            },
+            {
+                "code": "ADMISSION_MODE_ENABLED",
+                "ok": bool(preview_checks.get("admissionEnabled")),
+            },
+        ]
+
+        return {
+            "ok": all(check["ok"] for check in checks),
+            "planSignature": str(plan["signature"]),
+            "evidenceRevision": str(plan["evidenceRevision"]),
+            "checks": checks,
+            "admissionId": admission_id,
+            "resultId": int(preview["resultId"]),
+            "bookId": int(preview["bookId"]),
+            "storedPath": str(preview["storedPath"]),
+            "stagedSha256": str(preview["stagedSha256"]),
+            "registrationState": str(preview["registrationState"]),
+        }
+
+    def reconcile_uncertain(
+        self,
+        plan: dict[str, Any],
+        step: dict[str, Any],
+        existing: dict[str, Any],
+    ) -> dict[str, Any]:
+        admission_id = int(plan["subjectId"])
+        admission = ebook_admission_by_id(admission_id)
+        if not admission:
+            raise AutomaticExecutionBlocked(
+                "SUBJECT_IDENTITY_CHANGED",
+                "The interrupted admission no longer exists.",
+            )
+
+        try:
+            preview = admission_reconcile_preview(admission_id, BinderyClient())
+        except AdmissionSafetyError as exc:
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                f"Interrupted admission reconciliation could not be proven safely: {exc}",
+            ) from exc
+
+        state = str(preview.get("registrationState") or "")
+        if state != "registered":
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                "The prior Bindery scan request cannot be proven complete from current "
+                "registration state, so Automatic Mode will not replay it.",
+            )
+
+        try:
+            outcome = reconcile_admission(admission_id, BinderyClient())
+        except AdmissionSafetyError as exc:
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                f"Proven registration could not be adopted safely: {exc}",
+            ) from exc
+
+        if str(outcome.get("status") or "") != "registered":
+            raise AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                "Current Bindery evidence did not reconcile to registered state.",
+            )
+
+        return {
+            "admissionId": admission_id,
+            "bookId": int(outcome["bookId"]),
+            "status": "registered",
+            "registered": True,
+            "scanRequested": False,
+            "externalMutationPerformed": False,
+            "stagingRetained": True,
+            "reconciledAfterRestart": True,
+        }
+
+    def execute(
+        self,
+        plan: dict[str, Any],
+        step: dict[str, Any],
+        boundary: dict[str, Any],
+    ) -> dict[str, Any]:
+        admission_id = int(plan["subjectId"])
+        try:
+            outcome = reconcile_admission(admission_id, BinderyClient())
+        except AdmissionSafetyError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        return {
+            "admissionId": admission_id,
+            "bookId": int(outcome["bookId"]),
+            "status": str(outcome.get("status") or ""),
+            "registered": bool(outcome.get("registered")),
+            "scanRequested": bool(outcome.get("scanRequested")),
+            "registrationConflict": outcome.get("registrationConflict"),
+            "externalMutationPerformed": bool(outcome.get("scanRequested")),
+            "libraryBytesChanged": False,
+            "stagingRetained": bool(outcome.get("stagingRetained")),
+        }
+
+
 _EXECUTORS["retry_grab_once"] = _TransientAcquisitionRetryExecutor()
 _EXECUTORS["quarantine_exact_media"] = _UnsafeMediaQuarantineExecutor()
+_EXECUTORS["reconcile_known_admission"] = _KnownAdmissionReconcileExecutor()
 
 
 def register_automatic_executor(action_code: str, executor: AutomaticExecutor) -> None:
@@ -772,12 +993,111 @@ def _run_unsafe_quarantine_cycle(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _run_admission_reconcile_cycle(plan: dict[str, Any]) -> dict[str, Any]:
+    """Advance one admission-subject registration reconciliation plan."""
+    plan_id = int(plan["id"])
+    executor = _EXECUTORS.get("reconcile_known_admission")
+    if executor is None:
+        raise AutomaticExecutionBlocked(
+            "EXECUTOR_NOT_REGISTERED",
+            "Known-admission reconciliation executor is not registered.",
+        )
+
+    refreshed = recovery_plan_by_id(plan_id) or plan
+    steps = list(refreshed.get("steps") or [])
+    index = int(refreshed.get("currentStep") or 0)
+    code = (
+        str((steps[index] or {}).get("code") or "")
+        if 0 <= index < len(steps)
+        else ""
+    )
+
+    if code == "reobserve_registration":
+        try:
+            boundary = executor.revalidate(refreshed, steps[index])
+            _require_fresh_boundary(refreshed, boundary)
+        except AutomaticExecutionBlocked as exc:
+            blocked = block_recovery_plan(plan_id, str(exc))
+            return {
+                "ok": False,
+                "state": "blocked",
+                "plan": blocked,
+                "externalMutationAttempted": False,
+                "reasonCode": exc.reason_code,
+                "message": str(exc),
+            }
+        refreshed = record_recovery_step_success(plan_id, index)
+
+    refreshed = recovery_plan_by_id(plan_id) or refreshed
+    steps = list(refreshed.get("steps") or [])
+    index = int(refreshed.get("currentStep") or 0)
+    code = (
+        str((steps[index] or {}).get("code") or "")
+        if 0 <= index < len(steps)
+        else ""
+    )
+
+    if code != "reconcile_known_admission":
+        return {
+            "ok": True,
+            "state": "paused",
+            "plan": refreshed,
+            "externalMutationAttempted": False,
+            "message": (
+                "The known admission reconciliation step is complete or not current. "
+                "No later admission mutation is enabled by this E4 slice."
+            ),
+        }
+
+    try:
+        result = attempt_automatic_step(plan_id)
+    except AutomaticExecutionBlocked as exc:
+        if exc.reason_code in {
+            "ACTION_NOT_ALLOWLISTED",
+            "EXECUTOR_NOT_REGISTERED",
+        }:
+            raise
+        blocked = block_recovery_plan(
+            plan_id,
+            "Known admission reconciliation stopped safely: " + str(exc),
+        )
+        return {
+            "ok": False,
+            "state": "blocked",
+            "plan": blocked,
+            "externalMutationAttempted": exc.reason_code == "EXECUTION_FAILED",
+            "reasonCode": exc.reason_code,
+            "message": str(exc),
+        }
+
+    replayed = bool(result.get("replayed"))
+    reconciled = bool(result.get("reconciled"))
+    execution_result = dict((result.get("execution") or {}).get("externalResult") or {})
+    attempted = (
+        False
+        if replayed
+        else bool(execution_result.get("externalMutationPerformed", True))
+    )
+    return {
+        **result,
+        "state": (
+            "reconciled"
+            if reconciled
+            else "replayed"
+            if replayed
+            else "executed"
+        ),
+        "externalMutationAttempted": attempted,
+    }
+
+
 def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
     """Advance at most one E4 work item and perform at most one external mutation.
 
     Live E4 executors are added one mutation class at a time. This coordinator
-    currently supports bounded transient acquisition retry and exact
-    deterministic unsafe-media quarantine. Later recovery steps remain inert.
+    currently supports bounded transient acquisition retry, exact deterministic
+    unsafe-media quarantine, and admission-subject registration reconciliation.
+    Later recovery steps remain inert.
     """
     configured = load_automation_settings()
     if configured.automation_mode != "automatic":
@@ -791,10 +1111,16 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
     candidates = [
         item
         for item in snapshot["items"]
-        if item.get("planKind") in {
-            "RETRY_ACQUISITION_TRANSIENT",
-            "QUARANTINE_UNSAFE_MEDIA",
-        }
+        if (
+            item.get("planKind") in {
+                "RETRY_ACQUISITION_TRANSIENT",
+                "QUARANTINE_UNSAFE_MEDIA",
+            }
+            or (
+                item.get("planKind") == "RECONCILE_ADMISSION"
+                and item.get("subjectKind") == "admission"
+            )
+        )
         and item.get("state") in {"planned", "ready", "retry_wait"}
     ]
     candidates.sort(key=lambda item: int(item["id"]))
@@ -813,6 +1139,12 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
 
     if str(plan.get("planKind") or "") == "QUARANTINE_UNSAFE_MEDIA":
         return _run_unsafe_quarantine_cycle(plan)
+
+    if (
+        str(plan.get("planKind") or "") == "RECONCILE_ADMISSION"
+        and str(plan.get("subjectKind") or "") == "admission"
+    ):
+        return _run_admission_reconcile_cycle(plan)
 
     if plan["state"] == "planned":
         scheduled = schedule_recovery_retry(
