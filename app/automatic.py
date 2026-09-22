@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
 from typing import Any
 
 from .action_paths import (
@@ -157,6 +158,226 @@ def wrong_content_preview(result: dict[str, Any], client: BinderyClient | None =
         "canBlocklistSource": provenance is not None,
         "storedPath": str(result.get("stored_path") or ""),
         "localPath": str(source),
+    }
+
+
+def unsafe_media_preview(
+    result: dict[str, Any],
+    client: BinderyClient | None = None,
+) -> dict[str, Any]:
+    """Prove one current ebook result is safe for exact unsafe-media quarantine.
+
+    This preview is intentionally narrower than generic triage quarantine. It
+    requires a current deterministic-safety UNSAFE_FILE verification, stable
+    source bytes, an exact unique Bindery association, and the separately
+    configured writable ebook alias to still resolve to the same file.
+    """
+    client = client or BinderyClient()
+    _require_current_scan_evidence(result)
+
+    if str(result.get("format") or "").casefold() != "ebook":
+        return {
+            "safe": False,
+            "reason": "Automatic unsafe-media quarantine currently supports ebook files only.",
+        }
+
+    verification = verification_for_result(result)
+    evidence = (verification or {}).get("evidence") or {}
+    security = evidence.get("security") if isinstance(evidence.get("security"), dict) else {}
+    snapshot = (
+        security.get("sourceSnapshot")
+        if isinstance(security.get("sourceSnapshot"), dict)
+        else {}
+    )
+    source = Path(str(result.get("local_path") or "")).resolve()
+    expected_sha256 = str(snapshot.get("sha256") or "")
+
+    deterministic_unsafe = all((
+        str((verification or {}).get("verdict") or "") == "UNSAFE_FILE",
+        int((verification or {}).get("confidence") or 0) == 100,
+        str((verification or {}).get("source") or "") == "deterministic-safety",
+        security.get("safe") is False,
+        snapshot.get("sourceStable") is True,
+        bool(expected_sha256),
+    ))
+    source_regular = source.is_file() and not source.is_symlink()
+    source_hash_matches = bool(
+        source_regular
+        and expected_sha256
+        and sha256_file(source) == expected_sha256
+    )
+
+    exact_db_row = bindery_file_by_id(int(result["file_id"])) if result.get("file_id") else None
+    exact_db_match = bool(
+        exact_db_row
+        and int(exact_db_row["book_id"]) == int(result["book_id"])
+        and str(exact_db_row["format"]) == str(result["format"])
+        and str(exact_db_row["stored_path"]) == str(result["stored_path"])
+    )
+    association_count = len(associations_inside_path(str(result.get("stored_path") or "")))
+
+    try:
+        book = client.get_book(int(result["book_id"]))
+    except BinderyClientError as exc:
+        raise AutomaticMaintenanceError(str(exc)) from exc
+    tracked = _tracked_path(book, str(result.get("stored_path") or ""))
+
+    try:
+        action = ebook_action_preview(
+            str(result.get("local_path") or ""),
+            str(result.get("stored_path") or ""),
+        )
+    except EbookActionSafetyError as exc:
+        raise AutomaticMaintenanceError(str(exc)) from exc
+
+    checks = {
+        "deterministicUnsafeVerdict": deterministic_unsafe,
+        "sourceRegularFile": source_regular,
+        "sourceHashMatchesVerification": source_hash_matches,
+        "exactBinderyAssociation": exact_db_match,
+        "singleAssociation": association_count == 1,
+        "binderyTracksPath": tracked,
+        "writableAliasReady": bool(action["ready"]),
+    }
+    blockers = [name for name, passed in checks.items() if not passed]
+    return {
+        "safe": not blockers,
+        "checks": checks,
+        "blockers": blockers,
+        "verificationId": (verification or {}).get("id"),
+        "verificationSignature": str((verification or {}).get("signature") or ""),
+        "verificationRevisionSource": str((verification or {}).get("source") or ""),
+        "expectedSha256": expected_sha256,
+        "associationCount": association_count,
+        "storedPath": str(result.get("stored_path") or ""),
+        "localPath": str(source),
+        "writablePath": str(action.get("writablePath") or ""),
+        "ebookActionChecks": action.get("checks") or {},
+        "ebookActionBlockers": action.get("blockers") or [],
+        "reason": (
+            "Current deterministic unsafe-media evidence authorizes exact quarantine."
+            if not blockers
+            else "Unsafe-media quarantine boundary failed: " + ", ".join(blockers)
+        ),
+    }
+
+
+def quarantine_unsafe_media(
+    result: dict[str, Any],
+    client: BinderyClient | None = None,
+) -> dict[str, Any]:
+    """Quarantine one exact deterministically unsafe ebook and detach it.
+
+    No replacement search, grab, admission, deletion, or unrelated association
+    mutation is performed by this slice.
+    """
+    if not settings.allow_actions:
+        raise AutomaticMaintenanceError("Automatic actions are disabled.")
+
+    client = client or BinderyClient()
+    _require_current_scan_evidence(result)
+
+    verification = verify_result(result, force=True)
+    if str(verification.get("verdict") or "") != "UNSAFE_FILE":
+        raise AutomaticMaintenanceError(
+            "Immediate deterministic verification no longer reports UNSAFE_FILE."
+        )
+    if int(verification.get("confidence") or 0) != 100:
+        raise AutomaticMaintenanceError(
+            "UNSAFE_FILE verification must have deterministic 100% confidence."
+        )
+    if str(verification.get("source") or "") != "deterministic-safety":
+        raise AutomaticMaintenanceError(
+            "Only deterministic file-safety/integrity evidence can authorize quarantine."
+        )
+
+    preview = unsafe_media_preview(result, client)
+    if not preview.get("safe"):
+        raise AutomaticMaintenanceError(
+            preview.get("reason") or "Unsafe-media quarantine preflight failed."
+        )
+
+    source = Path(preview["localPath"]).resolve()
+    expected_sha256 = str(preview["expectedSha256"])
+    if sha256_file(source) != expected_sha256:
+        raise AutomaticMaintenanceError(
+            "Source bytes changed after deterministic unsafe verification."
+        )
+
+    try:
+        action_source = resolve_writable_ebook_path(
+            str(result.get("local_path") or ""),
+            str(result.get("stored_path") or ""),
+        )
+    except EbookActionSafetyError as exc:
+        raise AutomaticMaintenanceError(str(exc)) from exc
+
+    if sha256_file(action_source) != expected_sha256:
+        raise AutomaticMaintenanceError(
+            "Writable ebook alias changed after verification; no file was moved."
+        )
+
+    destination = _quarantine_destination(result, source)
+
+    try:
+        move_to_quarantine(
+            action_source,
+            source,
+            destination,
+            expected_sha256=expected_sha256,
+        )
+    except QuarantineMoveError as exc:
+        raise AutomaticMaintenanceError(
+            f"Quarantine move failed before Bindery was changed: {exc}"
+        ) from exc
+
+    def commit_detach() -> None:
+        client.deregister_file(
+            int(result["book_id"]),
+            str(result["stored_path"]),
+        )
+        for _ in range(20):
+            if bindery_file_by_id(int(result["file_id"])) is None:
+                return
+            time.sleep(0.2)
+        raise AutomaticMaintenanceError(
+            "Bindery reported deregistration but the exact file association still exists."
+        )
+
+    try:
+        commit_quarantine_or_rollback(
+            commit_detach,
+            action_source,
+            source,
+            destination,
+            expected_sha256=expected_sha256,
+        )
+    except QuarantineCommitError as exc:
+        rollback_error = (
+            f" Rollback also failed: {exc.rollback_error}"
+            if exc.rollback_error is not None
+            else ""
+        )
+        raise AutomaticMaintenanceError(
+            f"Bindery deregistration failed after quarantine: "
+            f"{exc.cause}.{rollback_error}"
+        ) from exc
+
+    return {
+        "ok": True,
+        "outcome": "unsafe_media_quarantined",
+        "bookId": int(result["book_id"]),
+        "fileId": int(result["file_id"]),
+        "storedPath": str(result["stored_path"]),
+        "quarantinePath": str(destination),
+        "sha256": expected_sha256,
+        "binderyDetached": True,
+        "permanentDeletion": False,
+        "replacementRequested": False,
+        "message": (
+            "The exact deterministically unsafe media was quarantined and its "
+            "matching Bindery association was detached. No replacement action ran."
+        ),
     }
 
 
