@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# Safety helpers use explicit return paths instead of relying on `set -e`, because Bash
+# suppresses errexit in several conditional and command-substitution contexts.
+
 bg_header() {
   printf '\n===== %s =====\n' "$1"
 }
