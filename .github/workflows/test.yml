@@ -18,4 +18,6 @@ jobs:
       - run: pip install -r requirements.txt pytest httpx ruff==0.12.11
       - run: ruff check .
       - run: PYTHONPATH=. pytest -q
+      - run: bash -n scripts/acceptance/run scripts/acceptance/lib/common.sh scripts/acceptance/scenarios/*.sh
+      - run: bash scripts/acceptance/run selftest
       - run: ./scripts/smoke-test.sh

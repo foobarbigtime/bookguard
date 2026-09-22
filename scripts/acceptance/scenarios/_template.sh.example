@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+# Copy this file to <scenario>.sh and keep scenario-specific mutation logic here.
+# The runner sources lib/common.sh before sourcing the scenario.
+
+SCENARIO_CONTAINER=""
+SCENARIO_NETWORK=""
+
+scenario_description() {
+  printf '%s\n' "Describe the disposable acceptance case in one sentence."
+}
+
+scenario_requires_docker() {
+  return 0
+}
+
+scenario_requires_acceptance_root() {
+  return 0
+}
+
+scenario_cleanup() {
+  if [[ -n "${SCENARIO_CONTAINER}" ]]; then
+    bg_remove_container "${SCENARIO_CONTAINER}"
+  fi
+  if [[ -n "${SCENARIO_NETWORK}" ]]; then
+    bg_remove_network "${SCENARIO_NETWORK}"
+  fi
+}
+
+scenario_run() {
+  local scenario_root image
+  scenario_root=$(bg_reset_scenario_root "${BG_ACCEPTANCE_SCENARIO}")
+  SCENARIO_CONTAINER=$(bg_container_name "${BG_ACCEPTANCE_SCENARIO}" app)
+  SCENARIO_NETWORK=$(bg_container_name "${BG_ACCEPTANCE_SCENARIO}" net)
+
+  bg_create_network "${SCENARIO_NETWORK}"
+  image=$(bg_build_image)
+
+  bg_note "Disposable root: ${scenario_root}"
+  bg_note "Image:           ${image}"
+
+  # Arrange disposable BookGuard/Bindery fixtures.
+  # Capture pre-mutation hashes and durable DB state.
+  # Exercise observe mode first.
+  # Prove empty allowlist / fail-closed behavior.
+  # Exercise the exact allowlisted mutation.
+  # Inject dependency/crash/restart cases.
+  # Assert idempotency, hash invariants, and unrelated state.
+
+  bg_die "Template scenario is not executable; copy it and implement the acceptance matrix."
+}

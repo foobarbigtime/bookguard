@@ -7,6 +7,7 @@ bookguard.db
 .env.before-*
 .venv/
 /quarantine/
+/.acceptance/
 /bookguard-safe-epub-plan.json
 /missing-detach-plan.json
 /review-verifications*.json
