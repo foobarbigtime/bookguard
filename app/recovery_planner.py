@@ -833,16 +833,44 @@ def _persist_plan(conn, plan: dict[str, Any], now: str) -> dict[str, Any]:
     ).fetchone()
 
     placeholders = ",".join("?" for _ in _PLAN_STATES_ACTIVE)
+    replaced_rows = conn.execute(
+        f"""
+        SELECT id, state, current_step
+        FROM recovery_plans
+        WHERE subject_kind=? AND subject_id=? AND signature<>?
+          AND state IN ({placeholders})
+        """,
+        (
+            subject_kind,
+            subject_id,
+            signature,
+            *sorted(_PLAN_STATES_ACTIVE),
+        ),
+    ).fetchall()
+    replacement_reason = "A newer evidence revision produced a replacement recovery plan."
+    for replaced in replaced_rows:
+        _record_transition(
+            conn,
+            plan_id=int(replaced["id"]),
+            event="superseded",
+            from_state=str(replaced["state"]),
+            to_state="superseded",
+            from_step=int(replaced["current_step"]),
+            to_step=int(replaced["current_step"]),
+            detail=replacement_reason,
+            now=now,
+        )
     conn.execute(
         f"""
         UPDATE recovery_plans
-        SET state='superseded', updated_at=?,
-            last_error='A newer evidence revision produced a replacement recovery plan.'
+        SET state='superseded', updated_at=?, last_error=?,
+            final_outcome='superseded'
         WHERE subject_kind=? AND subject_id=? AND signature<>?
           AND state IN ({placeholders})
         """,
         (
             now,
+            replacement_reason,
             subject_kind,
             subject_id,
             signature,
