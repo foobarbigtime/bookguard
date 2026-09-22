@@ -432,3 +432,221 @@ def test_live_retry_failure_blocks_when_classification_changes(monkeypatch):
     assert result["state"] == "blocked"
     assert result["externalMutationAttempted"] is True
     assert result["reasonCode"] == "RECOVERY_CLASSIFICATION_CHANGED"
+
+
+
+def test_running_execution_reconciles_without_reexecuting(monkeypatch):
+    step = {"code": "retry_grab_once", "externalMutation": True}
+    plan = _plan(step)
+    existing = {
+        "state": "running",
+        "boundary": {
+            "ok": True,
+            "planSignature": "plan-signature",
+            "evidenceRevision": "evidence-1",
+            "checks": [{"code": "CURRENT", "ok": True}],
+        },
+    }
+    calls = []
+
+    class Executor:
+        def revalidate(self, current_plan, current_step):
+            raise AssertionError("normal revalidation must not run")
+
+        def execute(self, current_plan, current_step, boundary):
+            raise AssertionError("external mutation must not replay")
+
+        def reconcile_uncertain(self, current_plan, current_step, prior_execution):
+            calls.append("reconcile")
+            assert prior_execution is existing
+            return {
+                "acquisitionId": 21,
+                "queueId": 77,
+                "status": "queued",
+                "reconciledAfterRestart": True,
+            }
+
+    monkeypatch.setattr(
+        execution,
+        "load_automation_settings",
+        lambda: _configured(allowlist=("retry_grab_once",)),
+    )
+    monkeypatch.setattr(execution, "recovery_plan_by_id", lambda plan_id: plan)
+    monkeypatch.setattr(execution, "_existing", lambda *args: existing)
+    monkeypatch.setattr(execution, "_EXECUTORS", {"retry_grab_once": Executor()})
+    monkeypatch.setattr(
+        execution,
+        "_record",
+        lambda *args, **kwargs: {
+            "state": kwargs.get("state") or args[3],
+            "actionCode": "retry_grab_once",
+            "externalResult": kwargs.get("external_result") or {},
+        },
+    )
+    monkeypatch.setattr(
+        execution,
+        "record_recovery_step_success",
+        lambda plan_id, step_index: {"id": plan_id, "currentStep": step_index + 1},
+    )
+
+    result = execution.attempt_automatic_step(7)
+
+    assert calls == ["reconcile"]
+    assert result["ok"] is True
+    assert result["replayed"] is True
+    assert result["reconciled"] is True
+    assert result["plan"]["currentStep"] == 1
+    assert result["execution"]["externalResult"]["queueId"] == 77
+
+
+def test_running_execution_without_reconciliation_proof_never_replays(monkeypatch):
+    step = {"code": "retry_grab_once", "externalMutation": True}
+    plan = _plan(step)
+    existing = {
+        "state": "running",
+        "boundary": {
+            "ok": True,
+            "planSignature": "plan-signature",
+            "evidenceRevision": "evidence-1",
+            "checks": [{"code": "CURRENT", "ok": True}],
+        },
+    }
+    recorded = []
+
+    class Executor:
+        def revalidate(self, current_plan, current_step):
+            raise AssertionError("normal revalidation must not run")
+
+        def execute(self, current_plan, current_step, boundary):
+            raise AssertionError("external mutation must not replay")
+
+        def reconcile_uncertain(self, current_plan, current_step, prior_execution):
+            raise execution.AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME",
+                "remote outcome cannot be proven",
+            )
+
+    monkeypatch.setattr(
+        execution,
+        "load_automation_settings",
+        lambda: _configured(allowlist=("retry_grab_once",)),
+    )
+    monkeypatch.setattr(execution, "recovery_plan_by_id", lambda plan_id: plan)
+    monkeypatch.setattr(execution, "_existing", lambda *args: existing)
+    monkeypatch.setattr(execution, "_EXECUTORS", {"retry_grab_once": Executor()})
+    monkeypatch.setattr(
+        execution,
+        "_record",
+        lambda *args, **kwargs: recorded.append((args, kwargs)) or {},
+    )
+
+    with pytest.raises(execution.AutomaticExecutionBlocked) as exc:
+        execution.attempt_automatic_step(7)
+
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+    assert recorded
+    assert recorded[-1][0][3] == "blocked"
+
+
+def test_interrupted_retry_queue_proof_adopts_exact_remote_item(monkeypatch):
+    plan = {
+        "id": 7,
+        "subjectId": "21",
+        "planKind": "RETRY_ACQUISITION_TRANSIENT",
+    }
+    acquisition = {
+        "id": 21,
+        "book_id": 42,
+        "candidate_title": "Expected Release",
+        "candidate_protocol": "usenet",
+        "status": "grab_requested",
+    }
+
+    class Client:
+        def list_queue(self):
+            return {
+                "items": [
+                    {
+                        "id": 77,
+                        "bookId": 42,
+                        "title": "Expected Release",
+                        "protocol": "usenet",
+                        "status": "queued",
+                    }
+                ],
+                "partial": False,
+            }
+
+    monkeypatch.setattr(execution, "ebook_acquisition_by_id", lambda _id: acquisition)
+    monkeypatch.setattr(execution, "BinderyClient", Client)
+    monkeypatch.setattr(
+        execution,
+        "reconcile_ebook_acquisition",
+        lambda acquisition_id, client: {
+            "ok": True,
+            "acquisition": {
+                **acquisition,
+                "status": "queued",
+                "queue_id": 77,
+            },
+        },
+    )
+
+    result = execution._TransientAcquisitionRetryExecutor().reconcile_uncertain(
+        plan,
+        {"code": "retry_grab_once"},
+        {"state": "running"},
+    )
+
+    assert result["reconciledAfterRestart"] is True
+    assert result["queueId"] == 77
+    assert result["status"] == "queued"
+
+
+def test_interrupted_retry_ambiguous_queue_fails_closed(monkeypatch):
+    plan = {
+        "id": 7,
+        "subjectId": "21",
+        "planKind": "RETRY_ACQUISITION_TRANSIENT",
+    }
+    acquisition = {
+        "id": 21,
+        "book_id": 42,
+        "candidate_title": "Expected Release",
+        "candidate_protocol": "usenet",
+        "status": "grab_requested",
+    }
+
+    class Client:
+        def list_queue(self):
+            return {
+                "items": [
+                    {
+                        "id": 77,
+                        "bookId": 42,
+                        "title": "Different Release",
+                        "protocol": "usenet",
+                        "status": "queued",
+                    }
+                ],
+                "partial": False,
+            }
+
+    monkeypatch.setattr(execution, "ebook_acquisition_by_id", lambda _id: acquisition)
+    monkeypatch.setattr(execution, "BinderyClient", Client)
+    monkeypatch.setattr(
+        execution,
+        "reconcile_ebook_acquisition",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("ambiguous queue must not be reconciled")
+        ),
+    )
+
+    with pytest.raises(execution.AutomaticExecutionBlocked) as exc:
+        execution._TransientAcquisitionRetryExecutor().reconcile_uncertain(
+            plan,
+            {"code": "retry_grab_once"},
+            {"state": "running"},
+        )
+
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
