@@ -250,7 +250,21 @@ def init_local_db() -> None:
                 last_error TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                completed_at TEXT
+                completed_at TEXT,
+                final_outcome TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS recovery_plan_transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                event TEXT NOT NULL,
+                from_state TEXT NOT NULL,
+                to_state TEXT NOT NULL,
+                from_step INTEGER NOT NULL,
+                to_step INTEGER NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id)
             );
 
             CREATE TABLE IF NOT EXISTS ebook_acquisitions (
@@ -297,6 +311,15 @@ def init_local_db() -> None:
                 "ALTER TABLE ebook_admissions ADD COLUMN publication_method TEXT"
             )
 
+        recovery_plan_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(recovery_plans)").fetchall()
+        }
+        if "final_outcome" not in recovery_plan_columns:
+            conn.execute(
+                "ALTER TABLE recovery_plans ADD COLUMN final_outcome TEXT"
+            )
+
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_scan_results_scan
@@ -331,6 +354,10 @@ def init_local_db() -> None:
                 ON recovery_plans(state, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_recovery_plans_result
                 ON recovery_plans(result_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plan_transitions_plan
+                ON recovery_plan_transitions(plan_id, id);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plan_transitions_created
+                ON recovery_plan_transitions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_created
                 ON ebook_acquisitions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_result
