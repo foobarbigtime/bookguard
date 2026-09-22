@@ -199,7 +199,7 @@ class _TransientAcquisitionRetryExecutor:
         }
 
 
-register_automatic_executor("retry_grab_once", _TransientAcquisitionRetryExecutor())
+_EXECUTORS["retry_grab_once"] = _TransientAcquisitionRetryExecutor()
 
 
 def register_automatic_executor(action_code: str, executor: AutomaticExecutor) -> None:
