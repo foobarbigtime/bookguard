@@ -700,3 +700,175 @@ def test_automatic_cycle_reports_reconciliation_without_external_mutation(monkey
     assert result["externalMutationAttempted"] is False
     assert result["replayed"] is True
     assert result["reconciled"] is True
+
+
+
+def test_unsafe_quarantine_executor_revalidates_exact_current_evidence(monkeypatch):
+    plan = {
+        "id": 30,
+        "signature": "unsafe-signature",
+        "evidenceRevision": "unsafe-revision",
+        "planKind": "QUARANTINE_UNSAFE_MEDIA",
+        "reasonCode": "UNSAFE_FILE",
+        "subjectKind": "result",
+        "subjectId": "101",
+        "resultId": 101,
+        "bookId": 202,
+        "path": "/data/media/books/Unsafe.epub",
+    }
+    result = {
+        "id": 101,
+        "scan_id": "scan-current",
+        "file_id": 303,
+        "book_id": 202,
+        "format": "ebook",
+        "stored_path": "/data/media/books/Unsafe.epub",
+        "local_path": "/books/Unsafe.epub",
+    }
+    current_plan = dict(plan)
+
+    class DummyConn:
+        pass
+
+    class LocalConn:
+        def __enter__(self):
+            return DummyConn()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(execution, "result_by_id", lambda result_id: result)
+    monkeypatch.setattr(
+        execution,
+        "verify_result",
+        lambda item, force: {
+            "verdict": "UNSAFE_FILE",
+            "confidence": 100,
+            "source": "deterministic-safety",
+        },
+    )
+    monkeypatch.setattr(execution, "local_conn", lambda: LocalConn())
+    monkeypatch.setattr(
+        execution,
+        "_result_decisions",
+        lambda conn, limit: [{"subjectKind": "result", "subjectId": 101}],
+    )
+    monkeypatch.setattr(
+        execution,
+        "_build_plan",
+        lambda conn, decision: current_plan,
+    )
+    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(
+        execution,
+        "unsafe_media_preview",
+        lambda item, client: {
+            "safe": True,
+            "expectedSha256": "abc123",
+            "checks": {
+                "exactBinderyAssociation": True,
+                "singleAssociation": True,
+                "sourceHashMatchesVerification": True,
+                "writableAliasReady": True,
+                "binderyTracksPath": True,
+            },
+        },
+    )
+
+    boundary = execution._UnsafeMediaQuarantineExecutor().revalidate(
+        plan,
+        {"code": "quarantine_exact_media"},
+    )
+
+    assert boundary["ok"] is True
+    assert boundary["expectedSha256"] == "abc123"
+    assert all(check["ok"] for check in boundary["checks"])
+
+
+def test_unsafe_quarantine_cycle_advances_read_only_steps_then_one_mutation(monkeypatch):
+    steps = [
+        {"code": "revalidate_unsafe_verdict", "externalMutation": False},
+        {"code": "capture_exact_source_identity", "externalMutation": False},
+        {"code": "quarantine_exact_media", "externalMutation": True},
+        {"code": "reacquire_expected_media", "externalMutation": True},
+    ]
+    plan0 = {
+        "id": 31,
+        "signature": "sig",
+        "evidenceRevision": "rev",
+        "planKind": "QUARANTINE_UNSAFE_MEDIA",
+        "state": "planned",
+        "currentStep": 0,
+        "steps": steps,
+    }
+    current = {"plan": plan0}
+    calls = []
+
+    class Executor:
+        def revalidate(self, plan, step):
+            calls.append(("revalidate", plan["currentStep"], step["code"]))
+            return {
+                "ok": True,
+                "planSignature": "sig",
+                "evidenceRevision": "rev",
+                "checks": [{"code": "CURRENT", "ok": True}],
+            }
+
+    def advance(plan_id, step_index):
+        calls.append(("advance", step_index))
+        updated = {**current["plan"], "state": "ready", "currentStep": step_index + 1}
+        current["plan"] = updated
+        return updated
+
+    monkeypatch.setattr(
+        execution,
+        "_EXECUTORS",
+        {"quarantine_exact_media": Executor()},
+    )
+    monkeypatch.setattr(
+        execution,
+        "recovery_plan_by_id",
+        lambda plan_id: current["plan"],
+    )
+    monkeypatch.setattr(execution, "record_recovery_step_success", advance)
+    monkeypatch.setattr(
+        execution,
+        "attempt_automatic_step",
+        lambda plan_id: calls.append(("execute", plan_id))
+        or {"ok": True, "replayed": False},
+    )
+
+    result = execution._run_unsafe_quarantine_cycle(plan0)
+
+    assert calls == [
+        ("revalidate", 0, "revalidate_unsafe_verdict"),
+        ("advance", 0),
+        ("revalidate", 1, "capture_exact_source_identity"),
+        ("advance", 1),
+        ("execute", 31),
+    ]
+    assert result["state"] == "executed"
+    assert result["externalMutationAttempted"] is True
+
+
+def test_quarantine_exact_media_requires_explicit_allowlist(monkeypatch):
+    plan = {
+        "id": 32,
+        "signature": "sig",
+        "state": "ready",
+        "evidenceRevision": "rev",
+        "currentStep": 0,
+        "steps": [{"code": "quarantine_exact_media", "externalMutation": True}],
+    }
+
+    monkeypatch.setattr(
+        execution,
+        "load_automation_settings",
+        lambda: _configured(mode="automatic", allowlist=("retry_grab_once",)),
+    )
+    monkeypatch.setattr(execution, "recovery_plan_by_id", lambda plan_id: plan)
+
+    with pytest.raises(execution.AutomaticExecutionBlocked) as exc:
+        execution.attempt_automatic_step(32)
+
+    assert exc.value.reason_code == "ACTION_NOT_ALLOWLISTED"
