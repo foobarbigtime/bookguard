@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any, Protocol
 
+from .automatic import (
+    AutomaticMaintenanceError,
+    quarantine_unsafe_media,
+    unsafe_media_preview,
+)
 from .acquisition import (
     AcquisitionSafetyError,
     _result_and_book,
@@ -14,8 +19,9 @@ from .acquisition import (
 from .bindery_client import BinderyClient
 from .config import AUTOMATIC_ACTION_CODES, load_automation_settings
 from .db import ebook_acquisition_by_id, local_conn, result_by_id, utc_now
-from .observe import _acquisition_decisions
+from .observe import _acquisition_decisions, _result_decisions
 from .recovery_classifier import classify_acquisition_failure
+from .verifier import verify_result
 from .recovery_planner import (
     _build_plan,
     block_recovery_plan,
@@ -328,7 +334,165 @@ class _TransientAcquisitionRetryExecutor:
         }
 
 
+class _UnsafeMediaQuarantineExecutor:
+    action_code = "quarantine_exact_media"
+
+    def revalidate(
+        self,
+        plan: dict[str, Any],
+        step: dict[str, Any],
+    ) -> dict[str, Any]:
+        if str(plan.get("planKind") or "") != "QUARANTINE_UNSAFE_MEDIA":
+            raise AutomaticExecutionBlocked(
+                "PLAN_KIND_MISMATCH",
+                "quarantine_exact_media is valid only for QUARANTINE_UNSAFE_MEDIA.",
+            )
+        if str(plan.get("subjectKind") or "") != "result":
+            raise AutomaticExecutionBlocked(
+                "SUBJECT_KIND_MISMATCH",
+                "Unsafe-media quarantine requires a scan-result subject.",
+            )
+
+        result_id = int(plan["subjectId"])
+        result = result_by_id(result_id)
+        if not result:
+            raise AutomaticExecutionBlocked(
+                "SUBJECT_IDENTITY_CHANGED",
+                "The planned scan result no longer exists.",
+            )
+
+        try:
+            verification = verify_result(result, force=True)
+        except Exception as exc:
+            raise AutomaticExecutionBlocked(
+                "UNSAFE_REVALIDATION_ERROR",
+                f"Deterministic unsafe-media verification failed: {exc}",
+            ) from exc
+
+        current_unsafe = all((
+            str(verification.get("verdict") or "") == "UNSAFE_FILE",
+            int(verification.get("confidence") or 0) == 100,
+            str(verification.get("source") or "") == "deterministic-safety",
+        ))
+
+        with local_conn() as conn:
+            decisions = _result_decisions(conn, 500)
+            current_decision = next(
+                (
+                    item
+                    for item in decisions
+                    if str(item.get("subjectKind") or "") == "result"
+                    and str(item.get("subjectId") or "") == str(result_id)
+                ),
+                None,
+            )
+            current_plan = _build_plan(conn, current_decision) if current_decision else None
+
+        if not current_plan:
+            raise AutomaticExecutionBlocked(
+                "DECISION_NO_LONGER_AUTHORIZED",
+                "The current decision policy no longer authorizes unsafe-media quarantine.",
+            )
+
+        try:
+            preview = unsafe_media_preview(result, BinderyClient())
+        except AutomaticMaintenanceError as exc:
+            raise AutomaticExecutionBlocked(
+                "UNSAFE_QUARANTINE_PREFLIGHT_FAILED",
+                str(exc),
+            ) from exc
+
+        preview_checks = dict(preview.get("checks") or {})
+        checks = [
+            {
+                "code": "SUBJECT_IDENTITY_UNCHANGED",
+                "ok": (
+                    str(current_plan.get("subjectId") or "") == str(plan.get("subjectId") or "")
+                    and current_plan.get("resultId") == plan.get("resultId")
+                    and current_plan.get("bookId") == plan.get("bookId")
+                ),
+            },
+            {
+                "code": "PATH_UNCHANGED",
+                "ok": str(current_plan.get("path") or "") == str(plan.get("path") or ""),
+            },
+            {
+                "code": "EVIDENCE_REVISION_UNCHANGED",
+                "ok": str(current_plan.get("evidenceRevision") or "")
+                == str(plan.get("evidenceRevision") or ""),
+            },
+            {
+                "code": "DECISION_STILL_AUTHORIZED",
+                "ok": str(current_plan.get("signature") or "")
+                == str(plan.get("signature") or ""),
+            },
+            {
+                "code": "UNSAFE_VERDICT_CURRENT",
+                "ok": current_unsafe,
+            },
+            {
+                "code": "EXACT_BINDERY_ASSOCIATION_CURRENT",
+                "ok": bool(preview_checks.get("exactBinderyAssociation")),
+            },
+            {
+                "code": "SINGLE_ASSOCIATION_CURRENT",
+                "ok": bool(preview_checks.get("singleAssociation")),
+            },
+            {
+                "code": "SOURCE_BYTES_UNCHANGED",
+                "ok": bool(preview_checks.get("sourceHashMatchesVerification")),
+            },
+            {
+                "code": "WRITABLE_ALIAS_SAME_FILE",
+                "ok": bool(preview_checks.get("writableAliasReady")),
+            },
+            {
+                "code": "BINDERY_TRACKS_EXACT_PATH",
+                "ok": bool(preview_checks.get("binderyTracksPath")),
+            },
+        ]
+
+        return {
+            "ok": all(check["ok"] for check in checks),
+            "planSignature": str(plan["signature"]),
+            "evidenceRevision": str(plan["evidenceRevision"]),
+            "checks": checks,
+            "resultId": result_id,
+            "fileId": int(result["file_id"]),
+            "bookId": int(result["book_id"]),
+            "storedPath": str(result["stored_path"]),
+            "localPath": str(result["local_path"]),
+            "expectedSha256": str(preview.get("expectedSha256") or ""),
+        }
+
+    def execute(
+        self,
+        plan: dict[str, Any],
+        step: dict[str, Any],
+        boundary: dict[str, Any],
+    ) -> dict[str, Any]:
+        result = result_by_id(int(plan["subjectId"]))
+        if not result:
+            raise RuntimeError("The unsafe-media result disappeared before execution.")
+        try:
+            outcome = quarantine_unsafe_media(result, BinderyClient())
+        except AutomaticMaintenanceError as exc:
+            raise RuntimeError(str(exc)) from exc
+        return {
+            "resultId": int(plan["subjectId"]),
+            "fileId": int(result["file_id"]),
+            "bookId": int(result["book_id"]),
+            "status": "quarantined",
+            "quarantinePath": str(outcome.get("quarantinePath") or ""),
+            "sha256": str(outcome.get("sha256") or ""),
+            "binderyDetached": bool(outcome.get("binderyDetached")),
+            "permanentDeletion": False,
+            "replacementRequested": False,
+        }
+
+
 _EXECUTORS["retry_grab_once"] = _TransientAcquisitionRetryExecutor()
+_EXECUTORS["quarantine_exact_media"] = _UnsafeMediaQuarantineExecutor()
 
 
 def register_automatic_executor(action_code: str, executor: AutomaticExecutor) -> None:
@@ -510,11 +674,110 @@ def _require_fresh_boundary(plan: dict[str, Any], boundary: dict[str, Any]) -> N
         )
 
 
+def _run_unsafe_quarantine_cycle(plan: dict[str, Any]) -> dict[str, Any]:
+    """Advance one exact unsafe-media quarantine plan and no other mutation class."""
+    plan_id = int(plan["id"])
+    executor = _EXECUTORS.get("quarantine_exact_media")
+    if executor is None:
+        raise AutomaticExecutionBlocked(
+            "EXECUTOR_NOT_REGISTERED",
+            "Unsafe-media quarantine executor is not registered.",
+        )
+
+    for read_only_code in (
+        "revalidate_unsafe_verdict",
+        "capture_exact_source_identity",
+    ):
+        refreshed = recovery_plan_by_id(plan_id) or plan
+        steps = list(refreshed.get("steps") or [])
+        index = int(refreshed.get("currentStep") or 0)
+        code = (
+            str((steps[index] or {}).get("code") or "")
+            if 0 <= index < len(steps)
+            else ""
+        )
+        if code != read_only_code:
+            continue
+
+        try:
+            boundary = executor.revalidate(refreshed, steps[index])
+            _require_fresh_boundary(refreshed, boundary)
+        except AutomaticExecutionBlocked as exc:
+            blocked = block_recovery_plan(plan_id, str(exc))
+            return {
+                "ok": False,
+                "state": "blocked",
+                "plan": blocked,
+                "externalMutationAttempted": False,
+                "reasonCode": exc.reason_code,
+                "message": str(exc),
+            }
+
+        plan = record_recovery_step_success(plan_id, index)
+
+    refreshed = recovery_plan_by_id(plan_id) or plan
+    steps = list(refreshed.get("steps") or [])
+    index = int(refreshed.get("currentStep") or 0)
+    code = (
+        str((steps[index] or {}).get("code") or "")
+        if 0 <= index < len(steps)
+        else ""
+    )
+
+    if code != "quarantine_exact_media":
+        return {
+            "ok": True,
+            "state": "paused",
+            "plan": refreshed,
+            "externalMutationAttempted": False,
+            "message": (
+                "The exact unsafe-media quarantine step is complete or not current. "
+                "Later recovery steps remain disabled by this E4 slice."
+            ),
+        }
+
+    try:
+        result = attempt_automatic_step(plan_id)
+    except AutomaticExecutionBlocked as exc:
+        if exc.reason_code in {
+            "ACTION_NOT_ALLOWLISTED",
+            "EXECUTOR_NOT_REGISTERED",
+        }:
+            raise
+        blocked = block_recovery_plan(
+            plan_id,
+            "Unsafe-media quarantine stopped safely: " + str(exc),
+        )
+        return {
+            "ok": False,
+            "state": "blocked",
+            "plan": blocked,
+            "externalMutationAttempted": exc.reason_code == "EXECUTION_FAILED",
+            "reasonCode": exc.reason_code,
+            "message": str(exc),
+        }
+
+    replayed = bool(result.get("replayed"))
+    reconciled = bool(result.get("reconciled"))
+    return {
+        **result,
+        "state": (
+            "reconciled"
+            if reconciled
+            else "replayed"
+            if replayed
+            else "executed"
+        ),
+        "externalMutationAttempted": not replayed,
+    }
+
+
 def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
     """Advance at most one E4 work item and perform at most one external mutation.
 
-    The first live allowlisted executor is RETRY_ACQUISITION_TRANSIENT /
-    retry_grab_once. All other recovery plan kinds remain untouched.
+    Live E4 executors are added one mutation class at a time. This coordinator
+    currently supports bounded transient acquisition retry and exact
+    deterministic unsafe-media quarantine. Later recovery steps remain inert.
     """
     configured = load_automation_settings()
     if configured.automation_mode != "automatic":
@@ -528,7 +791,10 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
     candidates = [
         item
         for item in snapshot["items"]
-        if item.get("planKind") == "RETRY_ACQUISITION_TRANSIENT"
+        if item.get("planKind") in {
+            "RETRY_ACQUISITION_TRANSIENT",
+            "QUARANTINE_UNSAFE_MEDIA",
+        }
         and item.get("state") in {"planned", "ready", "retry_wait"}
     ]
     candidates.sort(key=lambda item: int(item["id"]))
@@ -539,11 +805,14 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             "state": "idle",
             "promotedPlanIds": [int(item["id"]) for item in promoted],
             "externalMutationAttempted": False,
-            "message": "No transient acquisition retry plan is ready for automatic work.",
+            "message": "No supported E4 recovery plan is ready for automatic work.",
         }
 
     plan = candidates[0]
     plan_id = int(plan["id"])
+
+    if str(plan.get("planKind") or "") == "QUARANTINE_UNSAFE_MEDIA":
+        return _run_unsafe_quarantine_cycle(plan)
 
     if plan["state"] == "planned":
         scheduled = schedule_recovery_retry(
