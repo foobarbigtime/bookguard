@@ -493,7 +493,73 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             }
         plan = record_recovery_step_success(plan_id, current_step)
 
-    result = attempt_automatic_step(plan_id)
+    refreshed = recovery_plan_by_id(plan_id) or plan
+    refreshed_steps = list(refreshed.get("steps") or [])
+    refreshed_index = int(refreshed.get("currentStep") or 0)
+    refreshed_code = (
+        str((refreshed_steps[refreshed_index] or {}).get("code") or "")
+        if 0 <= refreshed_index < len(refreshed_steps)
+        else ""
+    )
+    if refreshed_code != "retry_grab_once":
+        return {
+            "ok": True,
+            "state": "paused",
+            "plan": refreshed,
+            "externalMutationAttempted": False,
+            "message": (
+                "The transient grab retry step is complete. The next recovery step "
+                "is not enabled by this E4 slice."
+            ),
+        }
+
+    try:
+        result = attempt_automatic_step(plan_id)
+    except AutomaticExecutionBlocked as exc:
+        if exc.reason_code != "EXECUTION_FAILED":
+            raise
+
+        acquisition = ebook_acquisition_by_id(int(refreshed["subjectId"]))
+        recovery = (
+            classify_acquisition_failure(
+                str((acquisition or {}).get("status") or ""),
+                str((acquisition or {}).get("error") or ""),
+            )
+            if acquisition
+            else None
+        )
+        if (
+            recovery is not None
+            and recovery.reason_code == "ACQUISITION_TRANSIENT_BINDERY_FAILURE"
+            and recovery.retry_same_operation
+        ):
+            scheduled = schedule_recovery_retry(plan_id, str(exc))
+            return {
+                "ok": False,
+                "state": str(scheduled.get("state") or "retry_wait"),
+                "plan": scheduled,
+                "externalMutationAttempted": True,
+                "reasonCode": exc.reason_code,
+                "message": (
+                    "The live grab retry failed transiently and was returned to the "
+                    "persisted bounded-backoff schedule."
+                ),
+            }
+
+        blocked = block_recovery_plan(
+            plan_id,
+            "The live grab retry failed and the current failure is no longer "
+            "classified as same-operation transient retry: " + str(exc),
+        )
+        return {
+            "ok": False,
+            "state": "blocked",
+            "plan": blocked,
+            "externalMutationAttempted": True,
+            "reasonCode": "RECOVERY_CLASSIFICATION_CHANGED",
+            "message": str(exc),
+        }
+
     return {
         **result,
         "state": "executed",
