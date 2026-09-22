@@ -302,3 +302,132 @@ def test_automatic_cycle_advances_proven_read_only_steps_before_retry(monkeypatc
     ]
     assert result["state"] == "executed"
     assert result["externalMutationAttempted"] is True
+
+
+def test_live_retry_failure_returns_to_bounded_backoff(monkeypatch):
+    plan = {
+        "id": 13,
+        "subjectId": "21",
+        "signature": "sig",
+        "evidenceRevision": "rev",
+        "planKind": "RETRY_ACQUISITION_TRANSIENT",
+        "state": "ready",
+        "currentStep": 2,
+        "steps": [
+            {"code": "wait_bounded_backoff", "externalMutation": False},
+            {"code": "revalidate_acquisition_readiness", "externalMutation": False},
+            {"code": "retry_grab_once", "externalMutation": True},
+            {"code": "reconcile_after_retry", "externalMutation": True},
+        ],
+    }
+    scheduled = {**plan, "state": "retry_wait", "retryCount": 2}
+
+    monkeypatch.setattr(
+        execution,
+        "load_automation_settings",
+        lambda: _configured(mode="automatic", allowlist=("retry_grab_once",)),
+    )
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(
+        execution,
+        "recovery_plan_snapshot",
+        lambda limit: {"items": [plan]},
+    )
+    monkeypatch.setattr(execution, "recovery_plan_by_id", lambda plan_id: plan)
+    monkeypatch.setattr(
+        execution,
+        "attempt_automatic_step",
+        lambda plan_id: (_ for _ in ()).throw(
+            execution.AutomaticExecutionBlocked(
+                "EXECUTION_FAILED",
+                "Bindery POST /queue/grab returned HTTP 503: temporarily unavailable",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        execution,
+        "ebook_acquisition_by_id",
+        lambda acquisition_id: {
+            "id": acquisition_id,
+            "status": "failed",
+            "error": "Bindery POST /queue/grab returned HTTP 503: temporarily unavailable",
+        },
+    )
+    monkeypatch.setattr(
+        execution,
+        "schedule_recovery_retry",
+        lambda plan_id, message: scheduled,
+    )
+
+    result = execution.run_automatic_cycle()
+
+    assert result["state"] == "retry_wait"
+    assert result["externalMutationAttempted"] is True
+    assert result["plan"]["retryCount"] == 2
+
+
+def test_live_retry_failure_blocks_when_classification_changes(monkeypatch):
+    plan = {
+        "id": 14,
+        "subjectId": "22",
+        "signature": "sig",
+        "evidenceRevision": "rev",
+        "planKind": "RETRY_ACQUISITION_TRANSIENT",
+        "state": "ready",
+        "currentStep": 2,
+        "steps": [
+            {"code": "wait_bounded_backoff", "externalMutation": False},
+            {"code": "revalidate_acquisition_readiness", "externalMutation": False},
+            {"code": "retry_grab_once", "externalMutation": True},
+            {"code": "reconcile_after_retry", "externalMutation": True},
+        ],
+    }
+    blocked = {**plan, "state": "blocked"}
+
+    monkeypatch.setattr(
+        execution,
+        "load_automation_settings",
+        lambda: _configured(mode="automatic", allowlist=("retry_grab_once",)),
+    )
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(
+        execution,
+        "recovery_plan_snapshot",
+        lambda limit: {"items": [plan]},
+    )
+    monkeypatch.setattr(execution, "recovery_plan_by_id", lambda plan_id: plan)
+    monkeypatch.setattr(
+        execution,
+        "attempt_automatic_step",
+        lambda plan_id: (_ for _ in ()).throw(
+            execution.AutomaticExecutionBlocked(
+                "EXECUTION_FAILED",
+                "Bindery POST /queue/grab returned HTTP 409: already imported",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        execution,
+        "ebook_acquisition_by_id",
+        lambda acquisition_id: {
+            "id": acquisition_id,
+            "status": "failed",
+            "error": "Bindery POST /queue/grab returned HTTP 409: already imported",
+        },
+    )
+    monkeypatch.setattr(
+        execution,
+        "schedule_recovery_retry",
+        lambda *args: (_ for _ in ()).throw(AssertionError("retry was scheduled")),
+    )
+    monkeypatch.setattr(
+        execution,
+        "block_recovery_plan",
+        lambda plan_id, message: blocked,
+    )
+
+    result = execution.run_automatic_cycle()
+
+    assert result["state"] == "blocked"
+    assert result["externalMutationAttempted"] is True
+    assert result["reasonCode"] == "RECOVERY_CLASSIFICATION_CHANGED"
