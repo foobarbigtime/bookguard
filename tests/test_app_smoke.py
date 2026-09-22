@@ -55,6 +55,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/verification/{result_id}/run"),
     ("GET", "/api/verification/{result_id}/repair-preview"),
     ("POST", "/api/verification/{result_id}/repair"),
+    ("POST", "/api/automatic/run"),
     ("GET", "/api/automatic/execution-policy"),
     ("GET", "/api/automatic/executions"),
     ("GET", "/api/automatic/observe"),
