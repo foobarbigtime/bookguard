@@ -36,9 +36,11 @@ services:
       QUARANTINE_ROOT: ${QUARANTINE_ROOT:-/quarantine}
       BOOKGUARD_STAGING_ROOT: ${BOOKGUARD_STAGING_ROOT:-/staging}
       BOOKGUARD_BINDERY_DROP_FOLDER: ${BOOKGUARD_BINDERY_DROP_FOLDER:-}
-      # manual is the default. observe may write only BookGuard's decision journal;
-      # it must not mutate Bindery, queue state, staging, quarantine, or libraries.
+      # manual is the default. observe is non-mutating. automatic is E4-only
+      # and remains inert unless exact recovery step codes are explicitly allowlisted
+      # and have a code-registered executor with fresh boundary revalidation.
       BOOKGUARD_AUTOMATION_MODE: ${BOOKGUARD_AUTOMATION_MODE:-manual}
+      BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST: ${BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST:-}
       BOOKGUARD_AUTOMATIC_REACQUISITION: ${BOOKGUARD_AUTOMATIC_REACQUISITION:-false}
       BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED: ${BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED:-false}
       BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS: ${BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS:-10}
