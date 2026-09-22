@@ -650,3 +650,53 @@ def test_interrupted_retry_ambiguous_queue_fails_closed(monkeypatch):
         )
 
     assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+
+
+
+def test_automatic_cycle_reports_reconciliation_without_external_mutation(monkeypatch):
+    plan = {
+        "id": 15,
+        "subjectId": "23",
+        "signature": "sig",
+        "evidenceRevision": "rev",
+        "planKind": "RETRY_ACQUISITION_TRANSIENT",
+        "state": "ready",
+        "currentStep": 2,
+        "steps": [
+            {"code": "wait_bounded_backoff", "externalMutation": False},
+            {"code": "revalidate_acquisition_readiness", "externalMutation": False},
+            {"code": "retry_grab_once", "externalMutation": True},
+            {"code": "reconcile_after_retry", "externalMutation": True},
+        ],
+    }
+
+    monkeypatch.setattr(
+        execution,
+        "load_automation_settings",
+        lambda: _configured(mode="automatic", allowlist=("retry_grab_once",)),
+    )
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(
+        execution,
+        "recovery_plan_snapshot",
+        lambda limit: {"items": [plan]},
+    )
+    monkeypatch.setattr(execution, "recovery_plan_by_id", lambda plan_id: plan)
+    monkeypatch.setattr(
+        execution,
+        "attempt_automatic_step",
+        lambda plan_id: {
+            "ok": True,
+            "replayed": True,
+            "reconciled": True,
+            "execution": {"state": "succeeded"},
+            "plan": {**plan, "currentStep": 3},
+        },
+    )
+
+    result = execution.run_automatic_cycle()
+
+    assert result["state"] == "reconciled"
+    assert result["externalMutationAttempted"] is False
+    assert result["replayed"] is True
+    assert result["reconciled"] is True
