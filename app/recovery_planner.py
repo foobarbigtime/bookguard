@@ -41,6 +41,23 @@ def _stable_hash(value: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _decision_evidence_for_revision(
+    plan_kind: str,
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """Return safety-significant decision evidence for durable plan identity.
+
+    A bounded same-operation transient retry is authorized by the stable
+    recovery classification and durable subject/candidate/workflow identity.
+    The raw transport error is diagnostic and may legitimately change between
+    attempts without changing that authorization.
+    """
+    normalized = dict(evidence)
+    if plan_kind == "RETRY_ACQUISITION_TRANSIENT":
+        normalized.pop("recordedError", None)
+    return normalized
+
+
 def _json_object(raw: Any) -> dict[str, Any]:
     if raw in (None, ""):
         return {}
@@ -575,6 +592,10 @@ def _build_plan(conn, decision: dict[str, Any]) -> dict[str, Any] | None:
     plan_kind, reason_code, steps = definition
 
     decision_evidence = decision.get("evidence") or {}
+    revision_evidence = _decision_evidence_for_revision(
+        plan_kind,
+        decision_evidence,
+    )
     subject_kind = str(decision.get("subjectKind") or "")
     if subject_kind == "result" and verification.get("revision"):
         evidence_revision = str(verification["revision"])
@@ -586,7 +607,7 @@ def _build_plan(conn, decision: dict[str, Any]) -> dict[str, Any] | None:
                 "state": decision.get("state"),
                 "decision": action,
                 "reasonCode": decision.get("reasonCode"),
-                "evidence": decision_evidence,
+                "evidence": revision_evidence,
             }
         )
 
