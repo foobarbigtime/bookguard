@@ -333,3 +333,53 @@ def test_blocked_recovery_plan_is_durable_and_cannot_advance(monkeypatch, tmp_pa
             )
     finally:
         settings.config_dir = original
+
+
+
+def test_new_evidence_revision_audits_replaced_plan(monkeypatch, tmp_path):
+    original, result_id = _seed_result(tmp_path)
+    try:
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+        first = run_observe_cycle()
+        old_plan_id = first["plans"][0]["id"]
+
+        with local_conn() as conn:
+            conn.execute(
+                """
+                UPDATE content_verifications
+                SET evidence_json=?,
+                    updated_at='2026-09-22T04:00:00+00:00'
+                WHERE result_id=?
+                """,
+                (
+                    json.dumps(
+                        {
+                            "expected": {
+                                "title": "1st to Die",
+                                "author": "James Patterson",
+                                "mediaKind": "audiobook",
+                            },
+                            "reasonCode": "MUSIC_MISMATCH",
+                        }
+                    ),
+                    result_id,
+                ),
+            )
+            conn.commit()
+
+        second = run_observe_cycle()
+        new_plan = second["plans"][0]
+        old_plan = recovery_plan_by_id(old_plan_id)
+        old_transitions = recovery_plan_transition_snapshot(old_plan_id)
+        new_transitions = recovery_plan_transition_snapshot(new_plan["id"])
+    finally:
+        settings.config_dir = original
+
+    assert new_plan["id"] != old_plan_id
+    assert new_plan["planKind"] == "RECOVER_NONBOOK_AUDIO"
+    assert old_plan is not None
+    assert old_plan["state"] == "superseded"
+    assert old_plan["finalOutcome"] == "superseded"
+    assert old_transitions[-1]["event"] == "superseded"
+    assert "newer evidence revision" in old_transitions[-1]["detail"]
+    assert new_transitions[0]["event"] == "created"
