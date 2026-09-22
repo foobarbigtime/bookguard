@@ -187,13 +187,19 @@ class SupervisedAcquisitionCoordinator:
                 lastError=str(exc),
             )
 
-        if getattr(configured, "automation_mode", "manual") == "observe":
+        automation_mode = getattr(configured, "automation_mode", "manual")
+        if automation_mode != "manual":
+            blocker = (
+                "observeModeActive"
+                if automation_mode == "observe"
+                else "automaticModeUsesRecoveryExecutor"
+            )
             return self._replace_status(
                 enabled=False,
                 state="disabled",
                 action=None,
                 acquisition=None,
-                blockers=["observeModeActive"],
+                blockers=[blocker],
                 lastRunAt=now,
                 lastError=None,
             )
