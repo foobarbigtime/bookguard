@@ -18,6 +18,7 @@ from .db import (
     ebook_admission_by_id,
     ebook_acquisition_by_id,
     recent_ebook_acquisitions,
+    reset_ebook_acquisition_for_retry,
     result_by_id,
     update_ebook_acquisition,
 )
@@ -431,6 +432,115 @@ def start_ebook_acquisition(
             "Bindery accepted the explicit release. Reconcile this acquisition until "
             "one staged ebook independently verifies."
         ),
+    }
+
+
+def retry_failed_ebook_acquisition(
+    acquisition_id: int,
+    client: BinderyClient | None = None,
+) -> dict[str, Any]:
+    """Retry the exact candidate for one durably failed transient acquisition.
+
+    This is intentionally narrower than starting a new acquisition. The existing
+    acquisition row, result identity, candidate GUID/title/protocol, queue/staging
+    readiness, and Bindery search result are all freshly revalidated before the
+    same guarded grab is attempted again.
+    """
+    client = client or BinderyClient()
+
+    with _acquisition_lock:
+        acquisition = ebook_acquisition_by_id(int(acquisition_id))
+        if not acquisition:
+            raise AcquisitionSafetyError("Acquisition record not found.")
+        if str(acquisition.get("status") or "").casefold() != "failed":
+            raise AcquisitionSafetyError(
+                "Only a durably failed acquisition may be retried automatically."
+            )
+
+        from .recovery_classifier import classify_acquisition_failure
+
+        recovery = classify_acquisition_failure(
+            str(acquisition.get("status") or ""),
+            str(acquisition.get("error") or ""),
+        )
+        if (
+            recovery is None
+            or not recovery.recoverable
+            or not recovery.retry_same_operation
+            or recovery.reason_code != "ACQUISITION_TRANSIENT_BINDERY_FAILURE"
+        ):
+            raise AcquisitionSafetyError(
+                "The current acquisition failure no longer authorizes same-operation retry."
+            )
+
+        configured = _automation_settings()
+        if not configured.automatic_reacquisition:
+            raise AcquisitionSafetyError("Automatic reacquisition is disabled.")
+        if not settings.allow_actions:
+            raise AcquisitionSafetyError("Automatic actions are disabled.")
+
+        result = result_by_id(int(acquisition["result_id"]))
+        if not result:
+            raise AcquisitionSafetyError("The acquisition's scan result no longer exists.")
+
+        readiness = acquisition_readiness(client)
+        if not readiness["ready"]:
+            raise AcquisitionSafetyError(
+                "Acquisition readiness failed: " + ", ".join(readiness["blockers"])
+            )
+
+        _, expected_title, expected_author = _result_and_book(result, client)
+        candidate = _search_candidate(
+            client,
+            int(acquisition["book_id"]),
+            str(acquisition.get("candidate_guid") or ""),
+            expected_title,
+            expected_author,
+        )
+
+        if str(candidate.get("title") or "").strip() != str(
+            acquisition.get("candidate_title") or ""
+        ).strip():
+            raise AcquisitionSafetyError(
+                "The candidate title for the stored GUID changed; retry is blocked."
+            )
+        stored_protocol = str(acquisition.get("candidate_protocol") or "").strip().casefold()
+        current_protocol = str(candidate.get("protocol") or "").strip().casefold()
+        if stored_protocol and current_protocol != stored_protocol:
+            raise AcquisitionSafetyError(
+                "The candidate protocol for the stored GUID changed; retry is blocked."
+            )
+
+        final_readiness = acquisition_readiness(client)
+        if not final_readiness["ready"]:
+            raise AcquisitionSafetyError(
+                "Acquisition readiness changed during retry validation: "
+                + ", ".join(final_readiness["blockers"])
+            )
+
+        reset_ebook_acquisition_for_retry(int(acquisition_id))
+        try:
+            response = client.grab(int(acquisition["book_id"]), candidate)
+        except Exception as exc:
+            update_ebook_acquisition(
+                int(acquisition_id),
+                "failed",
+                error=f"Bindery grab failed: {exc}",
+            )
+            raise AcquisitionSafetyError(f"Bindery grab failed: {exc}") from exc
+
+        queue_id = _response_queue_id(response)
+        update_ebook_acquisition(
+            int(acquisition_id),
+            "queued",
+            queue_id=queue_id,
+            grab_response=_safe_grab_response(response),
+        )
+
+    return {
+        "ok": True,
+        "acquisition": ebook_acquisition_by_id(int(acquisition_id)),
+        "message": "The same validated candidate was retried on the existing acquisition.",
     }
 
 
