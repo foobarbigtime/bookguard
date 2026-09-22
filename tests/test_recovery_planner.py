@@ -5,7 +5,13 @@ import json
 from app.config import settings
 from app.db import add_result, create_scan, finish_scan, init_local_db, local_conn
 from app.observe import run_observe_cycle
-from app.recovery_planner import recovery_plan_snapshot
+from app.recovery_planner import (
+    block_recovery_plan,
+    record_recovery_step_success,
+    recovery_plan_by_id,
+    recovery_plan_snapshot,
+    recovery_plan_transition_snapshot,
+)
 from app.verifier import init_verification_db
 
 
@@ -232,3 +238,98 @@ def test_manual_mode_does_not_create_recovery_plan(monkeypatch, tmp_path):
     assert observed["planCount"] == 0
     assert observed["plans"] == []
     assert snapshot["count"] == 0
+
+
+
+def test_recovery_step_progress_is_durable_and_replay_idempotent(monkeypatch, tmp_path):
+    original, _ = _seed_result(tmp_path)
+    try:
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+        observed = run_observe_cycle()
+        plan_id = observed["plans"][0]["id"]
+        step_count = len(observed["plans"][0]["steps"])
+
+        advanced = record_recovery_step_success(
+            plan_id,
+            0,
+            now="2026-09-22T02:00:00+00:00",
+        )
+        assert advanced["state"] == "ready"
+        assert advanced["currentStep"] == 1
+        assert advanced["finalOutcome"] == ""
+
+        # Simulate a process restart reopening the same durable database.
+        init_local_db()
+        restored = recovery_plan_by_id(plan_id)
+        assert restored is not None
+        assert restored["state"] == "ready"
+        assert restored["currentStep"] == 1
+
+        before_replay = recovery_plan_transition_snapshot(plan_id)
+        replay = record_recovery_step_success(
+            plan_id,
+            0,
+            now="2026-09-22T02:00:05+00:00",
+        )
+        after_replay = recovery_plan_transition_snapshot(plan_id)
+        assert replay["currentStep"] == 1
+        assert after_replay == before_replay
+
+        for step_index in range(1, step_count):
+            completed = record_recovery_step_success(
+                plan_id,
+                step_index,
+                now=f"2026-09-22T02:{step_index:02d}:00+00:00",
+            )
+
+        assert completed["state"] == "completed"
+        assert completed["currentStep"] == step_count
+        assert completed["finalOutcome"] == "completed"
+        assert completed["completedAt"] is not None
+
+        transitions = recovery_plan_transition_snapshot(plan_id)
+        assert transitions[0]["event"] == "created"
+        step_events = [item for item in transitions if item["event"] == "step_completed"]
+        assert len(step_events) == step_count
+        assert step_events[-1]["toState"] == "completed"
+        assert step_events[-1]["toStep"] == step_count
+    finally:
+        settings.config_dir = original
+
+
+def test_blocked_recovery_plan_is_durable_and_cannot_advance(monkeypatch, tmp_path):
+    original, _ = _seed_result(tmp_path)
+    try:
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+        observed = run_observe_cycle()
+        plan_id = observed["plans"][0]["id"]
+
+        blocked = block_recovery_plan(
+            plan_id,
+            "Mutation-boundary evidence changed.",
+            now="2026-09-22T03:00:00+00:00",
+        )
+        assert blocked["state"] == "blocked"
+        assert blocked["finalOutcome"] == "blocked"
+        assert "evidence changed" in blocked["lastError"]
+
+        init_local_db()
+        restored = recovery_plan_by_id(plan_id)
+        assert restored is not None
+        assert restored["state"] == "blocked"
+        assert restored["finalOutcome"] == "blocked"
+
+        transitions = recovery_plan_transition_snapshot(plan_id)
+        assert transitions[-1]["event"] == "blocked"
+        assert transitions[-1]["toState"] == "blocked"
+        assert "evidence changed" in transitions[-1]["detail"]
+
+        import pytest
+        with pytest.raises(RuntimeError, match="cannot advance"):
+            record_recovery_step_success(
+                plan_id,
+                0,
+                now="2026-09-22T03:00:05+00:00",
+            )
+    finally:
+        settings.config_dir = original
