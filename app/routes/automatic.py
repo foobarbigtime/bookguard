@@ -22,7 +22,12 @@ from ..admission import (
     reconcile_admission,
 )
 from ..automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
-from ..automatic_execution import automatic_execution_history, execution_policy_snapshot
+from ..automatic_execution import (
+    AutomaticExecutionBlocked,
+    automatic_execution_history,
+    execution_policy_snapshot,
+    run_automatic_cycle,
+)
 from ..bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from ..config import ConfigurationError, load_automation_settings
 from ..db import result_by_id
@@ -89,6 +94,19 @@ def api_automatic_observe_run(payload: ConfirmationRequest):
     if not result.get("enabled"):
         raise HTTPException(status_code=409, detail=str(result.get("message") or "Observe Mode is disabled."))
     return result
+
+
+@router.post("/run")
+def api_automatic_run(payload: ConfirmationRequest):
+    """Advance one supervised E4 work item and at most one external mutation."""
+    require_confirmation(payload, "RUN_AUTOMATIC_CYCLE")
+    try:
+        return run_automatic_cycle()
+    except AutomaticExecutionBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reasonCode": exc.reason_code, "message": str(exc)},
+        )
 
 
 @router.get("/execution-policy")
