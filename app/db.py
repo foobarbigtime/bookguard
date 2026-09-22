@@ -267,6 +267,28 @@ def init_local_db() -> None:
                 FOREIGN KEY(plan_id) REFERENCES recovery_plans(id)
             );
 
+            CREATE TABLE IF NOT EXISTS automatic_executions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                plan_signature TEXT NOT NULL,
+                action_code TEXT NOT NULL,
+                step_index INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                evidence_revision TEXT NOT NULL,
+                boundary_json TEXT NOT NULL DEFAULT '{}',
+                external_result_json TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id),
+                UNIQUE(plan_signature, action_code, step_index)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_automatic_executions_plan
+                ON automatic_executions(plan_id, step_index, id);
+
             CREATE TABLE IF NOT EXISTS ebook_acquisitions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 result_id INTEGER NOT NULL,
@@ -768,6 +790,25 @@ def update_ebook_acquisition(
                 error,
                 acquisition_id,
             ),
+        )
+        conn.commit()
+
+
+def reset_ebook_acquisition_for_retry(acquisition_id: int) -> None:
+    """Clear attempt-specific queue state before retrying the same durable acquisition."""
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ebook_acquisitions
+            SET status='grab_requested',
+                queue_id=NULL,
+                queue_status=NULL,
+                grab_response_json=NULL,
+                updated_at=?,
+                error=NULL
+            WHERE id=?
+            """,
+            (utc_now(), int(acquisition_id)),
         )
         conn.commit()
 

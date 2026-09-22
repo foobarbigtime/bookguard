@@ -22,6 +22,12 @@ from ..admission import (
     reconcile_admission,
 )
 from ..automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
+from ..automatic_execution import (
+    AutomaticExecutionBlocked,
+    automatic_execution_history,
+    execution_policy_snapshot,
+    run_automatic_cycle,
+)
 from ..bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
 from ..config import ConfigurationError, load_automation_settings
 from ..db import result_by_id
@@ -35,17 +41,22 @@ router = APIRouter(prefix="/api/automatic", tags=["automatic maintenance"])
 
 
 def _require_mutation_mode() -> None:
-    """Keep all automatic-maintenance mutation endpoints inert in Observe Mode."""
+    """Keep legacy confirmed mutation endpoints manual-only.
+
+    Observe remains non-mutating. E4 Automatic Mode may mutate only through the
+    dedicated recovery executor, never by falling through these manual routes.
+    """
     try:
         configured = load_automation_settings()
     except ConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-    if configured.automation_mode == "observe":
+    if configured.automation_mode != "manual":
+        label = "Observe Mode" if configured.automation_mode == "observe" else "Automatic Mode"
         raise HTTPException(
             status_code=409,
             detail=(
-                "Observe Mode is active. Automatic-maintenance mutation endpoints "
-                "are disabled until BOOKGUARD_AUTOMATION_MODE is returned to manual."
+                f"{label} is active. Legacy automatic-maintenance mutation endpoints "
+                "are manual-only; live E4 work must use the supervised recovery executor."
             ),
         )
 
@@ -83,6 +94,34 @@ def api_automatic_observe_run(payload: ConfirmationRequest):
     if not result.get("enabled"):
         raise HTTPException(status_code=409, detail=str(result.get("message") or "Observe Mode is disabled."))
     return result
+
+
+@router.post("/run")
+def api_automatic_run(payload: ConfirmationRequest):
+    """Advance one supervised E4 work item and at most one external mutation."""
+    require_confirmation(payload, "RUN_AUTOMATIC_CYCLE")
+    try:
+        return run_automatic_cycle()
+    except AutomaticExecutionBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reasonCode": exc.reason_code, "message": str(exc)},
+        )
+
+
+@router.get("/execution-policy")
+def api_automatic_execution_policy():
+    """Read-only E4 mode, allowlist, and executor registration status."""
+    try:
+        return execution_policy_snapshot()
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/executions")
+def api_automatic_executions(limit: int = 100):
+    """Return the durable E4 execution journal without starting any work."""
+    return automatic_execution_history(limit)
 
 
 @router.get("/bindery-status")

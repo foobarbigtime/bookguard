@@ -6,6 +6,8 @@ from app.config import settings
 from app.db import add_result, create_scan, finish_scan, init_local_db, local_conn
 from app.observe import run_observe_cycle
 from app.recovery_planner import (
+    _decision_evidence_for_revision,
+    _stable_hash,
     block_recovery_plan,
     record_recovery_step_success,
     recovery_plan_by_id,
@@ -383,3 +385,71 @@ def test_new_evidence_revision_audits_replaced_plan(monkeypatch, tmp_path):
     assert old_transitions[-1]["event"] == "superseded"
     assert "newer evidence revision" in old_transitions[-1]["detail"]
     assert new_transitions[0]["event"] == "created"
+
+
+
+def test_transient_retry_revision_ignores_raw_error_text():
+    first = {
+        "acquisitionId": 5,
+        "status": "failed",
+        "candidateGuid": "guid-1",
+        "candidateTitle": "Expected Release",
+        "candidateIndexer": "Indexer",
+        "candidateProtocol": "usenet",
+        "queueId": None,
+        "queueStatus": "",
+        "recordedError": "timeout contacting Bindery",
+        "recoveryClassification": {
+            "planKind": "RETRY_ACQUISITION_TRANSIENT",
+            "retrySameOperation": True,
+            "maxRetries": 3,
+            "backoffSeconds": [30, 120, 300],
+        },
+    }
+    second = {
+        **first,
+        "recordedError": (
+            "Bindery POST /queue/grab returned HTTP 503: temporarily unavailable"
+        ),
+    }
+
+    first_revision = _stable_hash(
+        _decision_evidence_for_revision(
+            "RETRY_ACQUISITION_TRANSIENT",
+            first,
+        )
+    )
+    second_revision = _stable_hash(
+        _decision_evidence_for_revision(
+            "RETRY_ACQUISITION_TRANSIENT",
+            second,
+        )
+    )
+
+    assert first_revision == second_revision
+
+
+def test_non_transient_plan_revision_keeps_recorded_error():
+    first = {
+        "status": "failed",
+        "recordedError": "first failure",
+    }
+    second = {
+        "status": "failed",
+        "recordedError": "different failure",
+    }
+
+    first_revision = _stable_hash(
+        _decision_evidence_for_revision(
+            "SELECT_ALTERNATE_REPLACEMENT",
+            first,
+        )
+    )
+    second_revision = _stable_hash(
+        _decision_evidence_for_revision(
+            "SELECT_ALTERNATE_REPLACEMENT",
+            second,
+        )
+    )
+
+    assert first_revision != second_revision
