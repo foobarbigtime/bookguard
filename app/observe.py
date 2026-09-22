@@ -293,8 +293,8 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
         SELECT a.id, a.result_id, a.book_id, a.status, a.admission_id,
                a.candidate_guid, a.candidate_title, a.candidate_indexer,
                a.candidate_protocol, a.queue_id, a.queue_status,
-               a.observed_relative_path, a.staged_relative_path, a.error,
-               r.title, r.author, r.stored_path
+               a.observed_relative_path, a.staged_relative_path, a.staged_sha256,
+               a.error, r.title, r.author, r.stored_path
         FROM ebook_acquisitions a
         LEFT JOIN scan_results r ON r.id=a.result_id
         ORDER BY a.id DESC
@@ -331,6 +331,40 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
             "queueStatus": str(row["queue_status"] or ""),
             "recordedError": str(row["error"] or ""),
         }
+        linked_admission = None
+        linked_admission_status = ""
+        linked_admission_identity_matches = False
+        if status == "admitted" and row["admission_id"] is not None:
+            linked_admission = conn.execute(
+                """
+                SELECT id, result_id, book_id, status, staged_relative_path,
+                       staged_sha256
+                FROM ebook_admissions
+                WHERE id=?
+                LIMIT 1
+                """,
+                (int(row["admission_id"]),),
+            ).fetchone()
+            if linked_admission is not None:
+                linked_admission_status = str(
+                    linked_admission["status"] or ""
+                ).casefold()
+                linked_admission_identity_matches = all((
+                    int(linked_admission["result_id"] or 0)
+                    == int(row["result_id"] or 0),
+                    int(linked_admission["book_id"] or 0)
+                    == int(row["book_id"] or 0),
+                    str(linked_admission["staged_relative_path"] or "")
+                    == str(row["staged_relative_path"] or ""),
+                    bool(str(row["staged_sha256"] or "")),
+                    str(linked_admission["staged_sha256"] or "")
+                    == str(row["staged_sha256"] or ""),
+                ))
+            evidence["admissionStatus"] = linked_admission_status
+            evidence["linkedAdmissionIdentityMatches"] = (
+                linked_admission_identity_matches
+            )
+
         if status in _ACQUISITION_PROGRESS_STATES:
             decisions.append(_decision(
                 **common,
@@ -360,6 +394,42 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 next_step=(
                     "Review the verified acquisition and admission evidence. Observe "
                     "Mode will not publish the file."
+                ),
+                evidence=evidence,
+            ))
+        elif (
+            status == "admitted"
+            and linked_admission_status == "registered"
+            and linked_admission_identity_matches
+        ):
+            decisions.append(_decision(
+                **common,
+                state=status,
+                decision="would_finalize_acquisition",
+                reason_code="FINALIZATION_RECOVERY_AVAILABLE",
+                reason=(
+                    "The acquisition's linked admission is durably registered and "
+                    "matches the acquisition's result, book, staged path, and hash."
+                ),
+                next_step=(
+                    "Observe Mode records the guarded finalization plan only. It does "
+                    "not remove the terminal queue record or staged copy."
+                ),
+                evidence=evidence,
+            ))
+        elif status == "admitted" and linked_admission_status == "registered":
+            decisions.append(_decision(
+                **common,
+                state=status,
+                decision="attention",
+                reason_code="ACQUISITION_ADMISSION_IDENTITY_MISMATCH",
+                reason=(
+                    "The linked admission is registered, but its durable result, book, "
+                    "staged path, or staged hash does not match the acquisition."
+                ),
+                next_step=(
+                    "Review the acquisition/admission link before any finalization or "
+                    "cleanup is attempted."
                 ),
                 evidence=evidence,
             ))
