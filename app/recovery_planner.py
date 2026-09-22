@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from typing import Any
@@ -844,6 +845,162 @@ def record_recovery_plans(
             continue
         plans.append(_persist_plan(conn, plan, timestamp))
     return plans
+
+
+def recovery_plan_by_id(plan_id: int) -> dict[str, Any] | None:
+    with local_conn() as conn:
+        if not _table_exists(conn, "recovery_plans"):
+            return None
+        row = conn.execute(
+            "SELECT * FROM recovery_plans WHERE id=? LIMIT 1",
+            (int(plan_id),),
+        ).fetchone()
+    return _decode_plan_row(row) if row else None
+
+
+def _coerce_utc(value: str | None) -> datetime:
+    if value:
+        parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
+def schedule_recovery_retry(
+    plan_id: int,
+    error: str,
+    *,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Persist one bounded retry opportunity without executing external work.
+
+    E3 uses this only as durable state-machine bookkeeping. Scheduling a retry
+    never contacts Bindery, reads queue/staging state, or mutates library bytes.
+    """
+    timestamp = _coerce_utc(now)
+    now_text = timestamp.isoformat()
+
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM recovery_plans WHERE id=? LIMIT 1",
+            (int(plan_id),),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Recovery plan not found.")
+
+        plan = _decode_plan_row(row)
+        if plan["state"] not in {"planned", "ready", "retry_wait"}:
+            raise RuntimeError(
+                f"Recovery plan state '{plan['state']}' is not retry-schedulable."
+            )
+
+        retry_policy = plan["preconditions"].get("retryPolicy") or {}
+        retry_same = bool(retry_policy.get("retrySameOperation", False))
+        max_retries = int(retry_policy.get("maxRetries") or 0)
+        backoff = [
+            int(value)
+            for value in (retry_policy.get("backoffSeconds") or [])
+            if int(value) >= 0
+        ]
+        if not retry_same or max_retries <= 0 or not backoff:
+            raise RuntimeError("Recovery plan does not authorize same-operation retries.")
+
+        retry_count = int(plan["retryCount"] or 0)
+        if retry_count >= max_retries:
+            conn.execute(
+                """
+                UPDATE recovery_plans
+                SET state='blocked', next_retry_at=NULL, last_error=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    (
+                        f"Retry budget exhausted after {retry_count} bounded retries. "
+                        f"Last failure: {error}"
+                    ),
+                    now_text,
+                    int(plan_id),
+                ),
+            )
+            conn.commit()
+            updated = conn.execute(
+                "SELECT * FROM recovery_plans WHERE id=? LIMIT 1",
+                (int(plan_id),),
+            ).fetchone()
+            return _decode_plan_row(updated)
+
+        delay_index = min(retry_count, len(backoff) - 1)
+        delay_seconds = backoff[delay_index]
+        next_retry = (timestamp + timedelta(seconds=delay_seconds)).isoformat()
+        conn.execute(
+            """
+            UPDATE recovery_plans
+            SET state='retry_wait',
+                retry_count=?,
+                next_retry_at=?,
+                last_error=?,
+                updated_at=?
+            WHERE id=?
+            """,
+            (
+                retry_count + 1,
+                next_retry,
+                str(error or ""),
+                now_text,
+                int(plan_id),
+            ),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM recovery_plans WHERE id=? LIMIT 1",
+            (int(plan_id),),
+        ).fetchone()
+        return _decode_plan_row(updated)
+
+
+def promote_due_recovery_retries(*, now: str | None = None) -> list[dict[str, Any]]:
+    """Move due retry-wait plans to ready without executing the retry."""
+    timestamp = _coerce_utc(now)
+    now_text = timestamp.isoformat()
+    with local_conn() as conn:
+        if not _table_exists(conn, "recovery_plans"):
+            return []
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM recovery_plans
+            WHERE state='retry_wait'
+              AND next_retry_at IS NOT NULL
+              AND next_retry_at <= ?
+            ORDER BY next_retry_at, id
+            """,
+            (now_text,),
+        ).fetchall()
+        ids = [int(row["id"]) for row in rows]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(
+                f"""
+                UPDATE recovery_plans
+                SET state='ready', next_retry_at=NULL, updated_at=?
+                WHERE id IN ({placeholders})
+                """,
+                (now_text, *ids),
+            )
+            conn.commit()
+            promoted = conn.execute(
+                f"""
+                SELECT *
+                FROM recovery_plans
+                WHERE id IN ({placeholders})
+                ORDER BY id
+                """,
+                ids,
+            ).fetchall()
+        else:
+            promoted = []
+    return [_decode_plan_row(row) for row in promoted]
 
 
 def recovery_plan_snapshot(
