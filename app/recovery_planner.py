@@ -7,7 +7,7 @@ from typing import Any
 from .db import local_conn, utc_now
 
 
-PLANNER_VERSION = "1"
+PLANNER_VERSION = "2"
 _PLAN_STATES_ACTIVE = {"planned", "ready", "retry_wait", "blocked"}
 _PLAN_DECISIONS = {
     "would_resolve_wrong_content",
@@ -17,6 +17,8 @@ _PLAN_DECISIONS = {
     "would_reconcile_acquisition",
     "would_reconcile_admission",
     "would_finalize_acquisition",
+    "would_recover_acquisition_failure",
+    "would_recover_admission_failure",
 }
 
 
@@ -412,6 +414,149 @@ def _definition(
             ],
         )
 
+    if action == "would_recover_acquisition_failure":
+        code = str(decision.get("reasonCode") or "")
+        if code == "ACQUISITION_RELEASE_ALREADY_IMPORTED":
+            return (
+                "SELECT_ALTERNATE_REPLACEMENT",
+                code,
+                [
+                    _step(
+                        "revalidate_failed_acquisition",
+                        "Re-read the failed acquisition and confirm Bindery rejected the exact selected release as already grabbed/imported.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "refresh_history_and_candidates",
+                        "Refresh Bindery history and replacement search; exclude the rejected candidate and any release with equivalent imported provenance.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "select_alternate_candidate",
+                        "Select a different candidate only when deterministic title/author/media policy passes and no prior imported provenance disqualifies it.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "request_alternate_grab",
+                        "Request exactly the newly selected candidate after acquisition readiness is freshly revalidated.",
+                        external_mutation=True,
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "reconcile_download_and_staging",
+                        "Track the resulting queue/staging state and attribute exactly one candidate to the acquisition.",
+                        external_mutation=True,
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "verify_downloaded_bytes",
+                        "Run full content verification on the staged replacement before any admission is authorized.",
+                        stop_if_unproven=True,
+                    ),
+                ],
+            )
+        if code == "ACQUISITION_TRANSIENT_BINDERY_FAILURE":
+            return (
+                "RETRY_ACQUISITION_TRANSIENT",
+                code,
+                [
+                    _step(
+                        "wait_bounded_backoff",
+                        "Wait for the persisted bounded retry interval; do not spin or retry immediately.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "revalidate_acquisition_readiness",
+                        "Freshly revalidate queue/staging readiness, book identity, and the selected candidate.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "retry_grab_once",
+                        "Retry the same guarded grab only while the persisted retry budget remains.",
+                        external_mutation=True,
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "reconcile_after_retry",
+                        "Reconcile queue/staging state after the retry without weakening verification.",
+                        external_mutation=True,
+                        stop_if_unproven=True,
+                    ),
+                ],
+            )
+
+    if action == "would_recover_admission_failure":
+        code = str(decision.get("reasonCode") or "")
+        if code == "ADMISSION_PUBLICATION_PRIMITIVE_UNSUPPORTED":
+            return (
+                "RECOVER_ADMISSION_PUBLICATION",
+                code,
+                [
+                    _step(
+                        "revalidate_failed_admission",
+                        "Re-read the failed admission and confirm publication never completed and the destination remains absent.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "revalidate_staged_bytes",
+                        "Re-resolve the staged source and require the same verified byte identity before attempting recovery.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "revalidate_admission_topology",
+                        "Re-run admission readiness and path/root mapping checks against the current filesystem topology.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "prove_supported_no_replace_method",
+                        "Prove a no-overwrite publication primitive on the current filesystem without weakening atomic destination protection.",
+                        external_mutation=True,
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "retry_guarded_publication",
+                        "Retry publication only with a proven no-overwrite method and unchanged staged bytes/destination.",
+                        external_mutation=True,
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "scan_and_reconcile_registration",
+                        "Request/reconcile Bindery registration only after publication succeeds and the published bytes still verify.",
+                        external_mutation=True,
+                        stop_if_unproven=True,
+                    ),
+                ],
+            )
+        if code == "ADMISSION_TRANSIENT_BINDERY_FAILURE":
+            return (
+                "RETRY_ADMISSION_TRANSIENT",
+                code,
+                [
+                    _step(
+                        "wait_bounded_backoff",
+                        "Wait for the persisted bounded retry interval; do not spin or retry immediately.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "revalidate_admission_boundary",
+                        "Freshly revalidate staged bytes, destination absence/current publication state, book identity, and admission readiness.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "retry_admission_transition",
+                        "Retry only the failed guarded admission transition while the retry budget remains.",
+                        external_mutation=True,
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "reconcile_registration",
+                        "Reconcile Bindery registration after the retried transition without bypassing verification.",
+                        external_mutation=True,
+                        stop_if_unproven=True,
+                    ),
+                ],
+            )
+
     return None
 
 
@@ -429,24 +574,41 @@ def _build_plan(conn, decision: dict[str, Any]) -> dict[str, Any] | None:
     plan_kind, reason_code, steps = definition
 
     decision_evidence = decision.get("evidence") or {}
-    evidence_revision = verification.get("revision") or _stable_hash(
-        {
-            "subjectKind": decision.get("subjectKind"),
-            "subjectId": decision.get("subjectId"),
-            "state": decision.get("state"),
-            "decision": action,
-            "reasonCode": decision.get("reasonCode"),
-            "evidence": decision_evidence,
-        }
+    subject_kind = str(decision.get("subjectKind") or "")
+    if subject_kind == "result" and verification.get("revision"):
+        evidence_revision = str(verification["revision"])
+    else:
+        evidence_revision = _stable_hash(
+            {
+                "subjectKind": decision.get("subjectKind"),
+                "subjectId": decision.get("subjectId"),
+                "state": decision.get("state"),
+                "decision": action,
+                "reasonCode": decision.get("reasonCode"),
+                "evidence": decision_evidence,
+            }
+        )
+
+    required_checks = [
+        "SUBJECT_IDENTITY_UNCHANGED",
+        "PATH_UNCHANGED",
+        "EVIDENCE_REVISION_UNCHANGED",
+        "DECISION_STILL_AUTHORIZED",
+    ]
+    if subject_kind in {"acquisition", "admission"}:
+        required_checks.extend([
+            "WORKFLOW_STATE_UNCHANGED",
+            "RECOVERY_CLASSIFICATION_UNCHANGED",
+        ])
+
+    recovery_classification = (
+        decision_evidence.get("recoveryClassification")
+        if isinstance(decision_evidence.get("recoveryClassification"), dict)
+        else {}
     )
 
     preconditions = {
-        "requiredChecks": [
-            "SUBJECT_IDENTITY_UNCHANGED",
-            "PATH_UNCHANGED",
-            "EVIDENCE_REVISION_UNCHANGED",
-            "DECISION_STILL_AUTHORIZED",
-        ],
+        "requiredChecks": required_checks,
         "subject": {
             "subjectKind": str(decision.get("subjectKind") or ""),
             "subjectId": str(decision.get("subjectId") or ""),
@@ -467,10 +629,19 @@ def _build_plan(conn, decision: dict[str, Any]) -> dict[str, Any] | None:
             "reasonCode": str(verification.get("reasonCode") or ""),
             "revision": evidence_revision,
         },
+        "retryPolicy": {
+            "retrySameOperation": bool(
+                recovery_classification.get("retrySameOperation", False)
+            ),
+            "maxRetries": int(recovery_classification.get("maxRetries") or 0),
+            "backoffSeconds": list(
+                recovery_classification.get("backoffSeconds") or []
+            ),
+        },
         "mutationBoundary": (
             "Every external mutation step must freshly revalidate these checks. "
-            "Any changed path, bytes/evidence revision, Bindery owner, or mapping "
-            "invalidates the plan and forces re-planning."
+            "Any changed path, bytes/evidence revision, workflow state, Bindery "
+            "owner, or mapping invalidates the plan and forces re-planning."
         ),
     }
 
