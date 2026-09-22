@@ -12,6 +12,11 @@ from app.db import (
     update_ebook_admission,
 )
 from app.observe import run_observe_cycle
+from app.recovery_planner import (
+    promote_due_recovery_retries,
+    recovery_plan_by_id,
+    schedule_recovery_retry,
+)
 from app.verifier import init_verification_db
 
 
@@ -176,3 +181,174 @@ def test_unknown_workflow_failure_stays_attention(monkeypatch, tmp_path):
     assert workflow[0]["decision"] == "attention"
     assert workflow[0]["reasonCode"] == "ACQUISITION_REVIEW_REQUIRED"
     assert observed["planCount"] == 0
+
+
+def test_transient_retry_schedule_is_bounded_and_durable(monkeypatch, tmp_path):
+    original = settings.config_dir
+    settings.config_dir = str(tmp_path / "config")
+    init_local_db()
+    init_verification_db()
+
+    try:
+        create_scan("transient-retry-scan", 1)
+        add_result(
+            "transient-retry-scan",
+            {
+                "file_id": 701,
+                "book_id": 3001,
+                "author": "Retry Author",
+                "title": "Retry Book",
+                "format": "ebook",
+                "stored_path": "/data/media/books/Retry Book.epub",
+                "local_path": "/books/Retry Book.epub",
+                "classification": "PASS",
+                "risk_score": 0,
+                "reason_code": "OK",
+                "reasons": [],
+                "metadata": {},
+            },
+        )
+        finish_scan("transient-retry-scan")
+
+        from app.db import latest_results
+        result = latest_results(limit=1)[0]
+
+        acquisition_id = create_ebook_acquisition(
+            result,
+            {
+                "guid": "retry-guid",
+                "title": "Retry Book",
+                "indexerName": "Example",
+                "protocol": "torrent",
+            },
+        )
+        update_ebook_acquisition(
+            acquisition_id,
+            "failed",
+            error="Bindery POST /queue/grab returned HTTP 503: temporarily unavailable",
+        )
+
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+        observed = run_observe_cycle()
+        plan = observed["plans"][0]
+
+        first = schedule_recovery_retry(
+            plan["id"],
+            "first retry scheduled",
+            now="2026-09-22T01:00:00+00:00",
+        )
+        assert first["state"] == "retry_wait"
+        assert first["retryCount"] == 1
+        assert first["nextRetryAt"] == "2026-09-22T01:00:30+00:00"
+
+        # A fresh read proves retry state is durable, not in-memory.
+        reread = recovery_plan_by_id(plan["id"])
+        assert reread is not None
+        assert reread["state"] == "retry_wait"
+        assert reread["retryCount"] == 1
+        assert reread["nextRetryAt"] == "2026-09-22T01:00:30+00:00"
+
+        assert promote_due_recovery_retries(
+            now="2026-09-22T01:00:29+00:00"
+        ) == []
+
+        promoted = promote_due_recovery_retries(
+            now="2026-09-22T01:00:30+00:00"
+        )
+        assert [item["id"] for item in promoted] == [plan["id"]]
+        assert promoted[0]["state"] == "ready"
+        assert promoted[0]["nextRetryAt"] is None
+
+        second = schedule_recovery_retry(
+            plan["id"],
+            "second retry scheduled",
+            now="2026-09-22T01:01:00+00:00",
+        )
+        assert second["retryCount"] == 2
+        assert second["nextRetryAt"] == "2026-09-22T01:03:00+00:00"
+
+        promote_due_recovery_retries(now="2026-09-22T01:03:00+00:00")
+        third = schedule_recovery_retry(
+            plan["id"],
+            "third retry scheduled",
+            now="2026-09-22T01:04:00+00:00",
+        )
+        assert third["retryCount"] == 3
+        assert third["nextRetryAt"] == "2026-09-22T01:09:00+00:00"
+
+        promote_due_recovery_retries(now="2026-09-22T01:09:00+00:00")
+        exhausted = schedule_recovery_retry(
+            plan["id"],
+            "fourth retry refused",
+            now="2026-09-22T01:10:00+00:00",
+        )
+        assert exhausted["state"] == "blocked"
+        assert exhausted["retryCount"] == 3
+        assert exhausted["nextRetryAt"] is None
+        assert "Retry budget exhausted" in exhausted["lastError"]
+
+    finally:
+        settings.config_dir = original
+
+
+def test_nonretryable_plan_cannot_be_scheduled(monkeypatch, tmp_path):
+    original = settings.config_dir
+    settings.config_dir = str(tmp_path / "config")
+    init_local_db()
+    init_verification_db()
+
+    try:
+        create_scan("nonretryable-scan", 1)
+        add_result(
+            "nonretryable-scan",
+            {
+                "file_id": 801,
+                "book_id": 4001,
+                "author": "Example Author",
+                "title": "Already Imported",
+                "format": "ebook",
+                "stored_path": "/data/media/books/Already Imported.epub",
+                "local_path": "/books/Already Imported.epub",
+                "classification": "PASS",
+                "risk_score": 0,
+                "reason_code": "OK",
+                "reasons": [],
+                "metadata": {},
+            },
+        )
+        finish_scan("nonretryable-scan")
+
+        from app.db import latest_results
+        result = latest_results(limit=1)[0]
+
+        acquisition_id = create_ebook_acquisition(
+            result,
+            {
+                "guid": "already-guid",
+                "title": "Already Imported",
+                "indexerName": "Example",
+                "protocol": "torrent",
+            },
+        )
+        update_ebook_acquisition(
+            acquisition_id,
+            "failed",
+            error=(
+                'Bindery POST /queue/grab returned HTTP 409: '
+                '{"error":"already grabbed: this release has already been imported"}'
+            ),
+        )
+
+        monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+        observed = run_observe_cycle()
+        plan = observed["plans"][0]
+
+        import pytest
+        with pytest.raises(RuntimeError, match="does not authorize"):
+            schedule_recovery_retry(
+                plan["id"],
+                "must not retry same candidate",
+                now="2026-09-22T01:00:00+00:00",
+            )
+    finally:
+        settings.config_dir = original
