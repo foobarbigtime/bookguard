@@ -284,6 +284,7 @@ def test_automatic_cycle_advances_proven_read_only_steps_before_retry(monkeypatc
         return plan1 if step_index == 0 else plan2
 
     monkeypatch.setattr(execution, "record_recovery_step_success", advance)
+    monkeypatch.setattr(execution, "recovery_plan_by_id", lambda plan_id: plan2)
     monkeypatch.setattr(execution, "_EXECUTORS", {"retry_grab_once": Executor()})
     monkeypatch.setattr(
         execution,
