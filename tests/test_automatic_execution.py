@@ -81,7 +81,7 @@ def test_allowlisted_step_without_executor_fails_closed(monkeypatch):
 
     assert exc.value.reason_code == "EXECUTOR_NOT_REGISTERED"
     assert recorded
-    assert recorded[0][1]["state"] == "blocked"
+    assert recorded[0][0][3] == "blocked"
 
 
 def test_read_only_current_step_never_reaches_executor(monkeypatch):
