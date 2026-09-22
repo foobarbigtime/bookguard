@@ -15,6 +15,7 @@ from app.observe import run_observe_cycle
 from app.recovery_planner import (
     promote_due_recovery_retries,
     recovery_plan_by_id,
+    recovery_plan_transition_snapshot,
     schedule_recovery_retry,
 )
 from app.verifier import init_verification_db
@@ -286,6 +287,21 @@ def test_transient_retry_schedule_is_bounded_and_durable(monkeypatch, tmp_path):
         assert exhausted["retryCount"] == 3
         assert exhausted["nextRetryAt"] is None
         assert "Retry budget exhausted" in exhausted["lastError"]
+
+        transitions = recovery_plan_transition_snapshot(plan["id"])
+        events = [item["event"] for item in transitions]
+        assert events == [
+            "created",
+            "retry_scheduled",
+            "retry_due",
+            "retry_scheduled",
+            "retry_due",
+            "retry_scheduled",
+            "retry_due",
+            "retry_budget_exhausted",
+        ]
+        assert transitions[-1]["toState"] == "blocked"
+        assert transitions[-1]["toStep"] == plan["currentStep"]
 
     finally:
         settings.config_dir = original
