@@ -821,3 +821,116 @@ def test_existing_admission_table_gains_publication_method(tmp_path, monkeypatch
             ).fetchall()
         }
     assert "publication_method" in columns
+
+
+
+def test_admission_reconcile_preview_allows_only_consistent_scan_pending_state(
+    admission_setup,
+    monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+
+    monkeypatch.setattr(
+        admission,
+        "result_by_id",
+        lambda result_id: dict(setup["result"]),
+    )
+    monkeypatch.setattr(
+        admission,
+        "associations_inside_path",
+        lambda stored_path: [],
+    )
+
+    preview = admission.admission_reconcile_preview(
+        response["admissionId"],
+        client,
+    )
+
+    assert preview["safe"] is True
+    assert preview["status"] == "scan_requested"
+    assert preview["registrationState"] == "scan_required"
+    assert preview["checks"]["resultIdentityUnchanged"] is True
+    assert preview["checks"]["publishedBytesCurrent"] is True
+    assert preview["checks"]["stagedBytesCurrent"] is True
+    assert preview["checks"]["binderyOwnershipConsistent"] is True
+
+
+def test_admission_reconcile_preview_requires_api_and_database_owner_agreement(
+    admission_setup,
+    monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+    client.registered_path = setup["result"]["stored_path"]
+
+    monkeypatch.setattr(
+        admission,
+        "result_by_id",
+        lambda result_id: dict(setup["result"]),
+    )
+    monkeypatch.setattr(
+        admission,
+        "associations_inside_path",
+        lambda stored_path: [],
+    )
+
+    preview = admission.admission_reconcile_preview(
+        response["admissionId"],
+        client,
+    )
+
+    assert preview["safe"] is False
+    assert preview["registrationState"] == "inconsistent"
+    assert preview["checks"]["binderyOwnershipConsistent"] is False
+
+
+def test_admission_reconcile_preview_accepts_exact_registered_owner(
+    admission_setup,
+    monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+    client.registered_path = setup["result"]["stored_path"]
+
+    monkeypatch.setattr(
+        admission,
+        "result_by_id",
+        lambda result_id: dict(setup["result"]),
+    )
+    monkeypatch.setattr(
+        admission,
+        "associations_inside_path",
+        lambda stored_path: [{
+            "file_id": 91,
+            "book_id": setup["result"]["book_id"],
+            "format": "ebook",
+            "stored_path": stored_path,
+            "title": setup["result"]["title"],
+            "author": setup["result"]["author"],
+        }],
+    )
+
+    preview = admission.admission_reconcile_preview(
+        response["admissionId"],
+        client,
+    )
+
+    assert preview["safe"] is True
+    assert preview["registrationState"] == "registered"
+    assert preview["checks"]["binderyOwnershipConsistent"] is True
