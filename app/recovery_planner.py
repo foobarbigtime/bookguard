@@ -715,16 +715,101 @@ def _decode_plan_row(row) -> dict[str, Any]:
         "createdAt": item["created_at"],
         "updatedAt": item["updated_at"],
         "completedAt": item["completed_at"],
+        "finalOutcome": str(item.get("final_outcome") or ""),
         "executionAllowed": False,
     }
 
 
+def _record_transition(
+    conn,
+    *,
+    plan_id: int,
+    event: str,
+    from_state: str,
+    to_state: str,
+    from_step: int,
+    to_step: int,
+    detail: str,
+    now: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO recovery_plan_transitions(
+            plan_id, event, from_state, to_state, from_step, to_step,
+            detail, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(plan_id),
+            str(event),
+            str(from_state),
+            str(to_state),
+            int(from_step),
+            int(to_step),
+            str(detail or ""),
+            str(now),
+        ),
+    )
+
+
+def recovery_plan_transition_snapshot(plan_id: int) -> list[dict[str, Any]]:
+    with local_conn() as conn:
+        if not _table_exists(conn, "recovery_plan_transitions"):
+            return []
+        rows = conn.execute(
+            """
+            SELECT id, plan_id, event, from_state, to_state,
+                   from_step, to_step, detail, created_at
+            FROM recovery_plan_transitions
+            WHERE plan_id=?
+            ORDER BY id
+            """,
+            (int(plan_id),),
+        ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "planId": int(row["plan_id"]),
+            "event": str(row["event"]),
+            "fromState": str(row["from_state"]),
+            "toState": str(row["to_state"]),
+            "fromStep": int(row["from_step"]),
+            "toStep": int(row["to_step"]),
+            "detail": str(row["detail"] or ""),
+            "createdAt": str(row["created_at"]),
+        }
+        for row in rows
+    ]
+
+
 def _supersede_active(conn, subject_kind: str, subject_id: str, now: str, reason: str) -> None:
     placeholders = ",".join("?" for _ in _PLAN_STATES_ACTIVE)
+    rows = conn.execute(
+        f"""
+        SELECT id, state, current_step
+        FROM recovery_plans
+        WHERE subject_kind=? AND subject_id=?
+          AND state IN ({placeholders})
+        """,
+        (subject_kind, subject_id, *sorted(_PLAN_STATES_ACTIVE)),
+    ).fetchall()
+    for row in rows:
+        _record_transition(
+            conn,
+            plan_id=int(row["id"]),
+            event="superseded",
+            from_state=str(row["state"]),
+            to_state="superseded",
+            from_step=int(row["current_step"]),
+            to_step=int(row["current_step"]),
+            detail=reason,
+            now=now,
+        )
     conn.execute(
         f"""
         UPDATE recovery_plans
-        SET state='superseded', updated_at=?, last_error=?
+        SET state='superseded', updated_at=?, last_error=?,
+            final_outcome='superseded'
         WHERE subject_kind=? AND subject_id=?
           AND state IN ({placeholders})
         """,
@@ -742,6 +827,10 @@ def _persist_plan(conn, plan: dict[str, Any], now: str) -> dict[str, Any]:
     subject_kind = str(plan["subjectKind"])
     subject_id = str(plan["subjectId"])
     signature = str(plan["signature"])
+    existing = conn.execute(
+        "SELECT * FROM recovery_plans WHERE signature=? LIMIT 1",
+        (signature,),
+    ).fetchone()
 
     placeholders = ",".join("?" for _ in _PLAN_STATES_ACTIVE)
     conn.execute(
@@ -783,6 +872,14 @@ def _persist_plan(conn, plan: dict[str, Any], now: str) -> dict[str, Any]:
             last_error=CASE
                 WHEN recovery_plans.state='superseded' THEN NULL
                 ELSE recovery_plans.last_error
+            END,
+            completed_at=CASE
+                WHEN recovery_plans.state='superseded' THEN NULL
+                ELSE recovery_plans.completed_at
+            END,
+            final_outcome=CASE
+                WHEN recovery_plans.state='superseded' THEN NULL
+                ELSE recovery_plans.final_outcome
             END
         """,
         (
@@ -808,6 +905,30 @@ def _persist_plan(conn, plan: dict[str, Any], now: str) -> dict[str, Any]:
         "SELECT * FROM recovery_plans WHERE signature=? LIMIT 1",
         (signature,),
     ).fetchone()
+    if existing is None:
+        _record_transition(
+            conn,
+            plan_id=int(row["id"]),
+            event="created",
+            from_state="",
+            to_state=str(row["state"]),
+            from_step=0,
+            to_step=int(row["current_step"]),
+            detail="Recovery plan created from the current Observe decision.",
+            now=now,
+        )
+    elif str(existing["state"]) == "superseded" and str(row["state"]) == "planned":
+        _record_transition(
+            conn,
+            plan_id=int(row["id"]),
+            event="reactivated",
+            from_state="superseded",
+            to_state="planned",
+            from_step=int(existing["current_step"]),
+            to_step=int(row["current_step"]),
+            detail="The exact evidence revision became current again.",
+            now=now,
+        )
     return _decode_plan_row(row)
 
 
@@ -867,6 +988,132 @@ def _coerce_utc(value: str | None) -> datetime:
     return datetime.now(timezone.utc)
 
 
+def record_recovery_step_success(
+    plan_id: int,
+    expected_step: int,
+    *,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Advance only the local recovery journal after one step is reported complete.
+
+    This function performs no recovery step itself. E4 may call it only after the
+    executor has completed and revalidated the corresponding step.
+    """
+    timestamp = _coerce_utc(now).isoformat()
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM recovery_plans WHERE id=? LIMIT 1",
+            (int(plan_id),),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Recovery plan not found.")
+        plan = _decode_plan_row(row)
+        steps = list(plan["steps"])
+        current_step = int(plan["currentStep"] or 0)
+        requested = int(expected_step)
+
+        if requested < current_step:
+            # Idempotent replay after restart: already recorded.
+            return plan
+        if requested != current_step:
+            raise RuntimeError(
+                f"Recovery plan expects step {current_step}; received {requested}."
+            )
+        if requested >= len(steps):
+            raise RuntimeError("Recovery plan has no remaining step to complete.")
+        if plan["state"] in {"blocked", "superseded", "completed"}:
+            raise RuntimeError(
+                f"Recovery plan state '{plan['state']}' cannot advance."
+            )
+
+        next_step = current_step + 1
+        complete = next_step >= len(steps)
+        next_state = "completed" if complete else "ready"
+        step_code = str((steps[current_step] or {}).get("code") or current_step)
+        conn.execute(
+            """
+            UPDATE recovery_plans
+            SET current_step=?, state=?, updated_at=?,
+                completed_at=?, final_outcome=?,
+                next_retry_at=NULL, last_error=NULL
+            WHERE id=?
+            """,
+            (
+                next_step,
+                next_state,
+                timestamp,
+                timestamp if complete else None,
+                "completed" if complete else None,
+                int(plan_id),
+            ),
+        )
+        _record_transition(
+            conn,
+            plan_id=int(plan_id),
+            event="step_completed",
+            from_state=str(plan["state"]),
+            to_state=next_state,
+            from_step=current_step,
+            to_step=next_step,
+            detail=f"Recorded completion of step '{step_code}'.",
+            now=timestamp,
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM recovery_plans WHERE id=? LIMIT 1",
+            (int(plan_id),),
+        ).fetchone()
+        return _decode_plan_row(updated)
+
+
+def block_recovery_plan(
+    plan_id: int,
+    error: str,
+    *,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Block only one plan in the local journal; no external action is executed."""
+    timestamp = _coerce_utc(now).isoformat()
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM recovery_plans WHERE id=? LIMIT 1",
+            (int(plan_id),),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Recovery plan not found.")
+        plan = _decode_plan_row(row)
+        if plan["state"] in {"superseded", "completed"}:
+            raise RuntimeError(
+                f"Recovery plan state '{plan['state']}' cannot be blocked."
+            )
+        conn.execute(
+            """
+            UPDATE recovery_plans
+            SET state='blocked', next_retry_at=NULL, last_error=?,
+                updated_at=?, final_outcome='blocked'
+            WHERE id=?
+            """,
+            (str(error or ""), timestamp, int(plan_id)),
+        )
+        _record_transition(
+            conn,
+            plan_id=int(plan_id),
+            event="blocked",
+            from_state=str(plan["state"]),
+            to_state="blocked",
+            from_step=int(plan["currentStep"] or 0),
+            to_step=int(plan["currentStep"] or 0),
+            detail=str(error or ""),
+            now=timestamp,
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM recovery_plans WHERE id=? LIMIT 1",
+            (int(plan_id),),
+        ).fetchone()
+        return _decode_plan_row(updated)
+
+
 def schedule_recovery_retry(
     plan_id: int,
     error: str,
@@ -908,20 +1155,29 @@ def schedule_recovery_retry(
 
         retry_count = int(plan["retryCount"] or 0)
         if retry_count >= max_retries:
+            detail = (
+                f"Retry budget exhausted after {retry_count} bounded retries. "
+                f"Last failure: {error}"
+            )
             conn.execute(
                 """
                 UPDATE recovery_plans
-                SET state='blocked', next_retry_at=NULL, last_error=?, updated_at=?
+                SET state='blocked', next_retry_at=NULL, last_error=?, updated_at=?,
+                    final_outcome='retry_budget_exhausted'
                 WHERE id=?
                 """,
-                (
-                    (
-                        f"Retry budget exhausted after {retry_count} bounded retries. "
-                        f"Last failure: {error}"
-                    ),
-                    now_text,
-                    int(plan_id),
-                ),
+                (detail, now_text, int(plan_id)),
+            )
+            _record_transition(
+                conn,
+                plan_id=int(plan_id),
+                event="retry_budget_exhausted",
+                from_state=str(plan["state"]),
+                to_state="blocked",
+                from_step=int(plan["currentStep"] or 0),
+                to_step=int(plan["currentStep"] or 0),
+                detail=detail,
+                now=now_text,
             )
             conn.commit()
             updated = conn.execute(
@@ -940,7 +1196,8 @@ def schedule_recovery_retry(
                 retry_count=?,
                 next_retry_at=?,
                 last_error=?,
-                updated_at=?
+                updated_at=?,
+                final_outcome=NULL
             WHERE id=?
             """,
             (
@@ -950,6 +1207,17 @@ def schedule_recovery_retry(
                 now_text,
                 int(plan_id),
             ),
+        )
+        _record_transition(
+            conn,
+            plan_id=int(plan_id),
+            event="retry_scheduled",
+            from_state=str(plan["state"]),
+            to_state="retry_wait",
+            from_step=int(plan["currentStep"] or 0),
+            to_step=int(plan["currentStep"] or 0),
+            detail=f"Retry {retry_count + 1}/{max_retries} scheduled after {delay_seconds}s.",
+            now=now_text,
         )
         conn.commit()
         updated = conn.execute(
@@ -988,6 +1256,18 @@ def promote_due_recovery_retries(*, now: str | None = None) -> list[dict[str, An
                 """,
                 (now_text, *ids),
             )
+            for row in rows:
+                _record_transition(
+                    conn,
+                    plan_id=int(row["id"]),
+                    event="retry_due",
+                    from_state="retry_wait",
+                    to_state="ready",
+                    from_step=int(row["current_step"]),
+                    to_step=int(row["current_step"]),
+                    detail="Persisted retry backoff elapsed; plan is ready for revalidation.",
+                    now=now_text,
+                )
             conn.commit()
             promoted = conn.execute(
                 f"""
