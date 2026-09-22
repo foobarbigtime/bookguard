@@ -872,3 +872,238 @@ def test_quarantine_exact_media_requires_explicit_allowlist(monkeypatch):
         execution.attempt_automatic_step(32)
 
     assert exc.value.reason_code == "ACTION_NOT_ALLOWLISTED"
+
+
+
+def _admission_plan(*, subject_kind="admission", subject_id="51"):
+    return {
+        "id": 51,
+        "signature": "admission-plan-signature",
+        "state": "ready",
+        "evidenceRevision": "admission-evidence-1",
+        "planKind": "RECONCILE_ADMISSION",
+        "reasonCode": "REGISTRATION_SCAN_PENDING",
+        "subjectKind": subject_kind,
+        "subjectId": subject_id,
+        "resultId": 17,
+        "bookId": 42,
+        "path": "/data/media/books/Bel Canto.epub",
+        "currentStep": 1,
+        "steps": [
+            {"code": "reobserve_registration", "externalMutation": False},
+            {"code": "reconcile_known_admission", "externalMutation": True},
+        ],
+    }
+
+
+def test_known_admission_executor_revalidates_current_admission_plan(monkeypatch):
+    plan = _admission_plan()
+    preview = {
+        "safe": True,
+        "checks": {
+            "workflowStateScanRequested": True,
+            "publishedBytesCurrent": True,
+            "stagedBytesCurrent": True,
+            "resultIdentityUnchanged": True,
+            "binderyOwnershipConsistent": True,
+            "actionsEnabled": True,
+            "admissionEnabled": True,
+        },
+        "admissionId": 51,
+        "resultId": 17,
+        "bookId": 42,
+        "storedPath": "/data/media/books/Bel Canto.epub",
+        "stagedSha256": "abc123",
+        "registrationState": "scan_required",
+    }
+
+    monkeypatch.setattr(
+        execution,
+        "ebook_admission_by_id",
+        lambda admission_id: {"id": admission_id, "status": "scan_requested"},
+    )
+    monkeypatch.setattr(
+        execution._KnownAdmissionReconcileExecutor,
+        "_current_plan",
+        lambda self, admission_id: dict(plan),
+    )
+    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(
+        execution,
+        "admission_reconcile_preview",
+        lambda admission_id, client: dict(preview),
+    )
+
+    boundary = execution._KnownAdmissionReconcileExecutor().revalidate(
+        plan,
+        plan["steps"][1],
+    )
+
+    assert boundary["ok"] is True
+    assert boundary["admissionId"] == 51
+    assert boundary["registrationState"] == "scan_required"
+    assert all(check["ok"] for check in boundary["checks"])
+
+
+def test_acquisition_subject_reconcile_admission_is_not_a_live_candidate(monkeypatch):
+    acquisition_plan = _admission_plan(subject_kind="acquisition", subject_id="9")
+    acquisition_plan["id"] = 9
+    admission_plan = _admission_plan(subject_kind="admission", subject_id="51")
+    admission_plan["id"] = 51
+    calls = []
+
+    monkeypatch.setattr(
+        execution,
+        "load_automation_settings",
+        lambda: _configured(
+            mode="automatic",
+            allowlist=("reconcile_known_admission",),
+        ),
+    )
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(
+        execution,
+        "recovery_plan_snapshot",
+        lambda limit: {"items": [acquisition_plan, admission_plan]},
+    )
+    monkeypatch.setattr(
+        execution,
+        "_run_admission_reconcile_cycle",
+        lambda plan: calls.append(plan["id"]) or {
+            "ok": True,
+            "state": "executed",
+            "externalMutationAttempted": False,
+        },
+    )
+
+    result = execution.run_automatic_cycle()
+
+    assert calls == [51]
+    assert result["state"] == "executed"
+
+
+def test_reconcile_known_admission_requires_explicit_allowlist(monkeypatch):
+    plan = _admission_plan()
+
+    monkeypatch.setattr(
+        execution,
+        "load_automation_settings",
+        lambda: _configured(mode="automatic", allowlist=("retry_grab_once",)),
+    )
+    monkeypatch.setattr(execution, "recovery_plan_by_id", lambda plan_id: plan)
+
+    with pytest.raises(execution.AutomaticExecutionBlocked) as exc:
+        execution.attempt_automatic_step(plan["id"])
+
+    assert exc.value.reason_code == "ACTION_NOT_ALLOWLISTED"
+
+
+def test_interrupted_admission_scan_is_not_replayed_without_registration_proof(
+    monkeypatch,
+):
+    plan = _admission_plan()
+    executor = execution._KnownAdmissionReconcileExecutor()
+
+    monkeypatch.setattr(
+        execution,
+        "ebook_admission_by_id",
+        lambda admission_id: {"id": admission_id, "status": "scan_requested"},
+    )
+    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(
+        execution,
+        "admission_reconcile_preview",
+        lambda admission_id, client: {
+            "safe": True,
+            "registrationState": "scan_required",
+        },
+    )
+    monkeypatch.setattr(
+        execution,
+        "reconcile_admission",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("uncertain scan request must never replay")
+        ),
+    )
+
+    with pytest.raises(execution.AutomaticExecutionBlocked) as exc:
+        executor.reconcile_uncertain(
+            plan,
+            plan["steps"][1],
+            {"state": "running"},
+        )
+
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+
+
+def test_interrupted_admission_scan_adopts_proven_registration_without_scan(
+    monkeypatch,
+):
+    plan = _admission_plan()
+    executor = execution._KnownAdmissionReconcileExecutor()
+    calls = []
+
+    monkeypatch.setattr(
+        execution,
+        "ebook_admission_by_id",
+        lambda admission_id: {"id": admission_id, "status": "scan_requested"},
+    )
+    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(
+        execution,
+        "admission_reconcile_preview",
+        lambda admission_id, client: {
+            "safe": True,
+            "registrationState": "registered",
+        },
+    )
+    monkeypatch.setattr(
+        execution,
+        "reconcile_admission",
+        lambda admission_id, client: calls.append(admission_id) or {
+            "admissionId": admission_id,
+            "bookId": 42,
+            "status": "registered",
+            "registered": True,
+            "scanRequested": False,
+            "stagingRetained": True,
+        },
+    )
+
+    result = executor.reconcile_uncertain(
+        plan,
+        plan["steps"][1],
+        {"state": "running"},
+    )
+
+    assert calls == [51]
+    assert result["status"] == "registered"
+    assert result["externalMutationPerformed"] is False
+    assert result["reconciledAfterRestart"] is True
+
+
+def test_known_admission_execute_reports_scan_mutation_precisely(monkeypatch):
+    plan = _admission_plan()
+    executor = execution._KnownAdmissionReconcileExecutor()
+
+    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(
+        execution,
+        "reconcile_admission",
+        lambda admission_id, client: {
+            "admissionId": admission_id,
+            "bookId": 42,
+            "status": "scan_requested",
+            "registered": False,
+            "scanRequested": True,
+            "registrationConflict": None,
+            "stagingRetained": True,
+        },
+    )
+
+    result = executor.execute(plan, plan["steps"][1], {})
+
+    assert result["scanRequested"] is True
+    assert result["externalMutationPerformed"] is True
+    assert result["libraryBytesChanged"] is False
+    assert result["stagingRetained"] is True
