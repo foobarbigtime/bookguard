@@ -17,6 +17,7 @@ _TABLES = {
     "hardlink_alias_cleanups",
     "triage_decisions",
     "automation_observations",
+    "recovery_plans",
 }
 
 
@@ -361,6 +362,49 @@ def _observe_events(conn, limit: int) -> list[dict[str, Any]]:
     ]
 
 
+def _recovery_plan_events(conn, limit: int) -> list[dict[str, Any]]:
+    if not _table_exists(conn, "recovery_plans"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, plan_kind, reason_code, state, title, author, path,
+               retry_count, next_retry_at, last_error, updated_at
+        FROM recovery_plans
+        ORDER BY updated_at DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    items = []
+    for row in rows:
+        plan_kind = str(row["plan_kind"] or "")
+        reason = str(row["reason_code"] or "")
+        retry_text = ""
+        if str(row["state"] or "") == "retry_wait" and row["next_retry_at"]:
+            retry_text = (
+                f" Retry #{int(row['retry_count'] or 0)} waits until "
+                f"{row['next_retry_at']}."
+            )
+        items.append(
+            _event(
+                kind="recovery_plan",
+                label="Recovery plan",
+                record_id=row["id"],
+                status=row["state"],
+                timestamp=row["updated_at"],
+                title=str(row["title"] or ""),
+                author=str(row["author"] or ""),
+                path=str(row["path"] or ""),
+                message=(
+                    f"{plan_kind.replace('_', ' ').title()} · "
+                    f"{reason.replace('_', ' ').title()}.{retry_text}"
+                ),
+                detail_href=f"/history/recovery-plan/{row['id']}",
+            )
+        )
+    return items
+
+
 def operation_history(limit: int = 250) -> dict[str, Any]:
     """Read durable operation records without creating tables or mutating state."""
     limit = max(1, min(int(limit), 1000))
@@ -376,6 +420,7 @@ def operation_history(limit: int = 250) -> dict[str, Any]:
             + _hardlink_events(conn, per_source)
             + _triage_events(conn, per_source)
             + _observe_events(conn, per_source)
+            + _recovery_plan_events(conn, per_source)
         )
 
     items.sort(
@@ -464,6 +509,17 @@ _DETAIL_SPECS: dict[str, dict[str, Any]] = {
         "label": "Observe decision",
         "status": "decision",
         "json": {"evidence_json": "Observed evidence"},
+        "omit": {"signature"},
+    },
+    "recovery-plan": {
+        "table": "recovery_plans",
+        "pk": "id",
+        "label": "Recovery plan",
+        "status": "state",
+        "json": {
+            "preconditions_json": "Recovery preconditions",
+            "steps_json": "Recovery steps",
+        },
         "omit": {"signature"},
     },
 }
@@ -798,6 +854,66 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
                 "recordedError": "",
             }
 
+    recovery_summary = None
+    if kind == "recovery-plan":
+        preconditions = next(
+            (
+                block.get("value")
+                for block in evidence
+                if block.get("label") == "Recovery preconditions"
+                and isinstance(block.get("value"), dict)
+            ),
+            {},
+        )
+        steps = next(
+            (
+                block.get("value")
+                for block in evidence
+                if block.get("label") == "Recovery steps"
+                and isinstance(block.get("value"), list)
+            ),
+            [],
+        )
+        retry_policy = (
+            preconditions.get("retryPolicy")
+            if isinstance(preconditions.get("retryPolicy"), dict)
+            else {}
+        )
+        required_checks = preconditions.get("requiredChecks")
+        if not isinstance(required_checks, list):
+            required_checks = []
+        recovery_summary = {
+            "planKind": str(raw.get("plan_kind") or ""),
+            "reasonCode": str(raw.get("reason_code") or ""),
+            "state": status,
+            "subjectKind": str(raw.get("subject_kind") or ""),
+            "subjectId": str(raw.get("subject_id") or ""),
+            "currentStep": int(raw.get("current_step") or 0),
+            "retryCount": int(raw.get("retry_count") or 0),
+            "nextRetryAt": str(raw.get("next_retry_at") or ""),
+            "requiredChecks": [str(value) for value in required_checks],
+            "retrySameOperation": bool(retry_policy.get("retrySameOperation", False)),
+            "maxRetries": int(retry_policy.get("maxRetries") or 0),
+            "backoffSeconds": [
+                int(value) for value in (retry_policy.get("backoffSeconds") or [])
+            ],
+            "steps": [
+                {
+                    "code": str(step.get("code") or ""),
+                    "description": str(step.get("description") or ""),
+                    "externalMutation": bool(step.get("externalMutation")),
+                    "stopIfUnproven": bool(step.get("stopIfUnproven")),
+                }
+                for step in steps
+                if isinstance(step, dict)
+            ],
+            "executionAllowed": False,
+        }
+        summary = (
+            f"Automatic Mode recovery plan: {str(raw.get('plan_kind') or '').replace('_', ' ').title()}. "
+            "This E3 record is planning/audit state only and cannot execute external mutations."
+        )
+
     if kind == "acquisition" and raw.get("grab_response_json"):
         notes.append(
             "The stored grab-provider response is intentionally omitted from this "
@@ -818,6 +934,7 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
         "fields": fields,
         "evidence": evidence,
         "verificationSummary": verification_summary,
+        "recoverySummary": recovery_summary,
         "notes": notes,
         "historyHref": "/history",
     }

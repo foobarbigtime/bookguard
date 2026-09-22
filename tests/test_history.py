@@ -168,6 +168,54 @@ def _seed(tmp_path):
             """,
             (correction_id, snapshot),
         )
+        conn.execute(
+            """
+            INSERT INTO recovery_plans(
+                signature, planner_version, subject_kind, subject_id, result_id,
+                book_id, title, author, path, plan_kind, reason_code, state,
+                evidence_revision, preconditions_json, steps_json, current_step,
+                retry_count, next_retry_at, last_error, created_at, updated_at
+            ) VALUES (
+                'history-recovery', '2', 'result', ?, ?, 20,
+                'Bel Canto', 'Ann Patchett', '/data/media/books/Bel Canto.epub',
+                'RECOVER_WRONG_CONTENT', 'MISMATCH', 'planned',
+                'history-evidence-revision', ?, ?, 0, 0, NULL, NULL,
+                '2026-09-20T12:05:00+00:00',
+                '2026-09-20T12:06:00+00:00'
+            )
+            """,
+            (
+                str(result_id),
+                result_id,
+                json.dumps({
+                    "requiredChecks": [
+                        "SUBJECT_IDENTITY_UNCHANGED",
+                        "PATH_UNCHANGED",
+                        "EVIDENCE_REVISION_UNCHANGED",
+                        "DECISION_STILL_AUTHORIZED",
+                    ],
+                    "retryPolicy": {
+                        "retrySameOperation": False,
+                        "maxRetries": 0,
+                        "backoffSeconds": [],
+                    },
+                }),
+                json.dumps([
+                    {
+                        "code": "revalidate_wrong_content",
+                        "description": "Re-run deterministic identity checks.",
+                        "externalMutation": False,
+                        "stopIfUnproven": True,
+                    },
+                    {
+                        "code": "correct_or_quarantine",
+                        "description": "Correct or quarantine only proven wrong media.",
+                        "externalMutation": True,
+                        "stopIfUnproven": True,
+                    },
+                ]),
+            ),
+        )
         conn.commit()
     return original
 
@@ -189,6 +237,7 @@ def test_operation_history_combines_durable_sources_newest_first(tmp_path):
         "triage",
         "hardlink_correction",
         "hardlink_cleanup",
+        "recovery_plan",
     } <= kinds
     timestamps = [item["timestamp"] for item in history["items"]]
     assert timestamps == sorted(timestamps, reverse=True)
@@ -253,6 +302,7 @@ def test_operation_detail_reads_all_supported_durable_record_types(tmp_path):
             "hardlink-correction": "applied",
             "hardlink-cleanup": "applied",
             "triage": "keep",
+            "recovery-plan": "planned",
         }
         details = {
             kind: operation_detail(kind, 1)
@@ -642,3 +692,42 @@ def test_verification_detail_surfaces_mixed_whole_set_and_filename_evidence(tmp_
     assert summary["filenameFileCount"] == 1
     assert summary["filenameExamples"] == ["Stephen King - Finders Keepers (2015).mp3"]
 
+
+
+def test_recovery_plan_history_detail_is_human_readable(tmp_path):
+    original = _seed(tmp_path)
+    try:
+        history = operation_history(100)
+        detail = operation_detail("recovery-plan", 1)
+    finally:
+        settings.config_dir = original
+
+    event = next(item for item in history["items"] if item["kind"] == "recovery_plan")
+    assert event["kindLabel"] == "Recovery plan"
+    assert event["status"] == "planned"
+    assert event["detailHref"] == "/history/recovery-plan/1"
+    assert "Recover Wrong Content" in event["message"]
+
+    assert detail is not None
+    assert detail["kind"] == "recovery-plan"
+    assert detail["status"] == "planned"
+    assert detail["title"] == "Bel Canto"
+    assert "planning/audit state only" in detail["summary"]
+
+    recovery = detail["recoverySummary"]
+    assert recovery["planKind"] == "RECOVER_WRONG_CONTENT"
+    assert recovery["reasonCode"] == "MISMATCH"
+    assert recovery["executionAllowed"] is False
+    assert recovery["retrySameOperation"] is False
+    assert recovery["requiredChecks"] == [
+        "SUBJECT_IDENTITY_UNCHANGED",
+        "PATH_UNCHANGED",
+        "EVIDENCE_REVISION_UNCHANGED",
+        "DECISION_STILL_AUTHORIZED",
+    ]
+    assert [step["code"] for step in recovery["steps"]] == [
+        "revalidate_wrong_content",
+        "correct_or_quarantine",
+    ]
+    assert recovery["steps"][1]["externalMutation"] is True
+    assert recovery["steps"][1]["stopIfUnproven"] is True

@@ -6,6 +6,8 @@ from typing import Any
 
 from .config import load_automation_settings
 from .db import local_conn, utc_now
+from .recovery_classifier import classify_acquisition_failure, classify_admission_failure
+from .recovery_planner import record_recovery_plans
 
 
 POLICY_VERSION = "1"
@@ -289,6 +291,8 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT a.id, a.result_id, a.book_id, a.status, a.admission_id,
+               a.candidate_guid, a.candidate_title, a.candidate_indexer,
+               a.candidate_protocol, a.queue_id, a.queue_status,
                a.observed_relative_path, a.staged_relative_path, a.error,
                r.title, r.author, r.stored_path
         FROM ebook_acquisitions a
@@ -319,6 +323,12 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
             "acquisitionId": row["id"],
             "status": status,
             "admissionId": row["admission_id"],
+            "candidateGuid": str(row["candidate_guid"] or ""),
+            "candidateTitle": str(row["candidate_title"] or ""),
+            "candidateIndexer": str(row["candidate_indexer"] or ""),
+            "candidateProtocol": str(row["candidate_protocol"] or ""),
+            "queueId": row["queue_id"],
+            "queueStatus": str(row["queue_status"] or ""),
             "recordedError": str(row["error"] or ""),
         }
         if status in _ACQUISITION_PROGRESS_STATES:
@@ -396,22 +406,45 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 evidence=evidence,
             ))
         else:
-            decisions.append(_decision(
-                **common,
-                state=status,
-                decision="attention",
-                reason_code=(
-                    "ACQUISITION_REVIEW_REQUIRED"
-                    if status in {"review_required", "failed"}
-                    else "UNKNOWN_ACQUISITION_STATE"
-                ),
-                reason=(
-                    str(row["error"] or "")
-                    or "The acquisition state is not allowlisted for automatic progress."
-                ),
-                next_step="Review the durable acquisition before any further action.",
-                evidence=evidence,
-            ))
+            recovery = classify_acquisition_failure(status, str(row["error"] or ""))
+            if recovery and recovery.recoverable:
+                evidence["recoveryClassification"] = {
+                    "planKind": recovery.plan_kind,
+                    "retrySameOperation": recovery.retry_same_operation,
+                    "maxRetries": recovery.max_retries,
+                    "backoffSeconds": list(recovery.backoff_seconds),
+                }
+                decisions.append(_decision(
+                    **common,
+                    state=status,
+                    decision="would_recover_acquisition_failure",
+                    reason_code=recovery.reason_code,
+                    reason=recovery.explanation,
+                    next_step=(
+                        "A future Automatic Mode should execute the classified recovery "
+                        "plan only after all current readiness, identity, queue, and "
+                        "candidate gates are freshly revalidated. Observe Mode records "
+                        "the plan only."
+                    ),
+                    evidence=evidence,
+                ))
+            else:
+                decisions.append(_decision(
+                    **common,
+                    state=status,
+                    decision="attention",
+                    reason_code=(
+                        "ACQUISITION_REVIEW_REQUIRED"
+                        if status in {"review_required", "failed"}
+                        else "UNKNOWN_ACQUISITION_STATE"
+                    ),
+                    reason=(
+                        str(row["error"] or "")
+                        or "The acquisition state is not allowlisted for automatic progress."
+                    ),
+                    next_step="Review the durable acquisition before any further action.",
+                    evidence=evidence,
+                ))
     return decisions
 
 
@@ -421,7 +454,8 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT a.id, a.result_id, a.book_id, a.status, a.staged_relative_path,
-               a.stored_path, a.local_path, a.error, r.title, r.author
+               a.staged_sha256, a.publication_method, a.stored_path, a.local_path,
+               a.error, r.title, r.author
         FROM ebook_admissions a
         LEFT JOIN scan_results r ON r.id=a.result_id
         ORDER BY a.id DESC
@@ -444,6 +478,9 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
         evidence = {
             "admissionId": row["id"],
             "status": status,
+            "stagedRelativePath": str(row["staged_relative_path"] or ""),
+            "stagedSha256": str(row["staged_sha256"] or ""),
+            "publicationMethod": str(row["publication_method"] or ""),
             "recordedError": str(row["error"] or ""),
         }
         if status == "registered":
@@ -473,6 +510,33 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 evidence=evidence,
             ))
         else:
+            recovery = classify_admission_failure(
+                status,
+                str(row["error"] or ""),
+                str(row["publication_method"] or ""),
+            )
+            if recovery and recovery.recoverable:
+                evidence["recoveryClassification"] = {
+                    "planKind": recovery.plan_kind,
+                    "retrySameOperation": recovery.retry_same_operation,
+                    "maxRetries": recovery.max_retries,
+                    "backoffSeconds": list(recovery.backoff_seconds),
+                }
+                decisions.append(_decision(
+                    **common,
+                    state=status,
+                    decision="would_recover_admission_failure",
+                    reason_code=recovery.reason_code,
+                    reason=recovery.explanation,
+                    next_step=(
+                        "A future Automatic Mode should execute the classified admission "
+                        "recovery only after staged bytes, destination, book identity, "
+                        "filesystem topology, and readiness are freshly revalidated. "
+                        "Observe Mode records the plan only."
+                    ),
+                    evidence=evidence,
+                ))
+                continue
             mapping = {
                 "registration_conflict": (
                     "REGISTRATION_CONFLICT",
@@ -629,7 +693,9 @@ def run_observe_cycle(limit: int = 500) -> dict[str, Any]:
             "state": "disabled",
             "policyVersion": POLICY_VERSION,
             "decisionCount": 0,
+            "planCount": 0,
             "records": [],
+            "plans": [],
             "message": (
                 "Observe Mode is disabled. Set BOOKGUARD_AUTOMATION_MODE=observe "
                 "to record non-mutating automation decisions."
@@ -649,6 +715,7 @@ def run_observe_cycle(limit: int = 500) -> dict[str, Any]:
             + _result_decisions(conn, limit)
         )
         records = [_persist_decision(conn, item, now) for item in decisions]
+        plans = record_recovery_plans(conn, decisions, now=now)
         conn.commit()
 
     return {
@@ -657,10 +724,13 @@ def run_observe_cycle(limit: int = 500) -> dict[str, Any]:
         "state": "observed",
         "policyVersion": POLICY_VERSION,
         "decisionCount": len(records),
+        "planCount": len(plans),
         "records": records,
+        "plans": plans,
         "message": (
-            "Observe Mode recorded proposed decisions only. No Bindery, queue, "
-            "staging, quarantine, metadata, or library mutation was attempted."
+            "Observe Mode recorded proposed decisions and non-executable recovery "
+            "plans only. No Bindery, queue, staging, quarantine, metadata, or "
+            "library mutation was attempted."
         ),
     }
 

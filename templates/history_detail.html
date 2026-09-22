@@ -40,9 +40,9 @@
     </div>
 
     {% set status_class =
-      'ready' if detail.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed', 'keep', 'no_action']
-      else 'error' if detail.status in ['failed', 'wrong_content', 'wrong_media_type', 'unsafe_file', 'registration_conflict']
-      else 'review' if detail.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting', 'attention']
+      'ready' if detail.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed', 'keep', 'no_action', 'ready']
+      else 'error' if detail.status in ['failed', 'wrong_content', 'wrong_media_type', 'unsafe_file', 'registration_conflict', 'blocked']
+      else 'review' if detail.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting', 'attention', 'retry_wait', 'superseded']
       else 'idle'
     %}
     <div class="history-detail-summary">
@@ -99,6 +99,78 @@
       {% endfor %}
     {% endif %}
   </section>
+
+  {% if detail.recoverySummary %}
+  {% set rs = detail.recoverySummary %}
+  <section class="table-card history-detail-card">
+    <div class="section-title">
+      <h2>Recovery plan</h2>
+      <p>Durable E3 planning state. This view cannot execute any recovery action.</p>
+    </div>
+
+    <div class="history-detail-summary">
+      <article>
+        <span class="label">Plan</span>
+        <strong>{{ rs.planKind|replace('_',' ')|title }}</strong>
+        <small>{{ rs.reasonCode|replace('_',' ')|title }}</small>
+      </article>
+      <article>
+        <span class="label">Subject</span>
+        <strong>{{ rs.subjectKind|replace('_',' ')|title }} #{{ rs.subjectId }}</strong>
+        <small>Current step {{ rs.currentStep }} of {{ rs.steps|length }}</small>
+      </article>
+      <article>
+        <span class="label">Retry state</span>
+        <strong>
+          {% if rs.retrySameOperation %}
+            {{ rs.retryCount }}/{{ rs.maxRetries }} retries used
+          {% else %}
+            Same operation will not be retried
+          {% endif %}
+        </strong>
+        <small>
+          {% if rs.nextRetryAt %}
+            Next retry {{ rs.nextRetryAt[:19]|replace('T',' ') }} UTC
+          {% elif rs.backoffSeconds %}
+            Backoff {{ rs.backoffSeconds|join(' / ') }} seconds
+          {% else %}
+            No retry timer scheduled
+          {% endif %}
+        </small>
+      </article>
+      <article>
+        <span class="label">Execution</span>
+        <strong>Disabled in E3</strong>
+        <small>No Bindery, filesystem, queue, admission, or quarantine mutation can be executed from this plan.</small>
+      </article>
+    </div>
+
+    <div class="history-detail-summary-note">
+      <strong>Mutation-boundary checks</strong>
+      <p>
+        {% for check in rs.requiredChecks %}
+          {{ check|replace('_',' ')|title }}{% if not loop.last %} · {% endif %}
+        {% endfor %}
+      </p>
+    </div>
+
+    <div class="history-detail-plan">
+      <strong>Planned steps</strong>
+      <ol>
+        {% for step in rs.steps %}
+          <li>
+            <b>{{ step.code|replace('_',' ')|title }}</b>
+            — {{ step.description }}
+            <small>
+              {% if step.externalMutation %}Future external mutation{% else %}Read-only validation{% endif %}
+              {% if step.stopIfUnproven %} · fail closed if not proven{% endif %}
+            </small>
+          </li>
+        {% endfor %}
+      </ol>
+    </div>
+  </section>
+  {% endif %}
 
   {% if detail.verificationSummary %}
   {% set vs = detail.verificationSummary %}

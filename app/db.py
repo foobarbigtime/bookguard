@@ -227,6 +227,46 @@ def init_local_db() -> None:
                 observed_count INTEGER NOT NULL DEFAULT 1
             );
 
+            CREATE TABLE IF NOT EXISTS recovery_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signature TEXT NOT NULL UNIQUE,
+                planner_version TEXT NOT NULL,
+                subject_kind TEXT NOT NULL,
+                subject_id TEXT NOT NULL,
+                result_id INTEGER,
+                book_id INTEGER,
+                title TEXT NOT NULL DEFAULT '',
+                author TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                plan_kind TEXT NOT NULL,
+                reason_code TEXT NOT NULL,
+                state TEXT NOT NULL,
+                evidence_revision TEXT NOT NULL,
+                preconditions_json TEXT NOT NULL,
+                steps_json TEXT NOT NULL,
+                current_step INTEGER NOT NULL DEFAULT 0,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                next_retry_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                final_outcome TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS recovery_plan_transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                event TEXT NOT NULL,
+                from_state TEXT NOT NULL,
+                to_state TEXT NOT NULL,
+                from_step INTEGER NOT NULL,
+                to_step INTEGER NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id)
+            );
+
             CREATE TABLE IF NOT EXISTS ebook_acquisitions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 result_id INTEGER NOT NULL,
@@ -271,6 +311,15 @@ def init_local_db() -> None:
                 "ALTER TABLE ebook_admissions ADD COLUMN publication_method TEXT"
             )
 
+        recovery_plan_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(recovery_plans)").fetchall()
+        }
+        if "final_outcome" not in recovery_plan_columns:
+            conn.execute(
+                "ALTER TABLE recovery_plans ADD COLUMN final_outcome TEXT"
+            )
+
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_scan_results_scan
@@ -297,6 +346,18 @@ def init_local_db() -> None:
                 ON automation_observations(subject_kind, subject_id, id DESC);
             CREATE INDEX IF NOT EXISTS idx_automation_observations_decision
                 ON automation_observations(decision, last_seen_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plans_updated
+                ON recovery_plans(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plans_subject
+                ON recovery_plans(subject_kind, subject_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plans_state
+                ON recovery_plans(state, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plans_result
+                ON recovery_plans(result_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plan_transitions_plan
+                ON recovery_plan_transitions(plan_id, id);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plan_transitions_created
+                ON recovery_plan_transitions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_created
                 ON ebook_acquisitions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_result
