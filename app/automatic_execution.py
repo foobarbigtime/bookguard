@@ -17,6 +17,7 @@ from .observe import _acquisition_decisions
 from .recovery_classifier import classify_acquisition_failure
 from .recovery_planner import (
     _build_plan,
+    block_recovery_plan,
     promote_due_recovery_retries,
     recovery_plan_by_id,
     recovery_plan_snapshot,
@@ -379,6 +380,125 @@ def _require_fresh_boundary(plan: dict[str, Any], boundary: dict[str, Any]) -> N
             "BOUNDARY_INVARIANT_FAILED",
             "Fresh mutation-boundary invariant failed: " + ", ".join(failed),
         )
+
+
+def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
+    """Advance at most one E4 work item and perform at most one external mutation.
+
+    The first live allowlisted executor is RETRY_ACQUISITION_TRANSIENT /
+    retry_grab_once. All other recovery plan kinds remain untouched.
+    """
+    configured = load_automation_settings()
+    if configured.automation_mode != "automatic":
+        raise AutomaticExecutionBlocked(
+            "AUTOMATIC_MODE_INACTIVE",
+            "BOOKGUARD_AUTOMATION_MODE must be automatic.",
+        )
+
+    promoted = promote_due_recovery_retries()
+    snapshot = recovery_plan_snapshot(limit)
+    candidates = [
+        item
+        for item in snapshot["items"]
+        if item.get("planKind") == "RETRY_ACQUISITION_TRANSIENT"
+        and item.get("state") in {"planned", "ready", "retry_wait"}
+    ]
+    candidates.sort(key=lambda item: int(item["id"]))
+
+    if not candidates:
+        return {
+            "ok": True,
+            "state": "idle",
+            "promotedPlanIds": [int(item["id"]) for item in promoted],
+            "externalMutationAttempted": False,
+            "message": "No transient acquisition retry plan is ready for automatic work.",
+        }
+
+    plan = candidates[0]
+    plan_id = int(plan["id"])
+
+    if plan["state"] == "planned":
+        scheduled = schedule_recovery_retry(
+            plan_id,
+            "Automatic Mode scheduled the bounded transient acquisition retry.",
+        )
+        return {
+            "ok": True,
+            "state": "retry_wait",
+            "plan": scheduled,
+            "externalMutationAttempted": False,
+            "message": "The first bounded retry interval was scheduled; no external work ran.",
+        }
+
+    if plan["state"] == "retry_wait":
+        return {
+            "ok": True,
+            "state": "retry_wait",
+            "plan": plan,
+            "externalMutationAttempted": False,
+            "message": "The bounded retry interval has not elapsed.",
+        }
+
+    steps = list(plan.get("steps") or [])
+    current_step = int(plan.get("currentStep") or 0)
+    current_code = (
+        str((steps[current_step] or {}).get("code") or "")
+        if 0 <= current_step < len(steps)
+        else ""
+    )
+
+    if current_code == "wait_bounded_backoff":
+        plan = record_recovery_step_success(plan_id, current_step)
+        steps = list(plan.get("steps") or [])
+        current_step = int(plan.get("currentStep") or 0)
+        current_code = (
+            str((steps[current_step] or {}).get("code") or "")
+            if 0 <= current_step < len(steps)
+            else ""
+        )
+
+    if current_code == "revalidate_acquisition_readiness":
+        executor = _EXECUTORS.get("retry_grab_once")
+        if executor is None:
+            raise AutomaticExecutionBlocked(
+                "EXECUTOR_NOT_REGISTERED",
+                "Transient acquisition retry executor is not registered.",
+            )
+        try:
+            boundary = executor.revalidate(plan, steps[current_step])
+            _require_fresh_boundary(plan, boundary)
+        except AutomaticExecutionBlocked as exc:
+            retryable_boundary_failures = {
+                "ACQUISITION_READINESS_FAILED",
+                "BOUNDARY_REVALIDATION_ERROR",
+            }
+            if exc.reason_code in retryable_boundary_failures:
+                scheduled = schedule_recovery_retry(plan_id, str(exc))
+                return {
+                    "ok": False,
+                    "state": "retry_wait",
+                    "plan": scheduled,
+                    "externalMutationAttempted": False,
+                    "reasonCode": exc.reason_code,
+                    "message": str(exc),
+                }
+            blocked = block_recovery_plan(plan_id, str(exc))
+            return {
+                "ok": False,
+                "state": "blocked",
+                "plan": blocked,
+                "externalMutationAttempted": False,
+                "reasonCode": exc.reason_code,
+                "message": str(exc),
+            }
+        plan = record_recovery_step_success(plan_id, current_step)
+
+    result = attempt_automatic_step(plan_id)
+    return {
+        **result,
+        "state": "executed",
+        "externalMutationAttempted": True,
+    }
 
 
 def attempt_automatic_step(plan_id: int) -> dict[str, Any]:
