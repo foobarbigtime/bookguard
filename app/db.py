@@ -794,6 +794,25 @@ def update_ebook_acquisition(
         conn.commit()
 
 
+def reset_ebook_acquisition_for_retry(acquisition_id: int) -> None:
+    """Clear attempt-specific queue state before retrying the same durable acquisition."""
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ebook_acquisitions
+            SET status='grab_requested',
+                queue_id=NULL,
+                queue_status=NULL,
+                grab_response_json=NULL,
+                updated_at=?,
+                error=NULL
+            WHERE id=?
+            """,
+            (utc_now(), int(acquisition_id)),
+        )
+        conn.commit()
+
+
 def ebook_acquisition_by_id(acquisition_id: int) -> dict | None:
     with local_conn() as conn:
         row = conn.execute(
