@@ -3,9 +3,26 @@ from __future__ import annotations
 import json
 from typing import Any, Protocol
 
+from .acquisition import (
+    AcquisitionSafetyError,
+    _result_and_book,
+    _search_candidate,
+    acquisition_readiness,
+    retry_failed_ebook_acquisition,
+)
+from .bindery_client import BinderyClient
 from .config import AUTOMATIC_ACTION_CODES, load_automation_settings
-from .db import local_conn, utc_now
-from .recovery_planner import recovery_plan_by_id, record_recovery_step_success
+from .db import ebook_acquisition_by_id, local_conn, result_by_id, utc_now
+from .observe import _acquisition_decisions
+from .recovery_classifier import classify_acquisition_failure
+from .recovery_planner import (
+    _build_plan,
+    promote_due_recovery_retries,
+    recovery_plan_by_id,
+    recovery_plan_snapshot,
+    record_recovery_step_success,
+    schedule_recovery_retry,
+)
 
 
 class AutomaticExecutionBlocked(RuntimeError):
@@ -25,6 +42,164 @@ class AutomaticExecutor(Protocol):
 
 
 _EXECUTORS: dict[str, AutomaticExecutor] = {}
+
+
+class _TransientAcquisitionRetryExecutor:
+    action_code = "retry_grab_once"
+
+    def revalidate(
+        self,
+        plan: dict[str, Any],
+        step: dict[str, Any],
+    ) -> dict[str, Any]:
+        if str(plan.get("planKind") or "") != "RETRY_ACQUISITION_TRANSIENT":
+            raise AutomaticExecutionBlocked(
+                "PLAN_KIND_MISMATCH",
+                "retry_grab_once is valid only for RETRY_ACQUISITION_TRANSIENT.",
+            )
+        if str(plan.get("subjectKind") or "") != "acquisition":
+            raise AutomaticExecutionBlocked(
+                "SUBJECT_KIND_MISMATCH",
+                "Transient acquisition retry requires an acquisition subject.",
+            )
+
+        acquisition_id = int(plan["subjectId"])
+        acquisition = ebook_acquisition_by_id(acquisition_id)
+        if not acquisition:
+            raise AutomaticExecutionBlocked(
+                "SUBJECT_IDENTITY_CHANGED",
+                "The planned acquisition no longer exists.",
+            )
+
+        recovery = classify_acquisition_failure(
+            str(acquisition.get("status") or ""),
+            str(acquisition.get("error") or ""),
+        )
+        if (
+            recovery is None
+            or recovery.reason_code != "ACQUISITION_TRANSIENT_BINDERY_FAILURE"
+            or not recovery.retry_same_operation
+        ):
+            raise AutomaticExecutionBlocked(
+                "RECOVERY_CLASSIFICATION_CHANGED",
+                "The acquisition is no longer classified as a retryable transient failure.",
+            )
+
+        with local_conn() as conn:
+            decisions = _acquisition_decisions(conn, 500)
+            current_decision = next(
+                (
+                    item
+                    for item in decisions
+                    if str(item.get("subjectKind") or "") == "acquisition"
+                    and str(item.get("subjectId") or "") == str(acquisition_id)
+                ),
+                None,
+            )
+            current_plan = _build_plan(conn, current_decision) if current_decision else None
+
+        if not current_plan:
+            raise AutomaticExecutionBlocked(
+                "DECISION_NO_LONGER_AUTHORIZED",
+                "The current decision policy no longer authorizes a recovery plan.",
+            )
+
+        client = BinderyClient()
+        result = result_by_id(int(acquisition["result_id"]))
+        if not result:
+            raise AutomaticExecutionBlocked(
+                "SUBJECT_IDENTITY_CHANGED",
+                "The acquisition's scan result no longer exists.",
+            )
+
+        readiness = acquisition_readiness(client)
+        if not readiness["ready"]:
+            raise AutomaticExecutionBlocked(
+                "ACQUISITION_READINESS_FAILED",
+                "Fresh acquisition readiness failed: " + ", ".join(readiness["blockers"]),
+            )
+
+        _, expected_title, expected_author = _result_and_book(result, client)
+        candidate = _search_candidate(
+            client,
+            int(acquisition["book_id"]),
+            str(acquisition.get("candidate_guid") or ""),
+            expected_title,
+            expected_author,
+        )
+        candidate_same = (
+            str(candidate.get("title") or "").strip()
+            == str(acquisition.get("candidate_title") or "").strip()
+            and (
+                not str(acquisition.get("candidate_protocol") or "").strip()
+                or str(candidate.get("protocol") or "").strip().casefold()
+                == str(acquisition.get("candidate_protocol") or "").strip().casefold()
+            )
+        )
+
+        checks = [
+            {
+                "code": "SUBJECT_IDENTITY_UNCHANGED",
+                "ok": (
+                    str(current_plan.get("subjectId") or "") == str(plan.get("subjectId") or "")
+                    and current_plan.get("resultId") == plan.get("resultId")
+                    and current_plan.get("bookId") == plan.get("bookId")
+                ),
+            },
+            {
+                "code": "PATH_UNCHANGED",
+                "ok": str(current_plan.get("path") or "") == str(plan.get("path") or ""),
+            },
+            {
+                "code": "EVIDENCE_REVISION_UNCHANGED",
+                "ok": str(current_plan.get("evidenceRevision") or "")
+                == str(plan.get("evidenceRevision") or ""),
+            },
+            {
+                "code": "DECISION_STILL_AUTHORIZED",
+                "ok": str(current_plan.get("signature") or "")
+                == str(plan.get("signature") or ""),
+            },
+            {
+                "code": "WORKFLOW_STATE_UNCHANGED",
+                "ok": str(acquisition.get("status") or "").casefold() == "failed",
+            },
+            {
+                "code": "RECOVERY_CLASSIFICATION_UNCHANGED",
+                "ok": recovery.reason_code == str(plan.get("reasonCode") or ""),
+            },
+            {"code": "ACQUISITION_READINESS_CURRENT", "ok": bool(readiness["ready"])},
+            {"code": "CANDIDATE_IDENTITY_UNCHANGED", "ok": candidate_same},
+        ]
+
+        return {
+            "ok": all(check["ok"] for check in checks),
+            "planSignature": str(plan["signature"]),
+            "evidenceRevision": str(plan["evidenceRevision"]),
+            "checks": checks,
+            "acquisitionId": acquisition_id,
+            "candidateGuid": str(acquisition.get("candidate_guid") or ""),
+        }
+
+    def execute(
+        self,
+        plan: dict[str, Any],
+        step: dict[str, Any],
+        boundary: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            result = retry_failed_ebook_acquisition(int(plan["subjectId"]))
+        except AcquisitionSafetyError as exc:
+            raise RuntimeError(str(exc)) from exc
+        acquisition = result.get("acquisition") or {}
+        return {
+            "acquisitionId": int(plan["subjectId"]),
+            "status": str(acquisition.get("status") or ""),
+            "queueId": acquisition.get("queue_id"),
+        }
+
+
+register_automatic_executor("retry_grab_once", _TransientAcquisitionRetryExecutor())
 
 
 def register_automatic_executor(action_code: str, executor: AutomaticExecutor) -> None:
