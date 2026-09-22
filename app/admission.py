@@ -712,6 +712,116 @@ def _verified_staged_source(admission: dict[str, Any]) -> Path:
     return staged_path
 
 
+def admission_reconcile_preview(
+    admission_id: int,
+    client: BinderyClient | None = None,
+) -> dict[str, Any]:
+    """Read-only E4 boundary for one known admission registration transition.
+
+    Automatic reconciliation is intentionally narrower than the manual helper:
+    only a durable scan_requested admission may become live, both the staged
+    source and published destination must still match the verified SHA-256, and
+    Bindery's API/database ownership views must agree before any scan request.
+    """
+    configured = _automation_settings()
+    admission = ebook_admission_by_id(int(admission_id))
+    if not admission:
+        raise AdmissionSafetyError("Admission record not found.")
+
+    status = str(admission.get("status") or "").casefold()
+    expected_book_id = int(admission.get("book_id") or 0)
+    stored_path = str(admission.get("stored_path") or "")
+    staged_sha256 = str(admission.get("staged_sha256") or "")
+
+    result = result_by_id(int(admission.get("result_id") or 0))
+    result_matches = bool(
+        result
+        and int(result.get("book_id") or 0) == expected_book_id
+        and os.path.normpath(str(result.get("stored_path") or ""))
+        == os.path.normpath(stored_path)
+        and str(result.get("local_path") or "")
+        == str(admission.get("local_path") or "")
+    )
+
+    published_path = _verified_published_destination(admission, configured)
+    staged_path = _verified_staged_source(admission)
+
+    client = client or BinderyClient()
+    try:
+        book = client.get_book(expected_book_id)
+        exact_associations = _exact_ebook_associations(stored_path)
+    except (BinderyClientError, sqlite3.Error) as exc:
+        raise AdmissionSafetyError(
+            f"Bindery registration ownership could not be verified: {exc}"
+        ) from exc
+
+    api_registered = any(
+        str(item.get("format") or "").casefold() == "ebook"
+        and os.path.normpath(str(item.get("path") or ""))
+        == os.path.normpath(stored_path)
+        for item in (book.get("bookFiles") or [])
+        if isinstance(item, dict)
+    )
+    exact_target = [
+        item
+        for item in exact_associations
+        if int(item.get("book_id") or 0) == expected_book_id
+    ]
+    exact_foreign = [
+        item
+        for item in exact_associations
+        if int(item.get("book_id") or 0) != expected_book_id
+    ]
+
+    if api_registered and len(exact_associations) == 1 and len(exact_target) == 1:
+        registration_state = "registered"
+        ownership_consistent = True
+    elif not api_registered and len(exact_associations) == 0:
+        registration_state = "scan_required"
+        ownership_consistent = True
+    elif exact_foreign:
+        registration_state = "conflict"
+        ownership_consistent = False
+    else:
+        registration_state = "inconsistent"
+        ownership_consistent = False
+
+    checks = {
+        "actionsEnabled": settings.allow_actions,
+        "admissionEnabled": configured.admission_enabled,
+        "workflowStateScanRequested": status == "scan_requested",
+        "verifiedSnapshotPresent": bool(staged_sha256),
+        "resultIdentityUnchanged": result_matches,
+        "publishedBytesCurrent": published_path.is_file(),
+        "stagedBytesCurrent": staged_path.is_file(),
+        "binderyOwnershipConsistent": ownership_consistent,
+    }
+    blockers = [name for name, passed in checks.items() if not passed]
+
+    return {
+        "safe": not blockers,
+        "checks": checks,
+        "blockers": blockers,
+        "admissionId": int(admission["id"]),
+        "resultId": int(admission["result_id"]),
+        "bookId": expected_book_id,
+        "status": status,
+        "registrationState": registration_state,
+        "storedPath": stored_path,
+        "localPath": str(admission.get("local_path") or ""),
+        "stagedRelativePath": str(admission.get("staged_relative_path") or ""),
+        "stagedSha256": staged_sha256,
+        "publishedPath": str(published_path),
+        "stagedPath": str(staged_path),
+        "exactAssociations": exact_associations,
+        "reason": (
+            "Known admission registration transition is current and safe to reconcile."
+            if not blockers
+            else "Admission reconciliation boundary failed: " + ", ".join(blockers)
+        ),
+    }
+
+
 def reconcile_admission(
     admission_id: int,
     client: BinderyClient | None = None,
