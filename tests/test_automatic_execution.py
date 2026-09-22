@@ -198,3 +198,107 @@ def test_registered_executor_revalidates_before_mutation(monkeypatch):
     assert result["ok"] is True
     assert result["replayed"] is False
     assert result["plan"]["currentStep"] == 1
+
+
+def test_automatic_cycle_schedules_first_bounded_retry_without_external_work(monkeypatch):
+    plan = {
+        "id": 11,
+        "planKind": "RETRY_ACQUISITION_TRANSIENT",
+        "state": "planned",
+        "currentStep": 0,
+        "steps": [{"code": "wait_bounded_backoff", "externalMutation": False}],
+    }
+    scheduled = {**plan, "state": "retry_wait", "retryCount": 1}
+
+    monkeypatch.setattr(
+        execution,
+        "load_automation_settings",
+        lambda: _configured(mode="automatic", allowlist=("retry_grab_once",)),
+    )
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(
+        execution,
+        "recovery_plan_snapshot",
+        lambda limit: {"items": [plan]},
+    )
+    monkeypatch.setattr(
+        execution,
+        "schedule_recovery_retry",
+        lambda plan_id, message: scheduled,
+    )
+    monkeypatch.setattr(
+        execution,
+        "attempt_automatic_step",
+        lambda plan_id: (_ for _ in ()).throw(AssertionError("external step ran")),
+    )
+
+    result = execution.run_automatic_cycle()
+
+    assert result["state"] == "retry_wait"
+    assert result["externalMutationAttempted"] is False
+    assert result["plan"]["retryCount"] == 1
+
+
+def test_automatic_cycle_advances_proven_read_only_steps_before_retry(monkeypatch):
+    plan0 = {
+        "id": 12,
+        "signature": "sig",
+        "evidenceRevision": "rev",
+        "planKind": "RETRY_ACQUISITION_TRANSIENT",
+        "state": "ready",
+        "currentStep": 0,
+        "steps": [
+            {"code": "wait_bounded_backoff", "externalMutation": False},
+            {"code": "revalidate_acquisition_readiness", "externalMutation": False},
+            {"code": "retry_grab_once", "externalMutation": True},
+        ],
+    }
+    plan1 = {**plan0, "currentStep": 1}
+    plan2 = {**plan0, "currentStep": 2}
+    calls = []
+
+    class Executor:
+        def revalidate(self, plan, step):
+            calls.append(("revalidate", plan["currentStep"], step["code"]))
+            return {
+                "ok": True,
+                "planSignature": "sig",
+                "evidenceRevision": "rev",
+                "checks": [{"code": "CURRENT", "ok": True}],
+            }
+
+    monkeypatch.setattr(
+        execution,
+        "load_automation_settings",
+        lambda: _configured(mode="automatic", allowlist=("retry_grab_once",)),
+    )
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(
+        execution,
+        "recovery_plan_snapshot",
+        lambda limit: {"items": [plan0]},
+    )
+
+    def advance(plan_id, step_index):
+        calls.append(("advance", step_index))
+        return plan1 if step_index == 0 else plan2
+
+    monkeypatch.setattr(execution, "record_recovery_step_success", advance)
+    monkeypatch.setattr(execution, "_EXECUTORS", {"retry_grab_once": Executor()})
+    monkeypatch.setattr(
+        execution,
+        "attempt_automatic_step",
+        lambda plan_id: calls.append(("execute", plan_id))
+        or {"ok": True, "replayed": False},
+    )
+
+    result = execution.run_automatic_cycle()
+
+    assert calls == [
+        ("advance", 0),
+        ("revalidate", 1, "revalidate_acquisition_readiness"),
+        ("advance", 1),
+        ("execute", 12),
+    ]
+    assert result["state"] == "executed"
+    assert result["externalMutationAttempted"] is True
