@@ -281,7 +281,9 @@ def init_local_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 completed_at TEXT,
-                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id)
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id),
+                UNIQUE(plan_signature, action_code, step_index)
             );
 
             CREATE INDEX IF NOT EXISTS idx_automatic_executions_plan
