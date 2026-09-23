@@ -91,8 +91,10 @@ def test_execute_passes_exact_queue_and_fingerprint_to_guarded_primitive(monkeyp
     boundary = progress.EXECUTOR.revalidate(_plan(), _plan()["steps"][1])
     calls = []
 
-    def reconcile(acquisition_id, *, expected_queue_id, expected_staged_fingerprint):
-        calls.append((acquisition_id, expected_queue_id, expected_staged_fingerprint))
+    def reconcile(acquisition_id, *, expected_queue_id, expected_staged_fingerprint,
+                  expected_status):
+        calls.append((acquisition_id, expected_queue_id, expected_staged_fingerprint,
+                      expected_status))
         return {"ok": True, "acquisition": {
             **acquisition, "status": "staging_observed",
             "observed_relative_path": "book.epub",
@@ -101,7 +103,7 @@ def test_execute_passes_exact_queue_and_fingerprint_to_guarded_primitive(monkeyp
 
     monkeypatch.setattr(progress, "reconcile_ebook_acquisition", reconcile)
     response = progress.EXECUTOR.execute(_plan(), _plan()["steps"][1], boundary)
-    assert calls == [(4, 23, ("book.epub", 100, 123))]
+    assert calls == [(4, 23, ("book.epub", 100, 123), "queued")]
     assert response["admissionAttempted"] is False
 
 
@@ -127,7 +129,7 @@ def test_unproven_interrupted_progress_does_not_replay(monkeypatch):
         progress.EXECUTOR.reconcile_uncertain(
             _plan(), _plan()["steps"][1],
             {"boundary": {"queueId": 23, "fingerprint": ["book.epub", 100, 123],
-                          "stagedSha256": "a" * 64}},
+                          "stagedSha256": "a" * 64, "beforeStatus": "queued"}},
         )
     assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
 
@@ -139,7 +141,20 @@ def test_proven_interrupted_observation_can_be_adopted(monkeypatch):
     result = progress.EXECUTOR.reconcile_uncertain(
         _plan(), _plan()["steps"][1],
         {"boundary": {"queueId": 23, "fingerprint": ["book.epub", 100, 123],
-                      "stagedSha256": "a" * 64}},
+                      "stagedSha256": "a" * 64, "beforeStatus": "queued"}},
     )
     assert result["reconciledAfterRestart"] is True
     assert result["externalMutationPerformed"] is False
+
+
+def test_interrupted_verification_cannot_adopt_unchanged_observation(monkeypatch):
+    acquisition = _fixture(monkeypatch)
+    acquisition.update(status="staging_observed", observed_relative_path="book.epub",
+                       observed_size=100, observed_modified_ns=123)
+    with pytest.raises(progress.core.AutomaticExecutionBlocked) as exc:
+        progress.EXECUTOR.reconcile_uncertain(
+            _plan(), _plan()["steps"][1],
+            {"boundary": {"queueId": 23, "fingerprint": ["book.epub", 100, 123],
+                          "stagedSha256": "a" * 64, "beforeStatus": "staging_observed"}},
+        )
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"

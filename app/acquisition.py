@@ -584,6 +584,7 @@ def reconcile_ebook_acquisition(
     *,
     expected_queue_id: int | str | None = None,
     expected_staged_fingerprint: tuple[str, int, int] | None = None,
+    expected_status: str | None = None,
 ) -> dict[str, Any]:
     """Correlate one queue record with exactly one independently verified file."""
     client = client or BinderyClient()
@@ -591,6 +592,8 @@ def reconcile_ebook_acquisition(
         acquisition = ebook_acquisition_by_id(acquisition_id)
         if not acquisition:
             raise AcquisitionSafetyError("Acquisition record not found.")
+        if expected_status is not None and acquisition.get("status") != expected_status:
+            raise AcquisitionSafetyError("The durable acquisition status changed.")
         if expected_queue_id is not None and (
             str(acquisition.get("queue_id") or "") != str(expected_queue_id)
         ):

@@ -143,6 +143,7 @@ class _KnownAcquisitionProgressExecutor:
             int(plan["subjectId"]),
             expected_queue_id=boundary["queueId"],
             expected_staged_fingerprint=tuple(boundary["fingerprint"]),
+            expected_status=boundary["beforeStatus"],
         )
         updated = response.get("acquisition") or {}
         _, staged_path = resolve_staged_file(boundary["fingerprint"][0])
@@ -181,6 +182,7 @@ class _KnownAcquisitionProgressExecutor:
         boundary = existing.get("boundary") or {}
         acquisition = ebook_acquisition_by_id(int(plan["subjectId"])) or {}
         fingerprint = boundary.get("fingerprint")
+        before_status = str(boundary.get("beforeStatus") or "")
         if not fingerprint or acquisition.get("queue_id") != boundary.get("queueId"):
             raise core.AutomaticExecutionBlocked(
                 "UNCERTAIN_EXTERNAL_OUTCOME", "Interrupted queue identity is unproven."
@@ -197,13 +199,14 @@ class _KnownAcquisitionProgressExecutor:
             _, path = resolve_staged_file(fingerprint[0])
             if sha256_file(path) != boundary.get("stagedSha256"):
                 raise ValueError("Staged bytes changed after interruption.")
-            if acquisition.get("status") == "staging_observed":
+            if (acquisition.get("status") == "staging_observed"
+                    and before_status in {"queued", "downloading", "awaiting_staging"}):
                 proven = (
                     acquisition.get("observed_relative_path") == fingerprint[0]
                     and acquisition.get("observed_size") == fingerprint[1]
                     and acquisition.get("observed_modified_ns") == fingerprint[2]
                 )
-            elif acquisition.get("status") == "verified":
+            elif acquisition.get("status") == "verified" and before_status in self._statuses:
                 proven = (
                     acquisition.get("staged_relative_path") == fingerprint[0]
                     and bool(acquisition.get("staged_sha256"))
