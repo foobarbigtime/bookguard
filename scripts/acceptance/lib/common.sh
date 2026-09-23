@@ -231,8 +231,16 @@ bg_build_image() {
     return 1
   fi
   image=${BOOKGUARD_ACCEPTANCE_IMAGE:-bookguard:acceptance-${short_head}}
-  bg_header "BUILD ${image}"
-  docker build --tag "${image}" "${BG_ACCEPTANCE_REPO_ROOT}"
+
+  # Callers intentionally capture this function with command substitution. Keep stdout
+  # machine-readable: emit only the final image reference there. Human build progress
+  # belongs on stderr so it can never corrupt a later `docker run "${image}"` argument.
+  bg_header "BUILD ${image}" >&2
+  if ! docker build --tag "${image}" "${BG_ACCEPTANCE_REPO_ROOT}" >&2; then
+    bg_die "Docker image build failed: ${image}"
+    return 1
+  fi
+
   export BG_ACCEPTANCE_IMAGE_RESOLVED="${image}"
   printf '%s\n' "${image}"
 }
