@@ -17,6 +17,7 @@ _PLAN_DECISIONS = {
     "would_repair_metadata",
     "would_reconcile_acquisition",
     "would_reconcile_admission",
+    "would_correct_registration_conflict",
     "would_finalize_acquisition",
     "would_recover_acquisition_failure",
     "would_recover_admission_failure",
@@ -408,6 +409,30 @@ def _definition(
                     "reconcile_known_admission",
                     "Resume only the existing guarded admission/reconciliation transition.",
                     external_mutation=True,
+                    stop_if_unproven=True,
+                ),
+            ],
+        )
+
+    if action == "would_correct_registration_conflict":
+        return (
+            "CORRECT_REGISTRATION_CONFLICT",
+            str(decision.get("reasonCode") or "REGISTRATION_CONFLICT"),
+            [
+                _step(
+                    "revalidate_registration_conflict",
+                    "Re-read the durable admission, exact published/staged byte identity, current Bindery owner, queue state, import mode, and intended book identity.",
+                    stop_if_unproven=True,
+                ),
+                _step(
+                    "correct_exact_registration_owner",
+                    "Run only the existing guarded no-move correction transaction: preserve library/staged bytes, never remove download-client data, and restore external import mode after exact ownership reassignment.",
+                    external_mutation=True,
+                    stop_if_unproven=True,
+                ),
+                _step(
+                    "verify_registration_correction",
+                    "Independently prove the exact path belongs only to the intended book, external import mode is restored, auto-grab remains disabled, and both byte copies still match the verified SHA-256.",
                     stop_if_unproven=True,
                 ),
             ],
