@@ -26,6 +26,7 @@ scenario_run() {
   export BOOKGUARD_ACCEPTANCE_ROOT="${SELFTEST_TEMP}/bookguard-acceptance"
 
   local root scenario_root fixture original_hash actual_head safe_name
+  local fake_bin captured_image
   root=$(bg_prepare_acceptance_root)
   [[ -f "${root}/.bookguard-acceptance-root" ]] || bg_die "Acceptance root marker was not created."
 
@@ -78,6 +79,25 @@ scenario_run() {
     "bookguard-acceptance-finalization-crash-bookguard" \
     "${safe_name}" \
     "sanitized Docker name"
+
+  bg_header "VERIFY IMAGE BUILD OUTPUT CONTRACT"
+  fake_bin="${SELFTEST_TEMP}/fake-bin"
+  mkdir -p -- "${fake_bin}"
+  cat > "${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "simulated docker build progress"
+exit 0
+EOF
+  chmod +x "${fake_bin}/docker"
+  captured_image=$(
+    export PATH="${fake_bin}:${PATH}"
+    export BOOKGUARD_ACCEPTANCE_IMAGE="bookguard:acceptance-selftest"
+    bg_build_image
+  )
+  bg_assert_eq \
+    "bookguard:acceptance-selftest" \
+    "${captured_image}" \
+    "captured image reference"
 
   bg_note "All harness self-tests passed."
 }
