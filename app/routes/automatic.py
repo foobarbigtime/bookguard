@@ -22,7 +22,7 @@ from ..admission import (
     reconcile_admission,
 )
 from ..automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
-from ..automatic_execution import (
+from ..automatic_runner import (
     AutomaticExecutionBlocked,
     automatic_execution_history,
     execution_policy_snapshot,
