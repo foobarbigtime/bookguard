@@ -12,6 +12,8 @@ The goal is **less manual setup, not less testing**.
 ```bash
 scripts/acceptance/run --list
 scripts/acceptance/run selftest
+BOOKGUARD_ACCEPTANCE_EXPECTED_SHA=<reviewed-full-sha> \
+  scripts/acceptance/run acquisition-progress
 ```
 
 For a mutation PR, pin the exact commit that was reviewed/built:
@@ -100,8 +102,9 @@ run explicitly as acceptance evidence. As reusable fake services mature, determi
 parts of those scenarios can be promoted into CI without removing the local acceptance
 pass.
 
-## Direction
+## Known acquisition progression
 
-The next scenario to build on this harness is guarded acquisition finalization/cleanup.
-Once that scenario exists, the intended operator workflow is one command plus the captured
-output rather than manually reconstructing fixtures and recovery state for every case.
+The `acquisition-progress` scenario uses disposable BookGuard data and a read-only fake
+Bindery API. It checks Observe planning, empty-allowlist refusal, staged observation,
+independent verification on a second plan, unchanged staged bytes, absence of library
+publication, and an idle post-verification replay. It never calls a Bindery mutation route.
