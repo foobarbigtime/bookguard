@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from . import automatic_execution as core
+from .acquisition_progress import (
+    register_executor as register_acquisition_progress_executor,
+    run_acquisition_progress_cycle,
+)
 from .acquisition import AcquisitionSafetyError, finalize_ebook_acquisition
 from .config import load_automation_settings
 from .db import ebook_acquisition_by_id, local_conn
@@ -18,6 +22,7 @@ from .registration_correction import (
 AutomaticExecutionBlocked = core.AutomaticExecutionBlocked
 automatic_execution_history = core.automatic_execution_history
 register_registration_conflict_executor()
+register_acquisition_progress_executor()
 
 
 class _FinalizationCleanupExecutor:
@@ -402,6 +407,7 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
                 "QUARANTINE_UNSAFE_MEDIA",
                 "CORRECT_REGISTRATION_CONFLICT",
                 "FINALIZE_ACQUISITION",
+                "RECONCILE_ACQUISITION",
             }
             or (
                 item.get("planKind") == "RECONCILE_ADMISSION"
@@ -416,4 +422,6 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         return run_registration_conflict_cycle(candidates[0])
     if candidates and str(candidates[0].get("planKind") or "") == "FINALIZE_ACQUISITION":
         return _run_finalization_cycle(candidates[0])
+    if candidates and str(candidates[0].get("planKind") or "") == "RECONCILE_ACQUISITION":
+        return run_acquisition_progress_cycle(candidates[0])
     return core.run_automatic_cycle(limit)
