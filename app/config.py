@@ -35,6 +35,7 @@ AUTOMATIC_ACTION_CODES = frozenset({
     "apply_metadata_repair",
     "resume_known_transition",
     "reconcile_known_admission",
+    "correct_exact_registration_owner",
     "finish_guarded_cleanup",
     "request_alternate_grab",
     "reconcile_download_and_staging",
