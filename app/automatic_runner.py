@@ -9,10 +9,15 @@ from .db import ebook_acquisition_by_id, local_conn
 from .finalization import finalization_preview
 from .observe import _acquisition_decisions
 from .recovery_planner import _build_plan
+from .registration_correction import (
+    register_executor as register_registration_conflict_executor,
+    run_registration_conflict_cycle,
+)
 
 
 AutomaticExecutionBlocked = core.AutomaticExecutionBlocked
 automatic_execution_history = core.automatic_execution_history
+register_registration_conflict_executor()
 
 
 class _FinalizationCleanupExecutor:
@@ -395,6 +400,7 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             in {
                 "RETRY_ACQUISITION_TRANSIENT",
                 "QUARANTINE_UNSAFE_MEDIA",
+                "CORRECT_REGISTRATION_CONFLICT",
                 "FINALIZE_ACQUISITION",
             }
             or (
@@ -406,6 +412,8 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
     ]
     candidates.sort(key=lambda item: int(item["id"]))
 
+    if candidates and str(candidates[0].get("planKind") or "") == "CORRECT_REGISTRATION_CONFLICT":
+        return run_registration_conflict_cycle(candidates[0])
     if candidates and str(candidates[0].get("planKind") or "") == "FINALIZE_ACQUISITION":
         return _run_finalization_cycle(candidates[0])
     return core.run_automatic_cycle(limit)
