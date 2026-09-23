@@ -105,8 +105,8 @@ scenario_run() {
     -v "${SCENARIO_ROOT}/config:/config:rw" \
     -v "${SCENARIO_ROOT}/staging:/staging:rw" \
     -v "${SCENARIO_ROOT}/books:/books:rw" \
-    -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_finalization_fixture.py:/seed.py:ro" \
-    "${SCENARIO_IMAGE}" python /seed.py)
+    -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_finalization_fixture.py:/app/seed_finalization_fixture.py:ro" \
+    "${SCENARIO_IMAGE}" python /app/seed_finalization_fixture.py)
   bg_note "${seed_output}"
 
   fixture_hash=$(bg_sha256 "${SCENARIO_ROOT}/books/BookGuard Test/Finalization Fixture.epub")
