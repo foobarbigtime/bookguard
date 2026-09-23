@@ -160,8 +160,8 @@ JSON
     "${SCENARIO_ROOT}/staging/BookGuard Test/Finalization Fixture.epub" \
     "${fixture_hash}" \
     "staging after blocked cycle"
-  state_json=$(cat "${SCENARIO_ROOT}/bindery-state/state.json")
-  bg_assert_contains "${state_json}" '"deleteAttempts": 0' "fake Bindery mutation count"
+  state_json=$(tr -d '[:space:]' < "${SCENARIO_ROOT}/bindery-state/state.json")
+  bg_assert_contains "${state_json}" '"deleteAttempts":0' "fake Bindery mutation count"
   bg_remove_container "${SCENARIO_APP}"
 
   bg_header "AUTOMATIC: EXACT ALLOWLIST PERFORMS GUARDED CLEANUP"
@@ -182,20 +182,20 @@ JSON
     "${fixture_hash}" \
     "library bytes after finalization"
 
-  state_json=$(cat "${SCENARIO_ROOT}/bindery-state/state.json")
-  bg_assert_contains "${state_json}" '"deleteAttempts": 1' "fake Bindery delete attempts"
-  bg_assert_contains "${state_json}" '"deleteSuccesses": 1' "fake Bindery successful deletes"
-  bg_assert_contains "${state_json}" '"lastRemoveFromClient": "false"' "download-client preservation flag"
-  bg_assert_contains "${state_json}" '"lastDeleteFiles": "false"' "downloaded-data preservation flag"
-  bg_assert_contains "${state_json}" '"queue": []' "terminal queue removal"
+  state_json=$(tr -d '[:space:]' < "${SCENARIO_ROOT}/bindery-state/state.json")
+  bg_assert_contains "${state_json}" '"deleteAttempts":1' "fake Bindery delete attempts"
+  bg_assert_contains "${state_json}" '"deleteSuccesses":1' "fake Bindery successful deletes"
+  bg_assert_contains "${state_json}" '"lastRemoveFromClient":"false"' "download-client preservation flag"
+  bg_assert_contains "${state_json}" '"lastDeleteFiles":"false"' "downloaded-data preservation flag"
+  bg_assert_contains "${state_json}" '"queue":[]' "terminal queue removal"
 
   bg_header "REPLAY: COMPLETED PLAN IS IDEMPOTENT"
   replay_body="${SCENARIO_ROOT}/replay.json"
   replay_status=$(post_cycle "${replay_body}")
   bg_assert_eq "200" "${replay_status}" "post-finalization cycle HTTP status"
   bg_assert_contains "$(cat "${replay_body}")" '"state":"idle"' "post-finalization idle response"
-  state_json=$(cat "${SCENARIO_ROOT}/bindery-state/state.json")
-  bg_assert_contains "${state_json}" '"deleteAttempts": 1' "no duplicate queue cleanup"
+  state_json=$(tr -d '[:space:]' < "${SCENARIO_ROOT}/bindery-state/state.json")
+  bg_assert_contains "${state_json}" '"deleteAttempts":1' "no duplicate queue cleanup"
   bg_assert_hash \
     "${SCENARIO_ROOT}/books/BookGuard Test/Finalization Fixture.epub" \
     "${fixture_hash}" \
