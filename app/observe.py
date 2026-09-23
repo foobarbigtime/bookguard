@@ -579,6 +579,24 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 ),
                 evidence=evidence,
             ))
+        elif status == "registration_conflict":
+            decisions.append(_decision(
+                **common,
+                state=status,
+                decision="would_correct_registration_conflict",
+                reason_code="REGISTRATION_CONFLICT",
+                reason=(
+                    "Bindery assigns the admitted ebook's exact published path to a "
+                    "different book, while BookGuard retains the intended admission "
+                    "identity and staged snapshot."
+                ),
+                next_step=(
+                    "Observe Mode records the guarded exact-path ownership correction "
+                    "plan only. It does not remove a queue record, change Bindery import "
+                    "mode, reassign ownership, or alter library/staged bytes."
+                ),
+                evidence=evidence,
+            ))
         else:
             recovery = classify_admission_failure(
                 status,
