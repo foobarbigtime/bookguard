@@ -42,6 +42,45 @@ def test_scan_requires_completed_exact_publication(monkeypatch):
         registration._published_receipt(_plan())
 
 
+def test_published_boundary_accepts_durable_string_subject_id(tmp_path, monkeypatch):
+    plan = {**_plan(), "subjectId": "9"}
+    proof = {
+        "destinationParent": str(tmp_path), "parentDevice": tmp_path.stat().st_dev,
+        "parentInode": tmp_path.stat().st_ino, "stagedSha256": "a" * 64,
+    }
+    admission = {
+        "id": 9, "result_id": 4, "book_id": 101, "stored_path": plan["path"],
+        "local_path": str(tmp_path / "Fixture.epub"), "status": "published",
+        "staged_sha256": "a" * 64, "publication_method": "renameat2",
+        "verification": {"safeToAdmit": True, "sha256": "a" * 64},
+    }
+    result = {"id": 4, "book_id": 101, "stored_path": plan["path"],
+              "local_path": admission["local_path"]}
+    monkeypatch.setattr(registration, "_proven_receipt", lambda plan: proof)
+    monkeypatch.setattr(registration, "_published_receipt", lambda plan: {
+        "boundary": proof, "externalResult": {"publicationMethod": "renameat2"}
+    })
+    monkeypatch.setattr(registration, "ebook_admission_by_id", lambda admission_id: admission)
+    monkeypatch.setattr(registration, "result_by_id", lambda result_id: result)
+    monkeypatch.setattr(registration, "admission_readiness", lambda client: {"ready": True})
+    monkeypatch.setattr(registration, "admission_reconcile_preview", lambda admission_id, client: {
+        "publishedPath": str(tmp_path / "Fixture.epub"), "stagedSha256": "a" * 64,
+        "registrationState": "scan_required",
+        "checks": {
+            "publishedBytesCurrent": True, "stagedBytesCurrent": True,
+            "resultIdentityUnchanged": True, "binderyOwnershipConsistent": True,
+        },
+    })
+    monkeypatch.setattr(registration, "_result_matches_book", lambda result, book: True)
+    monkeypatch.setattr(registration, "_book_has_ebook", lambda book: False)
+    monkeypatch.setattr(registration, "BinderyClient", lambda: type("Client", (), {
+        "get_book": lambda self, book_id: {"id": book_id}
+    })())
+    boundary = registration._EXECUTOR.revalidate(plan, plan["steps"][5])
+    assert boundary["ok"] is True
+    assert all(item["ok"] for item in boundary["checks"])
+
+
 def test_exact_scan_request_is_single_and_stops_after_durable_transition(monkeypatch):
     calls = []
     executor = registration._KnownPublicationRegistrationExecutor()

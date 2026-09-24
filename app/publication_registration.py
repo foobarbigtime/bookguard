@@ -103,7 +103,7 @@ class _KnownPublicationRegistrationExecutor:
             verification = {}
         evidence = [
             {"code": "SUBJECT_IDENTITY_UNCHANGED", "ok": all((
-                admission.get("id") == plan.get("subjectId"),
+                str(admission.get("id") or "") == str(plan.get("subjectId") or ""),
                 admission.get("result_id") == plan.get("resultId"),
                 admission.get("book_id") == plan.get("bookId"),
                 result.get("id") == plan.get("resultId"),
