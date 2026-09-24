@@ -12,6 +12,7 @@ import app.ebook_extraction as ebook_extraction
 from app.db import (
     ebook_admission_by_id,
     init_local_db,
+    local_conn,
     recent_ebook_admissions,
     update_ebook_admission,
 )
@@ -354,8 +355,100 @@ def test_scan_failure_keeps_verified_library_copy_for_recovery(admission_setup):
     assert response["binderyScan"] == "request_failed"
     assert (setup["admission_root"] / setup["relative"]).is_file()
     record = ebook_admission_by_id(response["admissionId"])
-    assert record["status"] == "published"
+    assert response["status"] == "scan_request_failed"
+    assert record["status"] == "scan_request_failed"
     assert "unavailable" in record["error"]
+
+
+def test_uncertain_scan_adopts_only_independently_proven_owner(
+    admission_setup, monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    client.scan_error = admission.BinderyClientError("Bindery unavailable")
+    response = admission.admit_staged_ebook(
+        setup["result"], setup["staged"].name, client,
+    )
+    scans = client.scan_requests
+    staged_hash = hashlib.sha256(setup["staged"].read_bytes()).hexdigest()
+    published = setup["admission_root"] / setup["relative"]
+
+    with pytest.raises(admission.AdmissionSafetyError, match="another scan is refused"):
+        admission.reconcile_admission(
+            response["admissionId"], client, allow_scan=False,
+        )
+    assert client.scan_requests == scans
+    assert hashlib.sha256(published.read_bytes()).hexdigest() == staged_hash
+
+    client.registered_path = setup["result"]["stored_path"]
+    monkeypatch.setattr(admission, "associations_inside_path",
+                        lambda stored_path: [])
+    with pytest.raises(admission.AdmissionSafetyError, match="independently proven"):
+        admission.reconcile_admission(
+            response["admissionId"], client, allow_scan=False,
+        )
+    assert client.scan_requests == scans
+
+    monkeypatch.setattr(admission, "associations_inside_path",
+                        lambda stored_path: [{
+                            "file_id": 91, "book_id": 42, "format": "ebook",
+                            "stored_path": stored_path,
+                        }])
+    outcome = admission.reconcile_admission(
+        response["admissionId"], client, allow_scan=False,
+    )
+    assert outcome["status"] == "registered"
+    assert client.scan_requests == scans
+    assert hashlib.sha256(published.read_bytes()).hexdigest() == staged_hash
+
+
+def test_scan_failure_has_separate_proof_only_recovery_plan(admission_setup):
+    from app.observe import _admission_decisions
+    from app.recovery_planner import _build_plan
+
+    setup = admission_setup
+    client = FakeClient()
+    client.scan_error = admission.BinderyClientError("Bindery unavailable")
+    response = admission.admit_staged_ebook(
+        setup["result"], setup["staged"].name, client,
+    )
+    with local_conn() as conn:
+        decision = next(item for item in _admission_decisions(conn, 100)
+                        if item["subjectId"] == str(response["admissionId"]))
+        plan = _build_plan(conn, decision)
+
+    assert decision["reasonCode"] == "REGISTRATION_SCAN_OUTCOME_UNKNOWN"
+    assert plan["planKind"] == "RECONCILE_ADMISSION"
+    assert plan["steps"][1]["code"] == "reconcile_known_admission"
+
+
+def test_failed_scan_preview_requires_exact_registration_proof(
+    admission_setup, monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    client.scan_error = admission.BinderyClientError("Bindery unavailable")
+    response = admission.admit_staged_ebook(
+        setup["result"], setup["staged"].name, client,
+    )
+    monkeypatch.setattr(admission, "result_by_id",
+                        lambda _: dict(setup["result"]))
+    monkeypatch.setattr(admission, "associations_inside_path",
+                        lambda _: [])
+    preview = admission.admission_reconcile_preview(response["admissionId"], client)
+    assert preview["safe"] is True
+    assert preview["scanRequestFailureProven"] is True
+    assert preview["registrationState"] == "scan_required"
+
+    client.registered_path = setup["result"]["stored_path"]
+    monkeypatch.setattr(admission, "associations_inside_path",
+                        lambda stored_path: [{
+                            "file_id": 91, "book_id": 42, "format": "ebook",
+                            "stored_path": stored_path,
+                        }])
+    preview = admission.admission_reconcile_preview(response["admissionId"], client)
+    assert preview["safe"] is True
+    assert preview["registrationState"] == "registered"
 
 
 def test_reconcile_confirms_exact_bindery_path(admission_setup):
