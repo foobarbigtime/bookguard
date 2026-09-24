@@ -766,6 +766,7 @@ app/staging.py              Read-only staged-byte verification
 app/admission.py            Atomic direct-admission transaction and recovery
 app/acquisition.py          One-at-a-time Bindery queue-to-staging workflow
 app/acquisition_coordinator.py Restart-safe supervised workflow advancement
+app/acquisition_progress.py Supervised known-queue staging progression
 app/observe.py              Non-mutating automation decision journal and policy
 app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery

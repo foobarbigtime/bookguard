@@ -101,7 +101,9 @@ def _queue_payload(
         raise AcquisitionSafetyError(str(exc)) from exc
 
     if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)], False
+        if not all(isinstance(item, dict) for item in payload):
+            raise AcquisitionSafetyError("Bindery queue contained an unrecognized record.")
+        return payload, False
     if not isinstance(payload, dict):
         raise AcquisitionSafetyError("Bindery returned an invalid queue response.")
 
@@ -579,6 +581,10 @@ def _mark_review_required(
 def reconcile_ebook_acquisition(
     acquisition_id: int,
     client: BinderyClient | None = None,
+    *,
+    expected_queue_id: int | str | None = None,
+    expected_staged_fingerprint: tuple[str, int, int] | None = None,
+    expected_status: str | None = None,
 ) -> dict[str, Any]:
     """Correlate one queue record with exactly one independently verified file."""
     client = client or BinderyClient()
@@ -586,6 +592,12 @@ def reconcile_ebook_acquisition(
         acquisition = ebook_acquisition_by_id(acquisition_id)
         if not acquisition:
             raise AcquisitionSafetyError("Acquisition record not found.")
+        if expected_status is not None and acquisition.get("status") != expected_status:
+            raise AcquisitionSafetyError("The durable acquisition status changed.")
+        if expected_queue_id is not None and (
+            str(acquisition.get("queue_id") or "") != str(expected_queue_id)
+        ):
+            raise AcquisitionSafetyError("The durable queue identity changed.")
         status = str(acquisition.get("status") or "")
         if status not in _RECONCILABLE_STATUSES:
             raise AcquisitionSafetyError(
@@ -625,6 +637,13 @@ def reconcile_ebook_acquisition(
                 "Staging inventory was truncated; file attribution is ambiguous.",
             )
             return {"ok": False, "acquisition": record}
+        if expected_staged_fingerprint is not None:
+            actual = [
+                (str(item["relativePath"]), int(item["size"]), int(item["modifiedNs"]))
+                for item in inventory["items"]
+            ]
+            if actual != [expected_staged_fingerprint]:
+                raise AcquisitionSafetyError("The staged file fingerprint changed.")
 
         result = result_by_id(int(acquisition["result_id"]))
         if not result:
@@ -636,6 +655,29 @@ def reconcile_ebook_acquisition(
             raise AcquisitionSafetyError(
                 "Bindery returned a partial queue response; reconciliation stopped."
             )
+        if expected_queue_id is not None:
+            exact = [
+                item for item in queue_items
+                if str(item.get("id") or "") == str(expected_queue_id)
+            ]
+            if len(exact) != 1 or (
+                str(exact[0].get("bookId") or "")
+                != str(acquisition["book_id"])
+            ) or (
+                str(exact[0].get("title") or "").strip().casefold()
+                != str(acquisition.get("candidate_title") or "").strip().casefold()
+            ) or (
+                str(exact[0].get("protocol") or "").strip().casefold()
+                != str(acquisition.get("candidate_protocol") or "").strip().casefold()
+            ) or _queue_status(exact[0]) not in _AWAITING_STAGING_QUEUE_STATUSES:
+                raise AcquisitionSafetyError("The exact queue handoff is no longer proven.")
+            competing = [
+                item for item in _active_or_unknown_queue_items(queue_items)
+                if str(item.get("bookId") or "") == str(acquisition["book_id"])
+                and str(item.get("id") or "") != str(expected_queue_id)
+            ]
+            if competing:
+                raise AcquisitionSafetyError("Another active queue item shares this book.")
         matches = _matching_queue_items(acquisition, queue_items)
         if len(matches) > 1:
             record = _mark_review_required(
