@@ -188,6 +188,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/v1/library/scan":
+            state = load_state()
+            state["scanAttempts"] = int(state.get("scanAttempts", 0)) + 1
+            save_state(state)
+            self.send_json(409, {"error": "disposable acceptance forbids scanning"})
+            return
         if parsed.path != "/api/v1/queue/manual-import/reassign":
             self.send_json(404, {"error": "not found"})
             return

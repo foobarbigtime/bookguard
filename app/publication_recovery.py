@@ -191,10 +191,12 @@ class _GuardedPublicationExecutor:
             if not admission or not result or (
                 admission.get("result_id"), admission.get("book_id"),
                 admission.get("stored_path"), admission.get("local_path"),
-                admission.get("staged_sha256")
+                admission.get("staged_sha256"), result.get("id"),
+                result.get("book_id"), result.get("stored_path"),
             ) != (
                 plan["resultId"], plan["bookId"], plan["path"],
-                result.get("local_path"), proof.get("stagedSha256")
+                result.get("local_path"), proof.get("stagedSha256"),
+                plan["resultId"], plan["bookId"], plan["path"],
             ):
                 raise AdmissionSafetyError("Interrupted admission identity changed.")
             if admission.get("status") not in {"failed", "published"}:
