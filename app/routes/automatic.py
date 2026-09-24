@@ -14,6 +14,10 @@ from ..acquisition import (
 )
 from ..acquisition_coordinator import acquisition_coordinator_status
 from ..alternate_candidate import alternate_candidate_preview
+from ..alternate_selection import (
+    alternate_selection_by_acquisition,
+    bind_alternate_candidate,
+)
 from ..admission import (
     AdmissionSafetyError,
     admission_history,
@@ -200,6 +204,25 @@ def api_automatic_alternate_preview(
     """Review one explicit alternate without requesting a Bindery grab."""
     try:
         return alternate_candidate_preview(acquisition_id, candidate_guid)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/acquisitions/{acquisition_id}/alternate-selection")
+def api_automatic_alternate_selection(acquisition_id: int):
+    """Inspect an operator choice and whether its recovery plan is still current."""
+    selected = alternate_selection_by_acquisition(acquisition_id)
+    if selected is None:
+        raise HTTPException(status_code=404, detail="No alternate candidate is selected.")
+    return selected
+
+
+@router.post("/plans/{plan_id}/alternate-selection")
+def api_automatic_bind_alternate(plan_id: int, payload: EbookAcquisitionRequest):
+    """Persist one explicit choice without requesting a Bindery grab."""
+    require_confirmation(payload, "SELECT_ALTERNATE_CANDIDATE")
+    try:
+        return bind_alternate_candidate(plan_id, payload.candidateGuid)
     except AcquisitionSafetyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

@@ -314,6 +314,21 @@ def init_local_db() -> None:
                 updated_at TEXT NOT NULL,
                 error TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS alternate_candidate_selections (
+                acquisition_id INTEGER PRIMARY KEY,
+                plan_id INTEGER NOT NULL,
+                plan_signature TEXT NOT NULL,
+                evidence_revision TEXT NOT NULL,
+                candidate_guid TEXT NOT NULL,
+                candidate_title TEXT NOT NULL,
+                candidate_protocol TEXT NOT NULL,
+                candidate_indexer TEXT NOT NULL,
+                candidate_fingerprint TEXT NOT NULL,
+                selected_at TEXT NOT NULL,
+                FOREIGN KEY(acquisition_id) REFERENCES ebook_acquisitions(id),
+                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id)
+            );
             """
         )
 
