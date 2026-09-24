@@ -60,6 +60,20 @@ def test_generic_errno22_does_not_authorize_publication_recovery():
     ) is None
 
 
+def test_generic_transient_admission_cannot_prove_a_retry_boundary():
+    for error in (
+        "Bindery GET /book/1 returned HTTP 503: temporarily unavailable",
+        "Bindery scan timed out after request was sent",
+    ):
+        for verified_snapshot in (False, True):
+            assert classify_admission_failure(
+                "failed", error, None, verified_snapshot=verified_snapshot,
+            ) is None
+            assert classify_admission_failure(
+                "failed", error, "hardlink", verified_snapshot=verified_snapshot,
+            ) is None
+
+
 def test_unclassified_failure_remains_attention():
     assert classify_acquisition_failure(
         "failed",

@@ -87,10 +87,6 @@ def classify_admission_failure(
     if str(status or "").casefold() != "failed":
         return None
 
-    text = str(error or "").strip()
-    folded = text.casefold()
-    status_code = _http_status(text)
-
     if (
         str(failure_stage or "") == "no_replace_unsupported"
         and verified_snapshot
@@ -110,29 +106,7 @@ def classify_admission_failure(
             max_retries=0,
         )
 
-    if status_code in {429, 500, 502, 503, 504} or any(
-        marker in folded
-        for marker in (
-            "timed out",
-            "timeout",
-            "connection reset",
-            "connection refused",
-            "temporarily unavailable",
-        )
-    ):
-        return RecoveryClassification(
-            recoverable=True,
-            reason_code="ADMISSION_TRANSIENT_BINDERY_FAILURE",
-            plan_kind="RETRY_ADMISSION_TRANSIENT",
-            explanation=(
-                "Admission failed because a transient Bindery/transport dependency was "
-                "unavailable. Recovery may retry only with bounded backoff after the "
-                "staged bytes, destination, book identity, and readiness gates are "
-                "revalidated."
-            ),
-            retry_same_operation=True,
-            max_retries=3,
-            backoff_seconds=(30, 120, 300),
-        )
-
+    # A generic failed admission does not record which Bindery operation (if
+    # any) failed. Even a verified snapshot cannot prove whether publication
+    # already happened, so a timeout alone cannot authorize the same retry.
     return None

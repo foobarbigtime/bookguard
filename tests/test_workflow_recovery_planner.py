@@ -86,6 +86,15 @@ def test_observe_plans_real_failure_shapes_without_executing(monkeypatch, tmp_pa
             ),
         )
 
+        ambiguous_id = create_ebook_admission(result, "unknown-scan-outcome.epub")
+        update_ebook_admission(
+            ambiguous_id,
+            "failed",
+            staged_sha256="b" * 64,
+            verification={"safeToAdmit": True, "sha256": "b" * 64},
+            error="Bindery scan timed out after request was sent",
+        )
+
         monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
         observed = run_observe_cycle()
 
@@ -97,11 +106,15 @@ def test_observe_plans_real_failure_shapes_without_executing(monkeypatch, tmp_pa
         for record in observed["records"]
         if record["subjectKind"] in {"acquisition", "admission"}
     ]
-    assert len(workflow_records) == 2
+    assert len(workflow_records) == 3
     assert {r["decision"] for r in workflow_records} == {
         "would_recover_acquisition_failure",
         "would_recover_admission_failure",
+        "attention",
     }
+    ambiguous = next(r for r in workflow_records if r["subjectId"] == ambiguous_id)
+    assert ambiguous["decision"] == "attention"
+    assert ambiguous["reasonCode"] == "ADMISSION_FAILED"
 
     assert observed["planCount"] == 2
     plans = {plan["planKind"]: plan for plan in observed["plans"]}
