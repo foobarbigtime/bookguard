@@ -570,36 +570,6 @@ def _definition(
                     ),
                 ],
             )
-        if code == "ADMISSION_TRANSIENT_BINDERY_FAILURE":
-            return (
-                "RETRY_ADMISSION_TRANSIENT",
-                code,
-                [
-                    _step(
-                        "wait_bounded_backoff",
-                        "Wait for the persisted bounded retry interval; do not spin or retry immediately.",
-                        stop_if_unproven=True,
-                    ),
-                    _step(
-                        "revalidate_admission_boundary",
-                        "Freshly revalidate staged bytes, destination absence/current publication state, book identity, and admission readiness.",
-                        stop_if_unproven=True,
-                    ),
-                    _step(
-                        "retry_admission_transition",
-                        "Retry only the failed guarded admission transition while the retry budget remains.",
-                        external_mutation=True,
-                        stop_if_unproven=True,
-                    ),
-                    _step(
-                        "reconcile_registration",
-                        "Reconcile Bindery registration after the retried transition without bypassing verification.",
-                        external_mutation=True,
-                        stop_if_unproven=True,
-                    ),
-                ],
-            )
-
     return None
 
 
