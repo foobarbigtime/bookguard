@@ -44,6 +44,7 @@ class AcquisitionSafetyError(RuntimeError):
 
 
 _acquisition_lock = threading.Lock()
+_HISTORY_PROOF_LIMIT = 200
 _HISTORICAL_QUEUE_STATUSES = {
     "cancelled",
     "failed",
@@ -313,12 +314,17 @@ def _reject_previously_imported_candidate(
 ) -> None:
     """Reject an exact release title already paired as grabbed and imported."""
     try:
-        payload = client.list_history(book_id, limit=200)
+        payload = client.list_history(book_id, limit=_HISTORY_PROOF_LIMIT)
     except BinderyClientError as exc:
         raise AcquisitionSafetyError(str(exc)) from exc
     items = payload.get("items") if isinstance(payload, dict) else None
-    if not isinstance(items, list):
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
         raise AcquisitionSafetyError("Bindery history returned an invalid item list.")
+    if payload.get("partial") not in (None, False) or len(items) >= _HISTORY_PROOF_LIMIT:
+        raise AcquisitionSafetyError(
+            "Bindery history is incomplete; the release's import provenance "
+            "cannot be proven safe."
+        )
 
     title = str(candidate.get("title") or "").strip().casefold()
     matching_events = {

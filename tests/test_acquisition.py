@@ -315,6 +315,24 @@ def test_start_rejects_exact_release_already_imported(acquisition_setup):
     assert recent_ebook_acquisitions() == []
 
 
+@pytest.mark.parametrize("history", [
+    {"items": [], "partial": True},
+    {"items": [{"eventType": "other"}] * 200},
+    {"items": [None]},
+])
+def test_start_refuses_incomplete_or_invalid_history(acquisition_setup, history):
+    setup = acquisition_setup
+    setup["client"].history = history
+
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="history"):
+        acquisition.start_ebook_acquisition(
+            setup["result"], "safe-guid", setup["client"],
+        )
+
+    assert setup["client"].grabs == []
+    assert recent_ebook_acquisitions() == []
+
+
 def test_reconcile_verifies_exactly_one_staged_ebook(acquisition_setup):
     setup = acquisition_setup
     started = acquisition.start_ebook_acquisition(
