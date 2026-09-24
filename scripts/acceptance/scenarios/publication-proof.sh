@@ -64,8 +64,7 @@ post_cycle() {
     "http://127.0.0.1:${SCENARIO_PORT}/api/automatic/run"
 }
 
-scenario_run() {
-  local response status staged_hash observed state
+setup_disposable_admission() {
   SCENARIO_ROOT=$(bg_reset_scenario_root "${BG_ACCEPTANCE_SCENARIO}")
   SCENARIO_APP=$(bg_container_name "${BG_ACCEPTANCE_SCENARIO}" app)
   SCENARIO_FAKE=$(bg_container_name "${BG_ACCEPTANCE_SCENARIO}" bindery)
@@ -85,8 +84,6 @@ scenario_run() {
     -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_publication_proof_fixture.py:/app/seed_publication_proof_fixture.py:ro" \
     -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_registration_conflict_fixture.py:/app/seed_registration_conflict_fixture.py:ro" \
     "${SCENARIO_IMAGE}" python /app/seed_publication_proof_fixture.py
-  staged_hash=$(bg_sha256 "${SCENARIO_ROOT}/staging/${RELATIVE}")
-
   printf '%s\n' '{"settings":{"import.mode":"external","import.drop_folder":"/data/bookguard-staging","autoGrab.enabled":"false"},"queue":[],"partial":false,"scanAttempts":0}' \
     > "${SCENARIO_ROOT}/bindery-state/state.json"
   chown 99:100 "${SCENARIO_ROOT}/bindery-state/state.json"
@@ -101,6 +98,12 @@ scenario_run() {
     -e FAKE_BINDERY_BOOK_ID=101 \
     -e FAKE_BINDERY_STORED_PATH="/data/media/books/${RELATIVE}" \
     -e PORT=8787 "${SCENARIO_IMAGE}" python /acceptance/fake.py >/dev/null
+}
+
+scenario_run() {
+  local response status staged_hash observed state
+  setup_disposable_admission
+  staged_hash=$(bg_sha256 "${SCENARIO_ROOT}/staging/${RELATIVE}")
 
   bg_header "OBSERVE: VERIFIED FAILURE PLAN"
   start_bookguard observe ""

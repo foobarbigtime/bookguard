@@ -72,6 +72,12 @@ class _PublicationPrimitiveProofExecutor:
             raise core.AutomaticExecutionBlocked(
                 "BINDERY_IDENTITY_UNPROVEN", str(exc)
             ) from exc
+        try:
+            parent_identity = destination.parent.stat() if destination else None
+        except OSError as exc:
+            raise core.AutomaticExecutionBlocked(
+                "DESTINATION_PARENT_UNAVAILABLE", str(exc)
+            ) from exc
         checks = [
             {"code": "DECISION_STILL_AUTHORIZED", "ok": bool(
                 current and current.get("signature") == plan.get("signature")
@@ -112,6 +118,8 @@ class _PublicationPrimitiveProofExecutor:
             "planSignature": plan["signature"],
             "evidenceRevision": plan["evidenceRevision"],
             "destinationParent": str(destination.parent) if destination else "",
+            "parentDevice": parent_identity.st_dev if parent_identity else None,
+            "parentInode": parent_identity.st_ino if parent_identity else None,
             "stagedSha256": str((admission or {}).get("staged_sha256") or ""),
         }
 
@@ -121,9 +129,11 @@ class _PublicationPrimitiveProofExecutor:
         # A proof never grants publication authority; recheck immediately before writing.
         fresh = self.revalidate(plan, step)
         core._require_fresh_boundary(plan, fresh)
-        if (fresh["destinationParent"], fresh["stagedSha256"]) != (
-            boundary["destinationParent"], boundary["stagedSha256"]
-        ):
+        if tuple(fresh.get(key) for key in (
+            "destinationParent", "parentDevice", "parentInode", "stagedSha256"
+        )) != tuple(boundary.get(key) for key in (
+            "destinationParent", "parentDevice", "parentInode", "stagedSha256"
+        )):
             raise RuntimeError("Admission topology or verified bytes changed before proof.")
 
         with tempfile.TemporaryDirectory(

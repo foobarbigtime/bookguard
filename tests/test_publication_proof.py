@@ -31,7 +31,8 @@ def test_proof_only_touches_disposable_private_files(tmp_path, monkeypatch):
         return {"ok": True, "planSignature": plan["signature"],
                 "evidenceRevision": plan["evidenceRevision"],
                 "checks": [{"code": "SAFE", "ok": True}],
-                "destinationParent": str(tmp_path), "stagedSha256": "a" * 64}
+                "destinationParent": str(tmp_path), "parentDevice": tmp_path.stat().st_dev,
+                "parentInode": tmp_path.stat().st_ino, "stagedSha256": "a" * 64}
 
     monkeypatch.setattr(executor, "revalidate", fresh)
     boundary = fresh(_plan(), _plan()["steps"][3])
