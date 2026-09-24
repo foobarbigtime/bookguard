@@ -579,6 +579,25 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 ),
                 evidence=evidence,
             ))
+        elif status == "scan_request_failed" and (
+            row["staged_sha256"] and row["publication_method"] and row["error"]
+        ):
+            decisions.append(_decision(
+                **common,
+                state=status,
+                decision="would_reconcile_admission",
+                reason_code="REGISTRATION_SCAN_OUTCOME_UNKNOWN",
+                reason=(
+                    "The verified ebook was published, but Bindery's scan request "
+                    "failed or its outcome is uncertain."
+                ),
+                next_step=(
+                    "Adopt registration only if the exact published and staged bytes "
+                    "still match and Bindery independently proves the intended owner. "
+                    "Never send a second scan for this uncertain request."
+                ),
+                evidence=evidence,
+            ))
         elif status == "registration_conflict":
             decisions.append(_decision(
                 **common,

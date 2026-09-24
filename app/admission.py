@@ -52,6 +52,7 @@ _admission_lock = threading.Lock()
 _RECONCILABLE_STATUSES = {
     "verified",
     "published",
+    "scan_request_failed",
     "scan_requested",
     "registration_conflict",
     "registered",
@@ -600,11 +601,14 @@ def admit_staged_ebook(
                 scan_warning = str(exc)
                 update_ebook_admission(
                     admission_id,
-                    "published",
+                    "scan_request_failed",
                     error=scan_warning,
                 )
 
-        response_status = "published" if scan_state == "request_failed" else "scan_requested"
+        response_status = (
+            "scan_request_failed" if scan_state == "request_failed"
+            else "scan_requested"
+        )
         return {
             "ok": True,
             "admissionId": admission_id,
@@ -719,9 +723,9 @@ def admission_reconcile_preview(
     """Read-only E4 boundary for one known admission registration transition.
 
     Automatic reconciliation is intentionally narrower than the manual helper:
-    only a durable scan_requested admission may become live, both the staged
-    source and published destination must still match the verified SHA-256, and
-    Bindery's API/database ownership views must agree before any scan request.
+    a durable scan_requested admission may request a scan; a failed scan request
+    may only adopt registration already proven. Both staged and published bytes
+    must match the verified SHA-256 and Bindery's ownership views must agree.
     """
     configured = _automation_settings()
     admission = ebook_admission_by_id(int(admission_id))
@@ -789,7 +793,9 @@ def admission_reconcile_preview(
     checks = {
         "actionsEnabled": settings.allow_actions,
         "admissionEnabled": configured.admission_enabled,
-        "workflowStateScanRequested": status == "scan_requested",
+        "workflowStateScanRequested": status in {
+            "scan_requested", "scan_request_failed"
+        },
         "verifiedSnapshotPresent": bool(staged_sha256),
         "resultIdentityUnchanged": result_matches,
         "publishedBytesCurrent": published_path.is_file(),
@@ -806,6 +812,11 @@ def admission_reconcile_preview(
         "resultId": int(admission["result_id"]),
         "bookId": expected_book_id,
         "status": status,
+        "scanRequestFailureProven": (
+            status == "scan_request_failed"
+            and bool(admission.get("publication_method"))
+            and bool(admission.get("error"))
+        ),
         "registrationState": registration_state,
         "storedPath": stored_path,
         "localPath": str(admission.get("local_path") or ""),
@@ -825,6 +836,8 @@ def admission_reconcile_preview(
 def reconcile_admission(
     admission_id: int,
     client: BinderyClient | None = None,
+    *,
+    allow_scan: bool = True,
 ) -> dict[str, Any]:
     """Confirm Bindery registered the published bytes; never delete staging."""
     configured = _automation_settings()
@@ -845,6 +858,8 @@ def reconcile_admission(
         raise AdmissionSafetyError("The admission has no verified snapshot to reconcile.")
 
     _verified_published_destination(admission, configured)
+    if not allow_scan:
+        _verified_staged_source(admission)
 
     client = client or BinderyClient()
     try:
@@ -859,8 +874,27 @@ def reconcile_admission(
         if isinstance(item, dict)
     )
     if registered:
+        if not allow_scan:
+            try:
+                associations = _exact_ebook_associations(str(admission["stored_path"]))
+            except sqlite3.Error as exc:
+                raise AdmissionSafetyError(
+                    "Bindery path ownership could not be confirmed."
+                ) from exc
+            if (
+                len(associations) != 1
+                or int(associations[0].get("book_id") or 0)
+                != int(admission["book_id"])
+            ):
+                raise AdmissionSafetyError(
+                    "Bindery's exact registration owner is not independently proven."
+                )
         update_ebook_admission(admission_id, "registered")
     else:
+        if not allow_scan:
+            raise AdmissionSafetyError(
+                "Registration is not independently proven; another scan is refused."
+            )
         expected_book_id = int(admission["book_id"])
         try:
             exact_associations = _exact_ebook_associations(

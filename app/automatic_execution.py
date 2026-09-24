@@ -535,10 +535,13 @@ class _KnownAdmissionReconcileExecutor:
                 "SUBJECT_KIND_MISMATCH",
                 "Live admission reconciliation requires an admission subject.",
             )
-        if str(plan.get("reasonCode") or "") != "REGISTRATION_SCAN_PENDING":
+        reason_code = str(plan.get("reasonCode") or "")
+        if reason_code not in {
+            "REGISTRATION_SCAN_PENDING", "REGISTRATION_SCAN_OUTCOME_UNKNOWN"
+        }:
             raise AutomaticExecutionBlocked(
                 "REASON_CODE_MISMATCH",
-                "Live admission reconciliation is limited to REGISTRATION_SCAN_PENDING.",
+                "Live admission reconciliation requires an exact known scan state.",
             )
 
         admission_id = int(plan["subjectId"])
@@ -591,7 +594,18 @@ class _KnownAdmissionReconcileExecutor:
             },
             {
                 "code": "WORKFLOW_STATE_UNCHANGED",
-                "ok": bool(preview_checks.get("workflowStateScanRequested")),
+                "ok": (
+                    bool(preview.get("scanRequestFailureProven"))
+                    if reason_code == "REGISTRATION_SCAN_OUTCOME_UNKNOWN"
+                    else bool(preview_checks.get("workflowStateScanRequested"))
+                ),
+            },
+            {
+                "code": "UNCERTAIN_SCAN_PROVEN_WITHOUT_RETRY",
+                "ok": (
+                    reason_code != "REGISTRATION_SCAN_OUTCOME_UNKNOWN"
+                    or str(preview.get("registrationState") or "") == "registered"
+                ),
             },
             {
                 "code": "PUBLISHED_BYTES_UNCHANGED",
@@ -663,7 +677,9 @@ class _KnownAdmissionReconcileExecutor:
             )
 
         try:
-            outcome = reconcile_admission(admission_id, BinderyClient())
+            outcome = reconcile_admission(
+                admission_id, BinderyClient(), allow_scan=False
+            )
         except AdmissionSafetyError as exc:
             raise AutomaticExecutionBlocked(
                 "UNCERTAIN_EXTERNAL_OUTCOME",
@@ -695,7 +711,12 @@ class _KnownAdmissionReconcileExecutor:
     ) -> dict[str, Any]:
         admission_id = int(plan["subjectId"])
         try:
-            outcome = reconcile_admission(admission_id, BinderyClient())
+            if str(plan.get("reasonCode") or "") == "REGISTRATION_SCAN_OUTCOME_UNKNOWN":
+                outcome = reconcile_admission(
+                    admission_id, BinderyClient(), allow_scan=False
+                )
+            else:
+                outcome = reconcile_admission(admission_id, BinderyClient())
         except AdmissionSafetyError as exc:
             raise RuntimeError(str(exc)) from exc
 

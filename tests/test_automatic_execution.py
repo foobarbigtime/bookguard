@@ -1060,7 +1060,8 @@ def test_interrupted_admission_scan_adopts_proven_registration_without_scan(
     monkeypatch.setattr(
         execution,
         "reconcile_admission",
-        lambda admission_id, client: calls.append(admission_id) or {
+        lambda admission_id, client, *, allow_scan: calls.append(
+            (admission_id, allow_scan)) or {
             "admissionId": admission_id,
             "bookId": 42,
             "status": "registered",
@@ -1076,10 +1077,57 @@ def test_interrupted_admission_scan_adopts_proven_registration_without_scan(
         {"state": "running"},
     )
 
-    assert calls == [51]
+    assert calls == [(51, False)]
     assert result["status"] == "registered"
     assert result["externalMutationPerformed"] is False
     assert result["reconciledAfterRestart"] is True
+
+
+def test_uncertain_scan_executor_requires_registration_proof(monkeypatch):
+    plan = {**_admission_plan(), "reasonCode": "REGISTRATION_SCAN_OUTCOME_UNKNOWN"}
+    preview = {
+        "safe": True,
+        "scanRequestFailureProven": True,
+        "checks": {
+            "publishedBytesCurrent": True,
+            "stagedBytesCurrent": True,
+            "resultIdentityUnchanged": True,
+            "binderyOwnershipConsistent": True,
+            "actionsEnabled": True,
+            "admissionEnabled": True,
+        },
+        "admissionId": 51, "resultId": 17, "bookId": 42,
+        "storedPath": "/data/media/books/Bel Canto.epub",
+        "stagedSha256": "abc123", "registrationState": "scan_required",
+    }
+    monkeypatch.setattr(execution, "ebook_admission_by_id",
+                        lambda _: {"id": 51, "status": "scan_request_failed"})
+    monkeypatch.setattr(execution._KnownAdmissionReconcileExecutor,
+                        "_current_plan", lambda self, _: dict(plan))
+    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(execution, "admission_reconcile_preview",
+                        lambda *_: dict(preview))
+    executor = execution._KnownAdmissionReconcileExecutor()
+
+    boundary = executor.revalidate(plan, plan["steps"][1])
+    assert boundary["ok"] is False
+    assert any(check["code"] == "UNCERTAIN_SCAN_PROVEN_WITHOUT_RETRY"
+               and not check["ok"] for check in boundary["checks"])
+
+    preview["registrationState"] = "registered"
+    boundary = executor.revalidate(plan, plan["steps"][1])
+    assert boundary["ok"] is True
+    calls = []
+    monkeypatch.setattr(execution, "reconcile_admission",
+                        lambda admission_id, client, *, allow_scan: calls.append(
+                            allow_scan) or {
+                                "bookId": 42, "status": "registered",
+                                "registered": True, "scanRequested": False,
+                                "stagingRetained": True,
+                            })
+    result = executor.execute(plan, plan["steps"][1], boundary)
+    assert calls == [False]
+    assert result["externalMutationPerformed"] is False
 
 
 def test_known_admission_execute_reports_scan_mutation_precisely(monkeypatch):
