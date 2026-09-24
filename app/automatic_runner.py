@@ -17,6 +17,10 @@ from .publication_recovery import (
     register_executor as register_guarded_publication_executor,
     run_publication_recovery_cycle,
 )
+from .publication_registration import (
+    register_executor as register_publication_scan_executor,
+    run_publication_registration_cycle,
+)
 from .recovery_planner import _build_plan
 from .registration_correction import (
     register_executor as register_registration_conflict_executor,
@@ -30,6 +34,7 @@ register_registration_conflict_executor()
 register_acquisition_progress_executor()
 register_publication_proof_executor()
 register_guarded_publication_executor()
+register_publication_scan_executor()
 
 
 class _FinalizationCleanupExecutor:
@@ -443,6 +448,8 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         if kind == "CORRECT_REGISTRATION_CONFLICT":
             return run_registration_conflict_cycle(candidate)
         if kind == "RECOVER_ADMISSION_PUBLICATION":
+            if int(candidate.get("currentStep") or 0) == 5:
+                return run_publication_registration_cycle(candidate)
             return run_publication_recovery_cycle(candidate)
         if kind == "FINALIZE_ACQUISITION":
             return _run_finalization_cycle(candidate)

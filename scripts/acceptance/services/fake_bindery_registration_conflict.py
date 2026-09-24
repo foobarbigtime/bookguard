@@ -192,7 +192,10 @@ class Handler(BaseHTTPRequestHandler):
             state = load_state()
             state["scanAttempts"] = int(state.get("scanAttempts", 0)) + 1
             save_state(state)
-            self.send_json(409, {"error": "disposable acceptance forbids scanning"})
+            if int(state.get("scanStatus", 409)) == 200:
+                self.send_json(200, {"message": "disposable scan request accepted"})
+            else:
+                self.send_json(409, {"error": "disposable acceptance forbids scanning"})
             return
         if parsed.path != "/api/v1/queue/manual-import/reassign":
             self.send_json(404, {"error": "not found"})

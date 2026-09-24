@@ -133,8 +133,8 @@ scenario_run() {
   [[ ! -e "${SCENARIO_ROOT}/admission-books/${RELATIVE}" ]] || bg_die "ebook was published"
   response="${SCENARIO_ROOT}/paused.json"
   status=$(post_cycle "${response}")
-  bg_assert_eq "200" "${status}" "post-proof HTTP"
-  bg_assert_contains "$(cat "${response}")" '"state":"paused"' "publication stays disabled"
+  bg_assert_eq "409" "${status}" "publication without allowlist HTTP"
+  bg_assert_contains "$(cat "${response}")" 'ACTION_NOT_ALLOWLISTED' "publication remains gated"
   state=$(tr -d '[:space:]' < "${SCENARIO_ROOT}/bindery-state/state.json")
   bg_assert_contains "${state}" '"scanAttempts":0' "no Bindery scan"
   bg_note "Disposable no-overwrite proof succeeded; ebook publication remains disabled."
