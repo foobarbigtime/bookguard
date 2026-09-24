@@ -4,11 +4,13 @@ import zipfile
 
 import pytest
 
-from app import acquisition, scan_guard
+from app import acquisition, alternate_candidate, scan_guard
 from app.db import (
+    create_ebook_acquisition,
     ebook_acquisition_by_id,
     init_local_db,
     recent_ebook_acquisitions,
+    update_ebook_acquisition,
 )
 
 
@@ -331,6 +333,90 @@ def test_start_refuses_incomplete_or_invalid_history(acquisition_setup, history)
 
     assert setup["client"].grabs == []
     assert recent_ebook_acquisitions() == []
+
+
+def test_alternate_preview_checks_explicit_release_without_grab(
+    acquisition_setup, monkeypatch,
+):
+    setup = acquisition_setup
+    client = setup["client"]
+    failed_id = create_ebook_acquisition(setup["result"], client.candidate)
+    update_ebook_acquisition(
+        failed_id, "failed",
+        error=(
+            "Bindery grab failed: Bindery POST /queue/grab returned HTTP 409: "
+            "already grabbed: this release has already been imported"
+        ),
+    )
+    monkeypatch.setattr(
+        alternate_candidate, "result_by_id", lambda result_id: setup["result"],
+    )
+    original_title = client.candidate["title"]
+    client.candidate = {
+        **client.candidate,
+        "guid": "alternate-guid",
+        "title": "Ann Patchett - Bel Canto revised retail epub",
+    }
+
+    preview = alternate_candidate.alternate_candidate_preview(
+        failed_id, "alternate-guid", client,
+    )
+
+    assert preview["safeForReview"] is True
+    assert preview["liveGrabEnabled"] is False
+    assert preview["rejectedGuid"] == "safe-guid"
+    assert preview["candidate"]["guid"] == "alternate-guid"
+    assert preview["candidate"]["title"] != original_title
+    assert "nzbUrl" not in preview["candidate"]
+    assert client.grabs == []
+    assert ebook_acquisition_by_id(failed_id)["status"] == "failed"
+    assert len(recent_ebook_acquisitions()) == 1
+
+
+@pytest.mark.parametrize("case", [
+    "same_guid", "same_title", "partial_history", "partial_search",
+    "busy_queue", "uncertain_queue", "unsafe_identity",
+])
+def test_alternate_preview_fails_closed(acquisition_setup, monkeypatch, case):
+    setup = acquisition_setup
+    client = setup["client"]
+    failed_id = create_ebook_acquisition(setup["result"], client.candidate)
+    update_ebook_acquisition(
+        failed_id, "failed",
+        error=(
+            "Bindery grab failed: Bindery POST /queue/grab returned HTTP 409: "
+            "already grabbed: this release has already been imported"
+        ),
+        queue_id=77 if case == "uncertain_queue" else None,
+    )
+    monkeypatch.setattr(
+        alternate_candidate, "result_by_id", lambda result_id: setup["result"],
+    )
+    client.candidate = {
+        **client.candidate,
+        "guid": "alternate-guid",
+        "title": (
+            client.candidate["title"] if case == "same_title"
+            else "Ann Patchett - Bel Canto revised retail epub"
+        ),
+    }
+    if case == "partial_history":
+        client.history = {"items": [], "partial": True}
+    if case == "partial_search":
+        client.search_book = lambda book_id: {
+            "results": [client.candidate], "partial": True,
+        }
+    if case == "busy_queue":
+        client.queue = {"items": [{"id": 9, "status": "downloading"}], "partial": False}
+    if case == "unsafe_identity":
+        client.candidate["title"] = "Wrong Writer - Wrong Title"
+
+    guid = "safe-guid" if case == "same_guid" else "alternate-guid"
+    with pytest.raises(acquisition.AcquisitionSafetyError):
+        alternate_candidate.alternate_candidate_preview(failed_id, guid, client)
+
+    assert client.grabs == []
+    assert len(recent_ebook_acquisitions()) == 1
 
 
 def test_reconcile_verifies_exactly_one_staged_ebook(acquisition_setup):
