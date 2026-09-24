@@ -4,6 +4,9 @@ import pytest
 from fastapi import HTTPException
 
 from app import automatic_execution as execution
+from app import automatic_retry as retry
+from app import automatic_quarantine as quarantine
+from app import automatic_admission as admission_executor
 from app.routes import automatic as automatic_routes
 
 
@@ -577,10 +580,10 @@ def test_interrupted_retry_queue_proof_adopts_exact_remote_item(monkeypatch):
                 "partial": False,
             }
 
-    monkeypatch.setattr(execution, "ebook_acquisition_by_id", lambda _id: acquisition)
-    monkeypatch.setattr(execution, "BinderyClient", Client)
+    monkeypatch.setattr(retry, "ebook_acquisition_by_id", lambda _id: acquisition)
+    monkeypatch.setattr(retry, "BinderyClient", Client)
     monkeypatch.setattr(
-        execution,
+        retry,
         "reconcile_ebook_acquisition",
         lambda acquisition_id, client: {
             "ok": True,
@@ -632,10 +635,10 @@ def test_interrupted_retry_ambiguous_queue_fails_closed(monkeypatch):
                 "partial": False,
             }
 
-    monkeypatch.setattr(execution, "ebook_acquisition_by_id", lambda _id: acquisition)
-    monkeypatch.setattr(execution, "BinderyClient", Client)
+    monkeypatch.setattr(retry, "ebook_acquisition_by_id", lambda _id: acquisition)
+    monkeypatch.setattr(retry, "BinderyClient", Client)
     monkeypatch.setattr(
-        execution,
+        retry,
         "reconcile_ebook_acquisition",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("ambiguous queue must not be reconciled")
@@ -737,9 +740,9 @@ def test_unsafe_quarantine_executor_revalidates_exact_current_evidence(monkeypat
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(execution, "result_by_id", lambda result_id: result)
+    monkeypatch.setattr(quarantine, "result_by_id", lambda result_id: result)
     monkeypatch.setattr(
-        execution,
+        quarantine,
         "verify_result",
         lambda item, force: {
             "verdict": "UNSAFE_FILE",
@@ -747,20 +750,20 @@ def test_unsafe_quarantine_executor_revalidates_exact_current_evidence(monkeypat
             "source": "deterministic-safety",
         },
     )
-    monkeypatch.setattr(execution, "local_conn", lambda: LocalConn())
+    monkeypatch.setattr(quarantine, "local_conn", lambda: LocalConn())
     monkeypatch.setattr(
-        execution,
+        quarantine,
         "_result_decisions",
         lambda conn, limit: [{"subjectKind": "result", "subjectId": 101}],
     )
     monkeypatch.setattr(
-        execution,
+        quarantine,
         "_build_plan",
         lambda conn, decision: current_plan,
     )
-    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(quarantine, "BinderyClient", lambda: object())
     monkeypatch.setattr(
-        execution,
+        quarantine,
         "unsafe_media_preview",
         lambda item, client: {
             "safe": True,
@@ -918,7 +921,7 @@ def test_known_admission_executor_revalidates_current_admission_plan(monkeypatch
     }
 
     monkeypatch.setattr(
-        execution,
+        admission_executor,
         "ebook_admission_by_id",
         lambda admission_id: {"id": admission_id, "status": "scan_requested"},
     )
@@ -927,9 +930,9 @@ def test_known_admission_executor_revalidates_current_admission_plan(monkeypatch
         "_current_plan",
         lambda self, admission_id: dict(plan),
     )
-    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(admission_executor, "BinderyClient", lambda: object())
     monkeypatch.setattr(
-        execution,
+        admission_executor,
         "admission_reconcile_preview",
         lambda admission_id, client: dict(preview),
     )
@@ -1005,13 +1008,13 @@ def test_interrupted_admission_scan_is_not_replayed_without_registration_proof(
     executor = execution._KnownAdmissionReconcileExecutor()
 
     monkeypatch.setattr(
-        execution,
+        admission_executor,
         "ebook_admission_by_id",
         lambda admission_id: {"id": admission_id, "status": "scan_requested"},
     )
-    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(admission_executor, "BinderyClient", lambda: object())
     monkeypatch.setattr(
-        execution,
+        admission_executor,
         "admission_reconcile_preview",
         lambda admission_id, client: {
             "safe": True,
@@ -1019,7 +1022,7 @@ def test_interrupted_admission_scan_is_not_replayed_without_registration_proof(
         },
     )
     monkeypatch.setattr(
-        execution,
+        admission_executor,
         "reconcile_admission",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("uncertain scan request must never replay")
@@ -1044,13 +1047,13 @@ def test_interrupted_admission_scan_adopts_proven_registration_without_scan(
     calls = []
 
     monkeypatch.setattr(
-        execution,
+        admission_executor,
         "ebook_admission_by_id",
         lambda admission_id: {"id": admission_id, "status": "scan_requested"},
     )
-    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(admission_executor, "BinderyClient", lambda: object())
     monkeypatch.setattr(
-        execution,
+        admission_executor,
         "admission_reconcile_preview",
         lambda admission_id, client: {
             "safe": True,
@@ -1058,7 +1061,7 @@ def test_interrupted_admission_scan_adopts_proven_registration_without_scan(
         },
     )
     monkeypatch.setattr(
-        execution,
+        admission_executor,
         "reconcile_admission",
         lambda admission_id, client, *, allow_scan: calls.append(
             (admission_id, allow_scan)) or {
@@ -1100,12 +1103,12 @@ def test_uncertain_scan_executor_requires_registration_proof(monkeypatch):
         "storedPath": "/data/media/books/Bel Canto.epub",
         "stagedSha256": "abc123", "registrationState": "scan_required",
     }
-    monkeypatch.setattr(execution, "ebook_admission_by_id",
+    monkeypatch.setattr(admission_executor, "ebook_admission_by_id",
                         lambda _: {"id": 51, "status": "scan_request_failed"})
     monkeypatch.setattr(execution._KnownAdmissionReconcileExecutor,
                         "_current_plan", lambda self, _: dict(plan))
-    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
-    monkeypatch.setattr(execution, "admission_reconcile_preview",
+    monkeypatch.setattr(admission_executor, "BinderyClient", lambda: object())
+    monkeypatch.setattr(admission_executor, "admission_reconcile_preview",
                         lambda *_: dict(preview))
     executor = execution._KnownAdmissionReconcileExecutor()
 
@@ -1118,7 +1121,7 @@ def test_uncertain_scan_executor_requires_registration_proof(monkeypatch):
     boundary = executor.revalidate(plan, plan["steps"][1])
     assert boundary["ok"] is True
     calls = []
-    monkeypatch.setattr(execution, "reconcile_admission",
+    monkeypatch.setattr(admission_executor, "reconcile_admission",
                         lambda admission_id, client, *, allow_scan: calls.append(
                             allow_scan) or {
                                 "bookId": 42, "status": "registered",
@@ -1134,9 +1137,9 @@ def test_known_admission_execute_reports_scan_mutation_precisely(monkeypatch):
     plan = _admission_plan()
     executor = execution._KnownAdmissionReconcileExecutor()
 
-    monkeypatch.setattr(execution, "BinderyClient", lambda: object())
+    monkeypatch.setattr(admission_executor, "BinderyClient", lambda: object())
     monkeypatch.setattr(
-        execution,
+        admission_executor,
         "reconcile_admission",
         lambda admission_id, client: {
             "admissionId": admission_id,
