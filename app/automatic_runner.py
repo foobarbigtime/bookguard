@@ -419,8 +419,12 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
     candidates.sort(key=lambda item: int(item["id"]))
 
     first_waiting = None
+    has_retry_wait = False
     for candidate in candidates:
         kind = str(candidate.get("planKind") or "")
+        if candidate.get("state") == "retry_wait":
+            has_retry_wait = True
+            continue
         if kind == "RECONCILE_ACQUISITION":
             result = run_acquisition_progress_cycle(candidate)
             if result.get("state") == "waiting":
@@ -432,8 +436,12 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             return run_registration_conflict_cycle(candidate)
         if kind == "FINALIZE_ACQUISITION":
             return _run_finalization_cycle(candidate)
-        # The core runner selects the earliest plan it supports. No earlier
-        # executable candidate was skipped; only read-only waiting handoffs.
+        # The core runner promotes due retries before selecting the earliest
+        # executable core plan; waiting plans do not block ready work.
+        return core.run_automatic_cycle(limit)
+    if has_retry_wait:
+        # A retry may have become due since the outer snapshot. The core
+        # runner promotes it before returning a waiting or executed result.
         return core.run_automatic_cycle(limit)
     if first_waiting is not None:
         return first_waiting
