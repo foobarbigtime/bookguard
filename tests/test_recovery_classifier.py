@@ -38,6 +38,8 @@ def test_admission_errno22_before_publication_requires_capability_recovery():
         "failed",
         "[Errno 22] Invalid argument: PosixPath('/admission-books/Stephen King/Sometimes They Come Back (1974)/Sometimes They Come Back - Stephen King.epub')",
         None,
+        failure_stage="no_replace_unsupported",
+        verified_snapshot=True,
     )
 
     assert classified is not None
@@ -45,6 +47,17 @@ def test_admission_errno22_before_publication_requires_capability_recovery():
     assert classified.plan_kind == "RECOVER_ADMISSION_PUBLICATION"
     assert classified.retry_same_operation is False
     assert classified.max_retries == 0
+
+
+def test_generic_errno22_does_not_authorize_publication_recovery():
+    assert classify_admission_failure(
+        "failed", "[Errno 22] Invalid argument", None,
+        verified_snapshot=True,
+    ) is None
+    assert classify_admission_failure(
+        "failed", "[Errno 22] Invalid argument", None,
+        failure_stage="no_replace_unsupported",
+    ) is None
 
 
 def test_unclassified_failure_remains_attention():

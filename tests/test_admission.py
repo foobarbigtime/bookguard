@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import errno
 from pathlib import Path
 import sqlite3
 import zipfile
@@ -882,7 +883,29 @@ def test_atomic_publish_falls_back_to_private_snapshot_link(tmp_path, monkeypatc
     assert not private.exists()
 
 
-def test_existing_admission_table_gains_publication_method(tmp_path, monkeypatch):
+def test_unsupported_no_replace_records_verified_failure_stage(
+    admission_setup, monkeypatch,
+):
+    setup = admission_setup
+    monkeypatch.setattr(admission, "_rename_no_replace", lambda *args: False)
+    monkeypatch.setattr(admission.os, "link", lambda *args, **kwargs: (
+        _ for _ in ()).throw(OSError(errno.EINVAL, "Invalid argument")))
+
+    with pytest.raises(admission.AdmissionSafetyError, match="Invalid argument"):
+        admission.admit_staged_ebook(
+            setup["result"], setup["staged"].name, FakeClient(),
+        )
+
+    records = recent_ebook_admissions()
+    assert len(records) == 1
+    assert records[0]["status"] == "failed"
+    assert records[0]["failure_stage"] == "no_replace_unsupported"
+    assert records[0]["staged_sha256"]
+    assert records[0]["verification"]
+    assert not (setup["admission_root"] / setup["relative"]).exists()
+
+
+def test_existing_admission_table_gains_publication_provenance(tmp_path, monkeypatch):
     monkeypatch.setattr(admission.settings, "config_dir", str(tmp_path))
     database = tmp_path / "bookguard.db"
     with sqlite3.connect(database) as connection:
@@ -914,6 +937,7 @@ def test_existing_admission_table_gains_publication_method(tmp_path, monkeypatch
             ).fetchall()
         }
     assert "publication_method" in columns
+    assert "failure_stage" in columns
 
 
 
