@@ -37,6 +37,7 @@ from .recovery_planner import (
     _build_plan,
     block_recovery_plan,
     promote_due_recovery_retries,
+    record_recovery_plans,
     recovery_plan_by_id,
     recovery_plan_snapshot,
     record_recovery_step_success,
@@ -895,6 +896,75 @@ def _require_fresh_boundary(plan: dict[str, Any], boundary: dict[str, Any]) -> N
         )
 
 
+def _handoff_completed_retry(plan: dict[str, Any]) -> dict[str, Any] | None:
+    """Replace a proven completed grab plan with current read-only E3 authority."""
+    steps = list(plan.get("steps") or [])
+    index = int(plan.get("currentStep") or 0)
+    if (
+        plan.get("planKind") != "RETRY_ACQUISITION_TRANSIENT"
+        or plan.get("subjectKind") != "acquisition"
+        or index != 3
+        or len(steps) <= index
+        or steps[index].get("code") != "reconcile_after_retry"
+        or steps[index - 1].get("code") != "retry_grab_once"
+    ):
+        return None
+    execution = _existing(str(plan.get("signature") or ""), "retry_grab_once", index - 1)
+    if not execution or execution.get("state") != "succeeded":
+        return None
+    acquisition = ebook_acquisition_by_id(int(plan["subjectId"]))
+    if (
+        not acquisition
+        or acquisition.get("status") not in {
+            "queued", "downloading", "awaiting_staging", "staging_observed"
+        }
+        or acquisition.get("queue_id") is None
+        or acquisition.get("admission_id") is not None
+        or acquisition.get("result_id") != plan.get("resultId")
+        or acquisition.get("book_id") != plan.get("bookId")
+    ):
+        return None
+    prior_result = execution.get("externalResult") or {}
+    if (
+        str(prior_result.get("acquisitionId") or "") != str(plan["subjectId"])
+        or str(prior_result.get("queueId") or "")
+        != str(acquisition["queue_id"])
+    ):
+        return None
+
+    with local_conn() as conn:
+        current = next((
+            item for item in _acquisition_decisions(conn, 500)
+            if item.get("subjectKind") == "acquisition"
+            and str(item.get("subjectId")) == str(plan["subjectId"])
+        ), None)
+        if (
+            not current
+            or current.get("decision") != "would_reconcile_acquisition"
+            or current.get("reasonCode") != "ACQUISITION_PROGRESSABLE"
+            or current.get("resultId") != plan.get("resultId")
+            or current.get("bookId") != plan.get("bookId")
+            or str((current.get("evidence") or {}).get("queueId") or "")
+            != str(acquisition["queue_id"])
+        ):
+            return None
+        new_plan = record_recovery_plans(conn, [current])[0]
+        conn.commit()
+    if new_plan.get("planKind") != "RECONCILE_ACQUISITION":
+        raise RuntimeError("Retry handoff did not create the expected E3 plan.")
+    return {
+        "ok": True,
+        "state": "handed_off",
+        "plan": new_plan,
+        "previousPlanId": int(plan["id"]),
+        "externalMutationAttempted": False,
+        "message": (
+            "The proven retry is now governed by a new known-acquisition staging "
+            "plan. No grab or admission was attempted."
+        ),
+    }
+
+
 def _run_unsafe_quarantine_cycle(plan: dict[str, Any]) -> dict[str, Any]:
     """Advance one exact unsafe-media quarantine plan and no other mutation class."""
     plan_id = int(plan["id"])
@@ -1231,6 +1301,9 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         else ""
     )
     if refreshed_code != "retry_grab_once":
+        handoff = _handoff_completed_retry(refreshed)
+        if handoff is not None:
+            return handoff
         return {
             "ok": True,
             "state": "paused",
