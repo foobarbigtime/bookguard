@@ -388,7 +388,7 @@ def _run_finalization_cycle(plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
-    """Extend the existing E4 runner with exact guarded acquisition finalization."""
+    """Advance one ready E4 item while leaving incomplete handoffs waiting."""
     configured = load_automation_settings()
     if configured.automation_mode != "automatic":
         raise AutomaticExecutionBlocked(
@@ -418,10 +418,23 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
     ]
     candidates.sort(key=lambda item: int(item["id"]))
 
-    if candidates and str(candidates[0].get("planKind") or "") == "CORRECT_REGISTRATION_CONFLICT":
-        return run_registration_conflict_cycle(candidates[0])
-    if candidates and str(candidates[0].get("planKind") or "") == "FINALIZE_ACQUISITION":
-        return _run_finalization_cycle(candidates[0])
-    if candidates and str(candidates[0].get("planKind") or "") == "RECONCILE_ACQUISITION":
-        return run_acquisition_progress_cycle(candidates[0])
+    first_waiting = None
+    for candidate in candidates:
+        kind = str(candidate.get("planKind") or "")
+        if kind == "RECONCILE_ACQUISITION":
+            result = run_acquisition_progress_cycle(candidate)
+            if result.get("state") == "waiting":
+                if first_waiting is None:
+                    first_waiting = result
+                continue
+            return result
+        if kind == "CORRECT_REGISTRATION_CONFLICT":
+            return run_registration_conflict_cycle(candidate)
+        if kind == "FINALIZE_ACQUISITION":
+            return _run_finalization_cycle(candidate)
+        # The core runner selects the earliest plan it supports. No earlier
+        # executable candidate was skipped; only read-only waiting handoffs.
+        return core.run_automatic_cycle(limit)
+    if first_waiting is not None:
+        return first_waiting
     return core.run_automatic_cycle(limit)
