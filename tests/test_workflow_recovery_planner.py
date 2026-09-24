@@ -112,7 +112,10 @@ def test_observe_plans_real_failure_shapes_without_executing(monkeypatch, tmp_pa
         "would_recover_admission_failure",
         "attention",
     }
-    ambiguous = next(r for r in workflow_records if r["subjectId"] == ambiguous_id)
+    ambiguous = next(
+        r for r in workflow_records
+        if r["subjectKind"] == "admission" and r["subjectId"] == str(ambiguous_id)
+    )
     assert ambiguous["decision"] == "attention"
     assert ambiguous["reasonCode"] == "ADMISSION_FAILED"
 
