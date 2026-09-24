@@ -61,8 +61,8 @@ scenario_run() {
   bg_assert_hash "${SCENARIO_ROOT}/staging/${RELATIVE}" "${staged_hash}" "staged bytes"
   response="${SCENARIO_ROOT}/paused.json"
   status=$(post_cycle "${response}")
-  bg_assert_eq "200" "${status}" "post-publication HTTP"
-  bg_assert_contains "$(cat "${response}")" '"state":"paused"' "later scan disabled"
+  bg_assert_eq "409" "${status}" "scan without allowlist HTTP"
+  bg_assert_contains "$(cat "${response}")" 'ACTION_NOT_ALLOWLISTED' "later scan gated"
   assert_no_scan
   bg_remove_container "${SCENARIO_APP}"
 
