@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from .acquisition import (
@@ -82,6 +84,19 @@ def alternate_candidate_preview(
     if not all(candidate.get(key) for key in ("guid", "title", "nzbUrl", "size")):
         raise AcquisitionSafetyError("The alternate is missing required grab fields.")
 
+    # Store an opaque digest of the exact grab payload identity. Do not expose
+    # the indexer's download URL to operators or persist it in the choice row.
+    identity = {
+        key: candidate.get(key)
+        for key in (
+            "guid", "title", "nzbUrl", "size", "protocol", "mediaType",
+            "indexerId", "indexerName", "indexer",
+        )
+    }
+    candidate_fingerprint = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
     # This is a point-in-time review, not authorization for any later mutation.
     return {
         "safeForReview": True,
@@ -90,6 +105,7 @@ def alternate_candidate_preview(
         "resultId": int(result["id"]),
         "bookId": int(failed["book_id"]),
         "rejectedGuid": rejected_guid,
+        "candidateFingerprint": candidate_fingerprint,
         "candidate": {
             "guid": guid,
             "title": str(candidate["title"]),

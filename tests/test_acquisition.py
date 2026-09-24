@@ -4,7 +4,7 @@ import zipfile
 
 import pytest
 
-from app import acquisition, alternate_candidate, scan_guard
+from app import acquisition, alternate_candidate, alternate_selection, scan_guard
 from app.db import (
     create_ebook_acquisition,
     ebook_acquisition_by_id,
@@ -12,6 +12,7 @@ from app.db import (
     recent_ebook_acquisitions,
     update_ebook_acquisition,
 )
+from app.observe import run_observe_cycle
 
 
 class FakeClient:
@@ -417,6 +418,66 @@ def test_alternate_preview_fails_closed(acquisition_setup, monkeypatch, case):
 
     assert client.grabs == []
     assert len(recent_ebook_acquisitions()) == 1
+
+
+def test_alternate_choice_binds_exact_plan_and_payload_without_grab(
+    acquisition_setup, monkeypatch,
+):
+    setup = acquisition_setup
+    client = setup["client"]
+    failed_id = create_ebook_acquisition(setup["result"], client.candidate)
+    update_ebook_acquisition(
+        failed_id, "failed",
+        error=(
+            "Bindery grab failed: Bindery POST /queue/grab returned HTTP 409: "
+            "already grabbed: this release has already been imported"
+        ),
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+    plan = next(
+        item for item in run_observe_cycle()["plans"]
+        if item["planKind"] == "SELECT_ALTERNATE_REPLACEMENT"
+    )
+    monkeypatch.setattr(
+        alternate_candidate, "result_by_id", lambda result_id: setup["result"],
+    )
+    client.candidate = {
+        **client.candidate,
+        "guid": "alternate-guid",
+        "title": "Ann Patchett - Bel Canto revised retail epub",
+    }
+
+    selected = alternate_selection.bind_alternate_candidate(
+        plan["id"], "alternate-guid", client,
+    )
+    again = alternate_selection.bind_alternate_candidate(
+        plan["id"], "alternate-guid", client,
+    )
+
+    assert selected == again
+    assert selected["planSignature"] == plan["signature"]
+    assert selected["evidenceRevision"] == plan["evidenceRevision"]
+    assert selected["currentPlan"] is True
+    assert selected["liveGrabEnabled"] is False
+    assert selected["candidate"]["guid"] == "alternate-guid"
+    assert len(selected["candidateFingerprint"]) == 64
+    assert "nzbUrl" not in str(selected)
+    assert alternate_selection.alternate_selection_by_acquisition(failed_id) == selected
+    assert client.grabs == []
+    assert len(recent_ebook_acquisitions()) == 1
+
+    client.candidate["nzbUrl"] = "https://indexer.invalid/changed.nzb"
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="already has"):
+        alternate_selection.bind_alternate_candidate(plan["id"], "alternate-guid", client)
+    assert alternate_selection.alternate_selection_by_acquisition(failed_id) == selected
+
+    update_ebook_acquisition(failed_id, "failed", error="Unknown new failure")
+    assert alternate_selection.alternate_selection_by_acquisition(failed_id)[
+        "currentPlan"
+    ] is False
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="stale"):
+        alternate_selection.bind_alternate_candidate(plan["id"], "alternate-guid", client)
+    assert client.grabs == []
 
 
 def test_reconcile_verifies_exactly_one_staged_ebook(acquisition_setup):
