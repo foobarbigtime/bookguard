@@ -39,6 +39,9 @@ scenario_run() {
   response="${SCENARIO_ROOT}/scan.json"
   status=$(post_cycle "${response}")
   bg_assert_eq "200" "${status}" "scan request HTTP"
+  if [[ "$(cat "${response}")" != *'"status":"scan_requested"'* ]]; then
+    bg_note "Unexpected scan response: $(cat "${response}")"
+  fi
   bg_assert_contains "$(cat "${response}")" '"status":"scan_requested"' "durable scan request"
   bg_assert_contains "$(cat "${response}")" '"scanRequested":true' "one scan requested"
   bg_assert_eq "1" "$(scan_attempts)" "exactly one Bindery scan"
