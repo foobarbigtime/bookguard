@@ -199,6 +199,7 @@ def init_local_db() -> None:
                 local_path TEXT NOT NULL,
                 status TEXT NOT NULL,
                 publication_method TEXT,
+                failure_stage TEXT,
                 verification_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -331,6 +332,10 @@ def init_local_db() -> None:
         if "publication_method" not in admission_columns:
             conn.execute(
                 "ALTER TABLE ebook_admissions ADD COLUMN publication_method TEXT"
+            )
+        if "failure_stage" not in admission_columns:
+            conn.execute(
+                "ALTER TABLE ebook_admissions ADD COLUMN failure_stage TEXT"
             )
 
         recovery_plan_columns = {
@@ -639,6 +644,7 @@ def update_ebook_admission(
     *,
     staged_sha256: str | None = None,
     publication_method: str | None = None,
+    failure_stage: str | None = None,
     verification: dict | None = None,
     error: str | None = None,
 ) -> None:
@@ -648,6 +654,7 @@ def update_ebook_admission(
             UPDATE ebook_admissions
             SET status=?, staged_sha256=COALESCE(?, staged_sha256),
                 publication_method=COALESCE(?, publication_method),
+                failure_stage=COALESCE(?, failure_stage),
                 verification_json=COALESCE(?, verification_json),
                 updated_at=?, error=?
             WHERE id=?
@@ -656,6 +663,7 @@ def update_ebook_admission(
                 status,
                 staged_sha256,
                 publication_method,
+                failure_stage,
                 json.dumps(verification, ensure_ascii=False) if verification is not None else None,
                 utc_now(),
                 error,

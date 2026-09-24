@@ -76,6 +76,9 @@ def test_observe_plans_real_failure_shapes_without_executing(monkeypatch, tmp_pa
         update_ebook_admission(
             admission_id,
             "failed",
+            staged_sha256="a" * 64,
+            verification={"safeToAdmit": True, "sha256": "a" * 64},
+            failure_stage="no_replace_unsupported",
             error=(
                 "[Errno 22] Invalid argument: "
                 "PosixPath('/admission-books/Stephen King/Sometimes They Come Back (1974)/"

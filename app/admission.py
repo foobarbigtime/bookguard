@@ -48,6 +48,10 @@ class PublishedSnapshotError(RuntimeError):
         )
 
 
+class UnsupportedNoReplacePublication(OSError):
+    """Both atomic no-overwrite publication methods were rejected."""
+
+
 _admission_lock = threading.Lock()
 _RECONCILABLE_STATUSES = {
     "verified",
@@ -433,13 +437,22 @@ def _publish_no_replace(temp_path: Path, destination: Path) -> str:
         if renamed:
             publication_method = "renameat2"
         else:
-            os.link(
-                temp_path.name,
-                destination.name,
-                src_dir_fd=source_directory_fd,
-                dst_dir_fd=destination_directory_fd,
-                follow_symlinks=False,
-            )
+            try:
+                os.link(
+                    temp_path.name,
+                    destination.name,
+                    src_dir_fd=source_directory_fd,
+                    dst_dir_fd=destination_directory_fd,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                if exc.errno in {
+                    errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP, errno.ENOTSUP
+                }:
+                    raise UnsupportedNoReplacePublication(
+                        exc.errno, exc.strerror, destination
+                    ) from exc
+                raise
             publication_method = "private-snapshot-link"
 
         published = True
@@ -633,6 +646,15 @@ def admit_staged_ebook(
                 admission_id,
                 "published",
                 publication_method=exc.publication_method,
+                error=str(exc),
+            )
+        raise AdmissionSafetyError(str(exc)) from exc
+    except UnsupportedNoReplacePublication as exc:
+        if admission_id is not None:
+            update_ebook_admission(
+                admission_id,
+                "failed",
+                failure_stage="no_replace_unsupported",
                 error=str(exc),
             )
         raise AdmissionSafetyError(str(exc)) from exc

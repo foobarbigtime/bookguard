@@ -524,7 +524,8 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT a.id, a.result_id, a.book_id, a.status, a.staged_relative_path,
-               a.staged_sha256, a.publication_method, a.stored_path, a.local_path,
+               a.staged_sha256, a.publication_method, a.failure_stage,
+               a.verification_json, a.stored_path, a.local_path,
                a.error, r.title, r.author
         FROM ebook_admissions a
         LEFT JOIN scan_results r ON r.id=a.result_id
@@ -551,6 +552,7 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
             "stagedRelativePath": str(row["staged_relative_path"] or ""),
             "stagedSha256": str(row["staged_sha256"] or ""),
             "publicationMethod": str(row["publication_method"] or ""),
+            "failureStage": str(row["failure_stage"] or ""),
             "recordedError": str(row["error"] or ""),
         }
         if status == "registered":
@@ -621,6 +623,10 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 status,
                 str(row["error"] or ""),
                 str(row["publication_method"] or ""),
+                failure_stage=str(row["failure_stage"] or ""),
+                verified_snapshot=bool(
+                    row["staged_sha256"] and row["verification_json"]
+                ),
             )
             if recovery and recovery.recoverable:
                 evidence["recoveryClassification"] = {

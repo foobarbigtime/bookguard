@@ -80,6 +80,9 @@ def classify_admission_failure(
     status: str,
     error: str,
     publication_method: str | None = None,
+    *,
+    failure_stage: str | None = None,
+    verified_snapshot: bool = False,
 ) -> RecoveryClassification | None:
     if str(status or "").casefold() != "failed":
         return None
@@ -89,7 +92,8 @@ def classify_admission_failure(
     status_code = _http_status(text)
 
     if (
-        ("[errno 22]" in folded or "invalid argument" in folded)
+        str(failure_stage or "") == "no_replace_unsupported"
+        and verified_snapshot
         and not str(publication_method or "").strip()
     ):
         return RecoveryClassification(
