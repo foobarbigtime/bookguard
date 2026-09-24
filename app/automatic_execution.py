@@ -1178,7 +1178,7 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
 
     promoted = promote_due_recovery_retries()
     snapshot = recovery_plan_snapshot(limit)
-    candidates = [
+    supported = [
         item
         for item in snapshot["items"]
         if (
@@ -1193,9 +1193,18 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         )
         and item.get("state") in {"planned", "ready", "retry_wait"}
     ]
-    candidates.sort(key=lambda item: int(item["id"]))
+    supported.sort(key=lambda item: int(item["id"]))
+    candidates = [item for item in supported if item["state"] != "retry_wait"]
 
     if not candidates:
+        if supported:
+            return {
+                "ok": True,
+                "state": "retry_wait",
+                "plan": supported[0],
+                "externalMutationAttempted": False,
+                "message": "The bounded retry interval has not elapsed.",
+            }
         return {
             "ok": True,
             "state": "idle",
@@ -1227,15 +1236,6 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             "plan": scheduled,
             "externalMutationAttempted": False,
             "message": "The first bounded retry interval was scheduled; no external work ran.",
-        }
-
-    if plan["state"] == "retry_wait":
-        return {
-            "ok": True,
-            "state": "retry_wait",
-            "plan": plan,
-            "externalMutationAttempted": False,
-            "message": "The bounded retry interval has not elapsed.",
         }
 
     steps = list(plan.get("steps") or [])

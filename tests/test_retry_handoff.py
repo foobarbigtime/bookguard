@@ -90,3 +90,39 @@ def test_next_cycle_hands_off_instead_of_replaying_grab(monkeypatch):
 
     assert result["state"] == "handed_off"
     assert result["externalMutationAttempted"] is False
+
+
+def test_core_skips_waiting_retry_for_ready_quarantine(monkeypatch):
+    waiting = {**_retry_plan(), "id": 2, "state": "retry_wait"}
+    quarantine = {"id": 3, "state": "ready",
+                  "planKind": "QUARANTINE_UNSAFE_MEDIA"}
+    monkeypatch.setattr(execution, "load_automation_settings",
+                        lambda: SimpleNamespace(automation_mode="automatic"))
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(execution, "recovery_plan_snapshot",
+                        lambda limit: {"items": [waiting, quarantine]})
+    monkeypatch.setattr(execution, "_run_unsafe_quarantine_cycle",
+                        lambda plan: {"state": "executed", "plan": plan})
+
+    result = execution.run_automatic_cycle()
+
+    assert result["state"] == "executed"
+    assert result["plan"]["id"] == 3
+
+
+def test_due_retry_is_promoted_before_core_selects_work(monkeypatch):
+    ready = {**_retry_plan(), "state": "ready", "currentStep": 3}
+    monkeypatch.setattr(execution, "load_automation_settings",
+                        lambda: SimpleNamespace(automation_mode="automatic"))
+    monkeypatch.setattr(execution, "promote_due_recovery_retries",
+                        lambda: [ready])
+    monkeypatch.setattr(execution, "recovery_plan_snapshot",
+                        lambda limit: {"items": [ready]})
+    monkeypatch.setattr(execution, "recovery_plan_by_id", lambda _: ready)
+    monkeypatch.setattr(execution, "_handoff_completed_retry",
+                        lambda plan: {"state": "handed_off", "plan": plan})
+
+    result = execution.run_automatic_cycle()
+
+    assert result["state"] == "handed_off"
+    assert result["plan"]["id"] == 12
