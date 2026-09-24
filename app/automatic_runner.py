@@ -12,9 +12,10 @@ from .config import load_automation_settings
 from .db import ebook_acquisition_by_id, local_conn
 from .finalization import finalization_preview
 from .observe import _acquisition_decisions
-from .publication_proof import (
-    register_executor as register_publication_proof_executor,
-    run_publication_proof_cycle,
+from .publication_proof import register_executor as register_publication_proof_executor
+from .publication_recovery import (
+    register_executor as register_guarded_publication_executor,
+    run_publication_recovery_cycle,
 )
 from .recovery_planner import _build_plan
 from .registration_correction import (
@@ -28,6 +29,7 @@ automatic_execution_history = core.automatic_execution_history
 register_registration_conflict_executor()
 register_acquisition_progress_executor()
 register_publication_proof_executor()
+register_guarded_publication_executor()
 
 
 class _FinalizationCleanupExecutor:
@@ -441,7 +443,7 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         if kind == "CORRECT_REGISTRATION_CONFLICT":
             return run_registration_conflict_cycle(candidate)
         if kind == "RECOVER_ADMISSION_PUBLICATION":
-            return run_publication_proof_cycle(candidate)
+            return run_publication_recovery_cycle(candidate)
         if kind == "FINALIZE_ACQUISITION":
             return _run_finalization_cycle(candidate)
         # The core runner promotes due retries before selecting the earliest
