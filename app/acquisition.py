@@ -277,8 +277,12 @@ def _search_candidate(
     except BinderyClientError as exc:
         raise AcquisitionSafetyError(str(exc)) from exc
     results = payload.get("results") if isinstance(payload, dict) else None
-    if not isinstance(results, list):
+    if not isinstance(results, list) or not all(isinstance(item, dict) for item in results):
         raise AcquisitionSafetyError("Bindery search returned an invalid result list.")
+    if payload.get("partial") not in (None, False):
+        raise AcquisitionSafetyError(
+            "Bindery search is incomplete; candidate identity cannot be proven."
+        )
 
     matches = [
         item

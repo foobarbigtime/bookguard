@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..acquisition import (
@@ -13,6 +13,7 @@ from ..acquisition import (
     start_ebook_acquisition,
 )
 from ..acquisition_coordinator import acquisition_coordinator_status
+from ..alternate_candidate import alternate_candidate_preview
 from ..admission import (
     AdmissionSafetyError,
     admission_history,
@@ -189,6 +190,18 @@ def api_automatic_acquisition_readiness():
 def api_automatic_acquisitions(limit: int = 100):
     """Return durable queue-to-staging acquisition history."""
     return acquisition_history(limit)
+
+
+@router.get("/acquisitions/{acquisition_id}/alternate-preview")
+def api_automatic_alternate_preview(
+    acquisition_id: int,
+    candidate_guid: str = Query(min_length=1, max_length=4096),
+):
+    """Review one explicit alternate without requesting a Bindery grab."""
+    try:
+        return alternate_candidate_preview(acquisition_id, candidate_guid)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/acquisition-coordinator")
