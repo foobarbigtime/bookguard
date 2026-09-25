@@ -438,6 +438,7 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
     candidates.sort(key=lambda item: int(item["id"]))
 
     first_waiting = None
+    first_paused = None
     has_retry_wait = False
     for candidate in candidates:
         kind = str(candidate.get("planKind") or "")
@@ -453,9 +454,11 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             return result
         if kind == "SELECT_ALTERNATE_REPLACEMENT":
             result = run_alternate_grab_cycle(candidate)
-            if result.get("state") == "waiting":
-                if first_waiting is None:
+            if result.get("state") in {"waiting", "paused"}:
+                if result["state"] == "waiting" and first_waiting is None:
                     first_waiting = result
+                elif result["state"] == "paused" and first_paused is None:
+                    first_paused = result
                 continue
             return result
         if kind == "CORRECT_REGISTRATION_CONFLICT":
@@ -475,4 +478,6 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         return core.run_automatic_cycle(limit)
     if first_waiting is not None:
         return first_waiting
+    if first_paused is not None:
+        return first_paused
     return core.run_automatic_cycle(limit)

@@ -114,6 +114,19 @@ scenario_run() {
   bg_assert_eq "200" "${status}" "post-success cycle"
   bg_assert_contains "$(cat "${response}")" '"state":"paused"' "no second grab"
   bg_assert_contains "$(cat "${SCENARIO_ROOT}/bindery-state/state.json")" '"grabAttempts":1' "replay refused"
+  bg_remove_container "${SCENARIO_APP}"
+  start_bookguard observe ""
+  response=$(observe_once)
+  bg_assert_contains "${response}" '"planKind":"RECONCILE_ACQUISITION"' "linked child observed"
+  bg_remove_container "${SCENARIO_APP}"
+  start_bookguard automatic "request_alternate_grab,resume_known_transition"
+  response="${SCENARIO_ROOT}/handoff.json"
+  status=$(post_cycle "${response}")
+  bg_assert_eq "200" "${status}" "child handoff HTTP"
+  bg_assert_contains "$(cat "${response}")" '"state":"waiting"' "child waits for verified staging"
+  bg_assert_contains "$(cat "${response}")" '"planKind":"RECONCILE_ACQUISITION"' "parent did not starve child"
+  bg_assert_contains "$(cat "${SCENARIO_ROOT}/bindery-state/state.json")" '"grabAttempts":1' "handoff no duplicate grab"
+  assert_no_media
   scenario_cleanup
 
   bg_header "INTERRUPTED GRAB: PROVE QUEUE WITHOUT REPLAY"
