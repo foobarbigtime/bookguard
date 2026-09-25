@@ -11,7 +11,6 @@ from .alternate_selection import alternate_selection_by_acquisition
 from .bindery_client import BinderyClient
 from .db import (
     create_ebook_acquisition,
-    ebook_acquisition_by_id,
     ebook_replacement_for_acquisition,
     result_by_id,
     update_ebook_acquisition,
