@@ -587,6 +587,38 @@ def test_interrupted_alternate_adopts_proven_queue_without_second_grab(
     assert ebook_replacement_for_acquisition(parent_id)["admission_id"] is None
 
 
+def test_alternate_grab_refuses_queue_arriving_during_final_search(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, _, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+    original_search = client.search_book
+    searches = 0
+
+    def competing_search(book_id):
+        nonlocal searches
+        searches += 1
+        result = original_search(book_id)
+        if searches == 6:
+            # The last search succeeds, but another actor now owns the queue.
+            client.queue = {"items": [{
+                "id": 91, "bookId": 99, "title": "Unrelated release",
+                "protocol": "usenet", "status": "downloading",
+            }], "partial": False}
+        return result
+
+    monkeypatch.setattr(client, "search_book", competing_search)
+    outcome = automatic_runner.run_automatic_cycle()
+
+    assert searches == 6
+    assert outcome["state"] == "blocked"
+    assert "binderyQueueIdle" in outcome["message"]
+    assert client.grabs == []
+    assert ebook_replacement_for_acquisition(parent_id) is None
+
+
 def test_reconcile_verifies_exactly_one_staged_ebook(acquisition_setup):
     setup = acquisition_setup
     started = acquisition.start_ebook_acquisition(
