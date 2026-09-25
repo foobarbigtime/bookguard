@@ -111,6 +111,13 @@ class _AlternateGrabExecutor:
                 # A second search must still represent the same exact grab payload.
                 if _candidate_fingerprint(candidate) != boundary["candidateFingerprint"]:
                     raise workflow.AcquisitionSafetyError("The release changed before grab.")
+                # Bindery can accept other work during a candidate search.
+                readiness = workflow.acquisition_readiness(client)
+                if not readiness["ready"]:
+                    raise workflow.AcquisitionSafetyError(
+                        "Acquisition readiness changed before alternate grab: "
+                        + ", ".join(readiness["blockers"])
+                    )
             except workflow.AcquisitionSafetyError as exc:
                 raise RuntimeError(str(exc)) from exc
 
