@@ -37,9 +37,10 @@ def _prove_queue_after_grab(
             "Exactly one current queue item is required after the grab."
         )
     queue = matches[0]
-    queue_id = workflow._response_queue_id(queue)
+    queue_id = workflow._response_queue_id({"id": queue.get("id")})
     if (
         queue_id is None or queue_id <= 0
+        or workflow._response_queue_id(queue) != queue_id
         or str(queue.get("title") or "").strip().casefold()
         != title.strip().casefold()
         or str(queue.get("protocol") or "").strip().casefold()
@@ -158,6 +159,8 @@ class _AlternateGrabExecutor:
             # Any exception after this point has an uncertain remote outcome.
             # The runner blocks rather than submitting a second grab.
             response = client.grab(int(plan["bookId"]), candidate)
+            if isinstance(response, dict) and response.get("accepted") is False:
+                raise workflow.AcquisitionSafetyError("Bindery declined the alternate grab.")
             queue_id = workflow._response_queue_id(response)
             grab_response = workflow._safe_grab_response(response)
             if queue_id is None:
