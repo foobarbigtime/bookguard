@@ -17,6 +17,20 @@ from .db import ebook_acquisition_by_id, result_by_id
 from .recovery_classifier import classify_acquisition_failure
 
 
+def _candidate_fingerprint(candidate: dict[str, Any]) -> str:
+    """Digest the exact release payload without exposing its download URL."""
+    identity = {
+        key: candidate.get(key)
+        for key in (
+            "guid", "title", "nzbUrl", "size", "protocol", "mediaType",
+            "indexerId", "indexerName", "indexer",
+        )
+    }
+    return hashlib.sha256(
+        json.dumps(identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
 def alternate_candidate_preview(
     acquisition_id: int,
     candidate_guid: str,
@@ -86,16 +100,7 @@ def alternate_candidate_preview(
 
     # Store an opaque digest of the exact grab payload identity. Do not expose
     # the indexer's download URL to operators or persist it in the choice row.
-    identity = {
-        key: candidate.get(key)
-        for key in (
-            "guid", "title", "nzbUrl", "size", "protocol", "mediaType",
-            "indexerId", "indexerName", "indexer",
-        )
-    }
-    candidate_fingerprint = hashlib.sha256(
-        json.dumps(identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
-    ).hexdigest()
+    candidate_fingerprint = _candidate_fingerprint(candidate)
 
     # This is a point-in-time review, not authorization for any later mutation.
     return {

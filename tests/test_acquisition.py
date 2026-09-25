@@ -4,15 +4,20 @@ import zipfile
 
 import pytest
 
-from app import acquisition, alternate_candidate, alternate_selection, scan_guard
+from app import (
+    acquisition, alternate_candidate, alternate_selection, automatic_alternate,
+    automatic_runner, scan_guard,
+)
 from app.db import (
     create_ebook_acquisition,
     ebook_acquisition_by_id,
+    ebook_replacement_for_acquisition,
     init_local_db,
     recent_ebook_acquisitions,
     update_ebook_acquisition,
 )
 from app.observe import run_observe_cycle
+from app.recovery_planner import record_recovery_step_success, recovery_plan_by_id
 
 
 class FakeClient:
@@ -478,6 +483,108 @@ def test_alternate_choice_binds_exact_plan_and_payload_without_grab(
     with pytest.raises(acquisition.AcquisitionSafetyError, match="stale"):
         alternate_selection.bind_alternate_candidate(plan["id"], "alternate-guid", client)
     assert client.grabs == []
+
+
+def _selected_alternate_for_live_test(setup, monkeypatch):
+    client = setup["client"]
+    failed_id = create_ebook_acquisition(setup["result"], client.candidate)
+    update_ebook_acquisition(
+        failed_id, "failed",
+        error=(
+            "Bindery grab failed: Bindery POST /queue/grab returned HTTP 409: "
+            "already grabbed: this release has already been imported"
+        ),
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+    plan = next(
+        item for item in run_observe_cycle()["plans"]
+        if item["planKind"] == "SELECT_ALTERNATE_REPLACEMENT"
+    )
+    monkeypatch.setattr(
+        alternate_candidate, "result_by_id", lambda result_id: setup["result"],
+    )
+    monkeypatch.setattr(
+        automatic_alternate, "result_by_id", lambda result_id: setup["result"],
+    )
+    client.candidate = {
+        **client.candidate,
+        "guid": "alternate-guid",
+        "title": "Ann Patchett - Bel Canto revised retail epub",
+    }
+    alternate_selection.bind_alternate_candidate(plan["id"], "alternate-guid", client)
+    preview = alternate_candidate.alternate_candidate_preview
+    monkeypatch.setattr(automatic_alternate, "BinderyClient", lambda: client)
+    monkeypatch.setattr(
+        automatic_alternate, "alternate_candidate_preview",
+        lambda acquisition_id, guid, supplied=None: preview(acquisition_id, guid, client),
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "automatic")
+    return failed_id, plan, client
+
+
+def test_guarded_alternate_grabs_once_and_retains_admission_gate(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, plan, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "")
+    with pytest.raises(automatic_runner.AutomaticExecutionBlocked) as blocked:
+        automatic_runner.run_automatic_cycle()
+    assert blocked.value.reason_code == "ACTION_NOT_ALLOWLISTED"
+    assert client.grabs == []
+    assert ebook_replacement_for_acquisition(parent_id) is None
+
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+    executed = automatic_runner.run_automatic_cycle()
+    child = ebook_replacement_for_acquisition(parent_id)
+    assert executed["state"] == "executed"
+    assert executed["externalMutationAttempted"] is True
+    assert child["status"] == "queued"
+    assert child["candidate_guid"] == "alternate-guid"
+    assert child["admission_id"] is None
+    assert ebook_acquisition_by_id(parent_id)["status"] == "failed"
+    assert client.grabs == [(42, "alternate-guid")]
+    assert automatic_runner.run_automatic_cycle()["state"] == "paused"
+    assert client.grabs == [(42, "alternate-guid")]
+
+
+def test_interrupted_alternate_adopts_proven_queue_without_second_grab(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, plan, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+    executor = automatic_alternate._EXECUTOR
+    for index in range(3):
+        record_recovery_step_success(plan["id"], index)
+    ready = recovery_plan_by_id(plan["id"])
+    boundary = executor.revalidate(ready, ready["steps"][3])
+    child_id = create_ebook_acquisition(
+        acquisition_setup["result"], client.candidate,
+        replacement_for_acquisition_id=parent_id,
+    )
+    update_ebook_acquisition(child_id, "grab_requested")
+    client.queue = {
+        "items": [{
+            "id": 77, "bookId": 42, "title": client.candidate["title"],
+            "protocol": "usenet", "status": "downloading",
+        }],
+        "partial": False,
+    }
+    from app import automatic_execution as core
+    core._record(
+        ready, "request_alternate_grab", 3, "running",
+        boundary=boundary, increment_attempt=True,
+    )
+
+    adopted = automatic_runner.run_automatic_cycle()
+
+    assert adopted["state"] == "reconciled"
+    assert client.grabs == []
+    assert ebook_replacement_for_acquisition(parent_id)["queue_id"] == 77
+    assert ebook_replacement_for_acquisition(parent_id)["admission_id"] is None
 
 
 def test_reconcile_verifies_exactly_one_staged_ebook(acquisition_setup):

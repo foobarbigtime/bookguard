@@ -1,0 +1,273 @@
+"""One supervised alternate grab, with durable child identity and no replay."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from . import acquisition as workflow
+from . import automatic_execution as core
+from .alternate_candidate import _candidate_fingerprint, alternate_candidate_preview
+from .alternate_selection import alternate_selection_by_acquisition
+from .bindery_client import BinderyClient
+from .db import (
+    create_ebook_acquisition,
+    ebook_acquisition_by_id,
+    ebook_replacement_for_acquisition,
+    result_by_id,
+    update_ebook_acquisition,
+)
+
+
+_ACTION = "request_alternate_grab"
+_PLAN = "SELECT_ALTERNATE_REPLACEMENT"
+
+
+class _AlternateGrabExecutor:
+    action_code = _ACTION
+
+    def revalidate(self, plan: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
+        if (
+            plan.get("planKind") != _PLAN
+            or plan.get("reasonCode") != "ACQUISITION_RELEASE_ALREADY_IMPORTED"
+            or plan.get("subjectKind") != "acquisition"
+            or step.get("code") != _ACTION
+        ):
+            raise core.AutomaticExecutionBlocked(
+                "PLAN_KIND_MISMATCH", "The alternate grab plan or step changed."
+            )
+        parent_id = int(plan["subjectId"])
+        selected = alternate_selection_by_acquisition(parent_id)
+        if (
+            not selected
+            or selected["planId"] != plan["id"]
+            or selected["planSignature"] != plan["signature"]
+            or selected["evidenceRevision"] != plan["evidenceRevision"]
+            or not selected["currentPlan"]
+        ):
+            raise core.AutomaticExecutionBlocked(
+                "ALTERNATE_CHOICE_STALE", "No exact current operator choice is bound to this plan."
+            )
+        if ebook_replacement_for_acquisition(parent_id):
+            raise core.AutomaticExecutionBlocked(
+                "REPLACEMENT_ALREADY_STARTED", "A linked replacement already exists."
+            )
+        try:
+            preview = alternate_candidate_preview(
+                parent_id, selected["candidate"]["guid"]
+            )
+        except workflow.AcquisitionSafetyError as exc:
+            raise core.AutomaticExecutionBlocked(
+                "ALTERNATE_PREFLIGHT_FAILED", str(exc)
+            ) from exc
+        if (
+            preview["candidateFingerprint"] != selected["candidateFingerprint"]
+            or preview["resultId"] != plan["resultId"]
+            or preview["bookId"] != plan["bookId"]
+        ):
+            raise core.AutomaticExecutionBlocked(
+                "ALTERNATE_IDENTITY_CHANGED", "The chosen release or book changed."
+            )
+        return {
+            "ok": True,
+            "planSignature": plan["signature"],
+            "evidenceRevision": plan["evidenceRevision"],
+            "checks": [
+                {"code": "CURRENT_PLAN_AND_SELECTION", "ok": True},
+                {"code": "FRESH_READINESS_AND_CANDIDATE", "ok": True},
+                {"code": "NO_LINKED_REPLACEMENT", "ok": True},
+            ],
+            "acquisitionId": parent_id,
+            "candidateGuid": selected["candidate"]["guid"],
+            "candidateFingerprint": selected["candidateFingerprint"],
+        }
+
+    def execute(
+        self, plan: dict[str, Any], step: dict[str, Any], boundary: dict[str, Any]
+    ) -> dict[str, Any]:
+        parent_id = int(plan["subjectId"])
+        client = BinderyClient()
+        with workflow._acquisition_lock:
+            selected = alternate_selection_by_acquisition(parent_id)
+            if (
+                not selected or not selected["currentPlan"]
+                or selected["planSignature"] != plan["signature"]
+                or selected["candidateFingerprint"] != boundary["candidateFingerprint"]
+                or ebook_replacement_for_acquisition(parent_id)
+            ):
+                raise RuntimeError("The operator choice or replacement state changed.")
+            try:
+                preview = alternate_candidate_preview(
+                    parent_id, selected["candidate"]["guid"], client
+                )
+                if preview["candidateFingerprint"] != boundary["candidateFingerprint"]:
+                    raise workflow.AcquisitionSafetyError("The release payload changed.")
+                result = result_by_id(int(plan["resultId"]))
+                if not result or int(result["book_id"]) != int(plan["bookId"]):
+                    raise workflow.AcquisitionSafetyError("The scan result changed.")
+                _, title, author = workflow._result_and_book(result, client)
+                candidate = workflow._search_candidate(
+                    client, int(plan["bookId"]),
+                    selected["candidate"]["guid"], title, author,
+                )
+                # A second search must still represent the same exact grab payload.
+                if _candidate_fingerprint(candidate) != boundary["candidateFingerprint"]:
+                    raise workflow.AcquisitionSafetyError("The release changed before grab.")
+            except workflow.AcquisitionSafetyError as exc:
+                raise RuntimeError(str(exc)) from exc
+
+            child_id = create_ebook_acquisition(
+                result, candidate, replacement_for_acquisition_id=parent_id,
+            )
+            update_ebook_acquisition(child_id, "grab_requested")
+            # Any exception after this point has an uncertain remote outcome.
+            # The runner blocks rather than submitting a second grab.
+            response = client.grab(int(plan["bookId"]), candidate)
+            update_ebook_acquisition(
+                child_id, "queued",
+                queue_id=workflow._response_queue_id(response),
+                grab_response=workflow._safe_grab_response(response),
+            )
+            return {
+                "parentAcquisitionId": parent_id,
+                "replacementAcquisitionId": child_id,
+                "status": "queued",
+                "externalMutationPerformed": True,
+                "admissionAttempted": False,
+            }
+
+    def reconcile_uncertain(
+        self, plan: dict[str, Any], step: dict[str, Any], existing: dict[str, Any]
+    ) -> dict[str, Any]:
+        parent_id = int(plan["subjectId"])
+        boundary = existing.get("boundary") or {}
+        selected = alternate_selection_by_acquisition(parent_id)
+        child = ebook_replacement_for_acquisition(parent_id)
+        if (
+            not selected or not child
+            or selected["planSignature"] != plan["signature"]
+            or selected["candidateFingerprint"] != boundary.get("candidateFingerprint")
+            or child["candidate_guid"] != boundary.get("candidateGuid")
+            or child["candidate_title"] != selected["candidate"]["title"]
+            or str(child["candidate_protocol"] or "") != selected["candidate"]["protocol"]
+            or int(child["result_id"]) != int(plan["resultId"])
+            or int(child["book_id"]) != int(plan["bookId"])
+            or child["status"] not in {
+                "grab_requested", "queued", "downloading", "awaiting_staging",
+                "staging_observed", "verified",
+            }
+        ):
+            raise core.AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME", "The interrupted child identity is unproven."
+            )
+        client = BinderyClient()
+        try:
+            items, partial = workflow._queue_payload(client)
+            if partial:
+                raise workflow.AcquisitionSafetyError("Bindery queue is partial.")
+            matches = [
+                item for item in workflow._active_or_unknown_queue_items(items)
+                if str(item.get("bookId") or "") == str(child["book_id"])
+            ]
+            if len(matches) != 1:
+                raise workflow.AcquisitionSafetyError("Exactly one current queue item is required.")
+            queue = matches[0]
+            if (
+                queue.get("id") is None
+                or (child["queue_id"] is not None
+                    and str(queue["id"]) != str(child["queue_id"]))
+                or str(queue.get("title") or "").strip().casefold()
+                != str(child["candidate_title"] or "").strip().casefold()
+                or str(queue.get("protocol") or "").strip().casefold()
+                != str(child["candidate_protocol"] or "").strip().casefold()
+            ):
+                raise workflow.AcquisitionSafetyError("The linked queue identity changed.")
+            reconciled = workflow.reconcile_ebook_acquisition(int(child["id"]), client)
+        except workflow.AcquisitionSafetyError as exc:
+            raise core.AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME", str(exc)
+            ) from exc
+        after = reconciled.get("acquisition") or {}
+        if (
+            str(after.get("queue_id") or "") != str(queue["id"])
+            or str(after.get("status") or "") not in {
+                "queued", "downloading", "awaiting_staging", "staging_observed", "verified",
+            }
+        ):
+            raise core.AutomaticExecutionBlocked(
+                "UNCERTAIN_EXTERNAL_OUTCOME", "The queue proof did not reconcile."
+            )
+        return {
+            "parentAcquisitionId": parent_id,
+            "replacementAcquisitionId": int(child["id"]),
+            "status": str(after["status"]),
+            "externalMutationPerformed": False,
+            "admissionAttempted": False,
+            "reconciledAfterRestart": True,
+        }
+
+
+_EXECUTOR = _AlternateGrabExecutor()
+
+
+def register_executor() -> None:
+    core.register_automatic_executor(_ACTION, _EXECUTOR)
+
+
+def run_alternate_grab_cycle(plan: dict[str, Any]) -> dict[str, Any]:
+    plan_id = int(plan["id"])
+    if int(plan.get("currentStep") or 0) <= 3:
+        choice = alternate_selection_by_acquisition(int(plan["subjectId"]))
+        if not choice:
+            return {
+                "ok": True, "state": "waiting", "plan": plan,
+                "externalMutationAttempted": False,
+                "message": "An explicit alternate candidate must be selected first.",
+            }
+    for code in (
+        "revalidate_failed_acquisition", "refresh_history_and_candidates",
+        "select_alternate_candidate",
+    ):
+        refreshed = core.recovery_plan_by_id(plan_id) or plan
+        index = int(refreshed.get("currentStep") or 0)
+        steps = refreshed.get("steps") or []
+        if index >= len(steps) or steps[index].get("code") != code:
+            continue
+        try:
+            boundary = _EXECUTOR.revalidate(
+                refreshed, {"code": _ACTION}
+            )
+            core._require_fresh_boundary(refreshed, boundary)
+        except core.AutomaticExecutionBlocked as exc:
+            blocked = core.block_recovery_plan(plan_id, str(exc))
+            return {
+                "ok": False, "state": "blocked", "plan": blocked,
+                "externalMutationAttempted": False,
+                "reasonCode": exc.reason_code, "message": str(exc),
+            }
+        plan = core.record_recovery_step_success(plan_id, index)
+
+    refreshed = core.recovery_plan_by_id(plan_id) or plan
+    index = int(refreshed.get("currentStep") or 0)
+    steps = refreshed.get("steps") or []
+    if index >= len(steps) or steps[index].get("code") != _ACTION:
+        return {
+            "ok": True, "state": "paused", "plan": refreshed,
+            "externalMutationAttempted": False,
+            "message": "The alternate grab step is complete; later steps remain separate.",
+        }
+    try:
+        result = core.attempt_automatic_step(plan_id)
+    except core.AutomaticExecutionBlocked as exc:
+        if exc.reason_code in {"ACTION_NOT_ALLOWLISTED", "EXECUTOR_NOT_REGISTERED"}:
+            raise
+        blocked = core.block_recovery_plan(plan_id, str(exc))
+        return {
+            "ok": False, "state": "blocked", "plan": blocked,
+            "externalMutationAttempted": exc.reason_code == "EXECUTION_FAILED",
+            "reasonCode": exc.reason_code, "message": str(exc),
+        }
+    return {
+        **result,
+        "state": "reconciled" if result.get("reconciled") else "executed",
+        "externalMutationAttempted": not result.get("replayed", False),
+    }
