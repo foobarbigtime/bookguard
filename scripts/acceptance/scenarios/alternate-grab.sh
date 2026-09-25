@@ -108,6 +108,13 @@ scenario_run() {
   bg_assert_contains "$(cat "${response}")" '"state":"executed"' "live grab outcome"
   bg_assert_contains "$(cat "${response}")" '"admissionAttempted":false' "admission still gated"
   bg_assert_contains "$(cat "${SCENARIO_ROOT}/bindery-state/state.json")" '"grabAttempts":1' "one grab"
+  docker exec "${SCENARIO_APP}" python -c '
+from app.db import ebook_replacement_for_acquisition
+child = ebook_replacement_for_acquisition(1)
+assert child and child["status"] == "queued" and child["queue_id"] == 77
+assert child["grab_response"]["id"] == 77
+assert child["admission_id"] is None
+' || bg_die "The accepted grab lacks a proven durable queue identity."
   assert_no_media
   response="${SCENARIO_ROOT}/replay.json"
   status=$(post_cycle "${response}")
