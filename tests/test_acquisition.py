@@ -606,6 +606,20 @@ def test_alternate_grab_blocks_ambiguous_post_grab_queue_without_replay(
     assert client.grabs == [(42, "alternate-guid")]
 
 
+def test_alternate_queue_proof_rejects_conflicting_ids():
+    client = FakeClient()
+    client.queue = {"items": [{
+        "id": 77, "queueId": 78, "bookId": 42,
+        "title": client.candidate["title"], "protocol": "usenet",
+        "status": "downloading",
+    }], "partial": False}
+
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="identity is unproven"):
+        automatic_alternate._prove_queue_after_grab(
+            client, 42, client.candidate["title"], "usenet",
+        )
+
+
 def test_interrupted_alternate_adopts_proven_queue_without_second_grab(
     acquisition_setup, monkeypatch,
 ):
