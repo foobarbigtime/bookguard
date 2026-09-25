@@ -24,3 +24,4 @@ jobs:
       - run: sudo scripts/acceptance/run acquisition-progress
       - run: sudo scripts/acceptance/run publication-recovery
       - run: sudo scripts/acceptance/run publication-scan
+      - run: sudo scripts/acceptance/run alternate-grab

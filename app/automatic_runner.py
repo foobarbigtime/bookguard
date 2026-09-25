@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from . import automatic_execution as core
+from .automatic_alternate import (
+    register_executor as register_alternate_grab_executor,
+    run_alternate_grab_cycle,
+)
 from .acquisition_progress import (
     register_executor as register_acquisition_progress_executor,
     run_acquisition_progress_cycle,
@@ -35,6 +39,7 @@ register_acquisition_progress_executor()
 register_publication_proof_executor()
 register_guarded_publication_executor()
 register_publication_scan_executor()
+register_alternate_grab_executor()
 
 
 class _FinalizationCleanupExecutor:
@@ -421,6 +426,7 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
                 "FINALIZE_ACQUISITION",
                 "RECONCILE_ACQUISITION",
                 "RECOVER_ADMISSION_PUBLICATION",
+                "SELECT_ALTERNATE_REPLACEMENT",
             }
             or (
                 item.get("planKind") == "RECONCILE_ADMISSION"
@@ -440,6 +446,13 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             continue
         if kind == "RECONCILE_ACQUISITION":
             result = run_acquisition_progress_cycle(candidate)
+            if result.get("state") == "waiting":
+                if first_waiting is None:
+                    first_waiting = result
+                continue
+            return result
+        if kind == "SELECT_ALTERNATE_REPLACEMENT":
+            result = run_alternate_grab_cycle(candidate)
             if result.get("state") == "waiting":
                 if first_waiting is None:
                     first_waiting = result
