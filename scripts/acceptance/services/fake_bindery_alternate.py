@@ -79,14 +79,18 @@ class Handler(BaseHTTPRequestHandler):
             state = json.loads(STATE.read_text(encoding="utf-8"))
             state["grabAttempts"] += 1
             if state["grabAttempts"] != 1 or state["queue"]:
-                STATE.write_text(json.dumps(state), encoding="utf-8")
+                STATE.write_text(
+                    json.dumps(state, separators=(",", ":")), encoding="utf-8"
+                )
                 self.reply(409, {"error": "Duplicate grab refused"})
                 return
             state["queue"] = [{
                 "id": 77, "bookId": 101, "title": ALTERNATE["title"],
                 "protocol": "usenet", "status": "downloading",
             }]
-            STATE.write_text(json.dumps(state), encoding="utf-8")
+            STATE.write_text(
+                json.dumps(state, separators=(",", ":")), encoding="utf-8"
+            )
         self.reply(200, {"queueItem": state["queue"][0]})
 
     def do_DELETE(self) -> None:
