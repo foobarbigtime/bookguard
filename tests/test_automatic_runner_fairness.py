@@ -111,3 +111,27 @@ def test_only_waiting_retry_still_checks_if_it_became_due(monkeypatch):
 
     assert calls == [10]
     assert result["state"] == "ready"
+
+
+def test_paused_alternate_parent_does_not_starve_linked_child(monkeypatch):
+    parent = _plan(3, "SELECT_ALTERNATE_REPLACEMENT")
+    child = _plan(4, "RECONCILE_ACQUISITION")
+    calls = []
+    monkeypatch.setattr(runner, "load_automation_settings",
+                        lambda: SimpleNamespace(automation_mode="automatic"))
+    monkeypatch.setattr(runner.core, "recovery_plan_snapshot",
+                        lambda limit: {"items": [child, parent]})
+    monkeypatch.setattr(runner, "run_alternate_grab_cycle",
+                        lambda plan: calls.append(("parent", plan["id"]))
+                        or {"state": "paused", "plan": plan,
+                            "externalMutationAttempted": False})
+    monkeypatch.setattr(runner, "run_acquisition_progress_cycle",
+                        lambda plan: calls.append(("child", plan["id"]))
+                        or {"state": "waiting", "plan": plan,
+                            "externalMutationAttempted": False})
+
+    result = runner.run_automatic_cycle()
+
+    assert calls == [("parent", 3), ("child", 4)]
+    assert result["state"] == "waiting"
+    assert result["plan"]["id"] == 4
