@@ -8,6 +8,7 @@ from app import (
     acquisition, alternate_candidate, alternate_selection, automatic_alternate,
     automatic_runner, scan_guard,
 )
+from app.bindery_client import BinderyClientError
 from app.db import (
     create_ebook_acquisition,
     ebook_acquisition_by_id,
@@ -280,6 +281,39 @@ def test_start_revalidates_and_records_one_explicit_grab(acquisition_setup):
         "protocol": None,
     }
     assert setup["client"].grabs == [(42, "safe-guid")]
+
+
+def test_post_grab_timeout_is_attention_without_same_release_retry(
+    acquisition_setup, monkeypatch,
+):
+    setup = acquisition_setup
+    client = setup["client"]
+
+    def accepted_then_timed_out(book_id, candidate):
+        client.grabs.append((book_id, candidate["guid"]))
+        client.queue = {"items": [{
+            "id": 77, "bookId": book_id, "title": candidate["title"],
+            "protocol": candidate["protocol"], "status": "downloading",
+        }], "partial": False}
+        raise BinderyClientError("Bindery request failed: Read timed out")
+
+    monkeypatch.setattr(client, "grab", accepted_then_timed_out)
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="timed out"):
+        acquisition.start_ebook_acquisition(setup["result"], "safe-guid", client)
+
+    record = recent_ebook_acquisitions()[0]
+    monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+    observed = run_observe_cycle()
+    decision = next(
+        item for item in observed["records"]
+        if item["subjectKind"] == "acquisition" and item["subjectId"] == str(record["id"])
+    )
+    assert decision["decision"] == "attention"
+    assert client.grabs == [(42, "safe-guid")]
+    assert not any(
+        plan["planKind"] == "RETRY_ACQUISITION_TRANSIENT"
+        for plan in observed["plans"]
+    )
 
 
 def test_start_rejects_release_that_fails_identity_gate(acquisition_setup):
