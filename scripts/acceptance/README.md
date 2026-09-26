@@ -14,6 +14,8 @@ scripts/acceptance/run --list
 scripts/acceptance/run selftest
 BOOKGUARD_ACCEPTANCE_EXPECTED_SHA=<reviewed-full-sha> \
   scripts/acceptance/run acquisition-progress
+BOOKGUARD_ACCEPTANCE_EXPECTED_SHA=<reviewed-full-sha> \
+  scripts/acceptance/run acquisition-admission
 ```
 
 For a mutation PR, pin the exact commit that was reviewed/built:
@@ -108,3 +110,9 @@ The `acquisition-progress` scenario uses disposable BookGuard data and a read-on
 Bindery API. It checks Observe planning, empty-allowlist refusal, staged observation,
 independent verification on a second plan, unchanged staged bytes, absence of library
 publication, and an idle post-verification replay. It never calls a Bindery mutation route.
+
+The `acquisition-admission` scenario uses a separate writable disposable admission root
+and fake Bindery. It proves an empty allowlist publishes nothing, exact allowlisting
+publishes one verified ebook without overwrite and requests one scan, and a seeded
+interrupted journal adopts exact published bytes without another publication or scan.
+It never mounts or reads the production library.

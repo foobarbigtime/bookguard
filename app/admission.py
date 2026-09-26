@@ -10,7 +10,7 @@ import stat
 import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from .bindery_client import BinderyClient, BinderyClientError
 from .config import ConfigurationError, load_automation_settings, settings
@@ -516,6 +516,8 @@ def admit_staged_ebook(
     result: dict[str, Any],
     relative_path: str,
     client: BinderyClient | None = None,
+    *,
+    before_publish: Callable[[int], None] | None = None,
 ) -> dict[str, Any]:
     """Verify, durably record, and atomically publish one staged ebook."""
     if not _admission_lock.acquire(blocking=False):
@@ -592,6 +594,8 @@ def admit_staged_ebook(
             verification=verification,
         )
         _seal_snapshot(temp_path, snapshot_hash)
+        if before_publish is not None:
+            before_publish(admission_id)
         publication_method = _publish_no_replace(temp_path, destination)
         temp_path = None
         update_ebook_admission(
