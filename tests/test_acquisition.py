@@ -552,6 +552,16 @@ def _selected_alternate_for_live_test(setup, monkeypatch):
         automatic_alternate, "alternate_candidate_preview",
         lambda acquisition_id, guid, supplied=None: preview(acquisition_id, guid, client),
     )
+
+    def acknowledged_grab(book_id, candidate):
+        client.grabs.append((book_id, candidate["guid"]))
+        client.queue = {"items": [{
+            "id": 77, "bookId": book_id, "title": candidate["title"],
+            "protocol": candidate["protocol"], "status": "downloading",
+        }], "partial": False}
+        return {"queueItem": {"id": 77}}
+
+    monkeypatch.setattr(client, "grab", acknowledged_grab)
     monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "automatic")
     return failed_id, plan, client
 
@@ -635,6 +645,40 @@ def test_alternate_grab_blocks_ambiguous_post_grab_queue_without_replay(
     assert "Exactly one current queue item" in outcome["message"]
     assert child["status"] == "grab_requested"
     assert child["queue_id"] is None
+    assert client.grabs == [(42, "alternate-guid")]
+    automatic_runner.run_automatic_cycle()
+    assert client.grabs == [(42, "alternate-guid")]
+
+
+@pytest.mark.parametrize("acknowledgement", [
+    {"queueItem": {"id": 78}},
+    {"id": 77, "queueId": 78},
+    {"queueItem": {"id": 77, "queueId": 78}},
+    {"queueItem": {"id": -1}},
+    {"queueItem": {"id": 77.5}},
+    {"queueItem": {"id": True}},
+])
+def test_alternate_grab_blocks_unproven_acknowledgement_without_replay(
+    acquisition_setup, monkeypatch, acknowledgement,
+):
+    parent_id, _, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+    original_grab = client.grab
+
+    def conflicting_grab(book_id, candidate):
+        original_grab(book_id, candidate)
+        return acknowledgement
+
+    monkeypatch.setattr(client, "grab", conflicting_grab)
+    blocked = automatic_runner.run_automatic_cycle()
+    child = ebook_replacement_for_acquisition(parent_id)
+
+    assert blocked["state"] == "blocked"
+    assert child["status"] == "grab_requested"
+    assert child["queue_id"] is None
+    assert child["admission_id"] is None
     assert client.grabs == [(42, "alternate-guid")]
     automatic_runner.run_automatic_cycle()
     assert client.grabs == [(42, "alternate-guid")]
