@@ -18,6 +18,7 @@ from .db import (
     ebook_admission_by_id,
     ebook_acquisition_by_id,
     recent_ebook_acquisitions,
+    note_ebook_acquisition_admission_blocked,
     reset_ebook_acquisition_for_retry,
     result_by_id,
     update_ebook_acquisition,
@@ -905,10 +906,8 @@ def admit_ebook_acquisition(
                     request_scan=request_scan,
                 )
         except AdmissionSafetyError as exc:
-            update_ebook_acquisition(
-                acquisition_id,
-                "verified",
-                error=f"Admission blocked: {exc}",
+            note_ebook_acquisition_admission_blocked(
+                acquisition_id, f"Admission blocked: {exc}",
             )
             raise AcquisitionSafetyError(str(exc)) from exc
 

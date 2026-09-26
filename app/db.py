@@ -846,6 +846,17 @@ def update_ebook_acquisition(
         conn.commit()
 
 
+def note_ebook_acquisition_admission_blocked(acquisition_id: int, error: str) -> None:
+    """Record a refusal only while another worker has not admitted this item."""
+    with local_conn() as conn:
+        conn.execute(
+            """UPDATE ebook_acquisitions SET error=?, updated_at=?
+               WHERE id=? AND status='verified' AND admission_id IS NULL""",
+            (str(error), utc_now(), int(acquisition_id)),
+        )
+        conn.commit()
+
+
 def reset_ebook_acquisition_for_retry(acquisition_id: int) -> None:
     """Clear attempt-specific queue state before retrying the same durable acquisition."""
     with local_conn() as conn:

@@ -1133,7 +1133,7 @@ def test_uncertain_scan_executor_requires_registration_proof(monkeypatch):
     assert result["externalMutationPerformed"] is False
 
 
-def test_known_admission_execute_reports_scan_mutation_precisely(monkeypatch):
+def test_known_admission_execute_never_requests_second_scan(monkeypatch):
     plan = _admission_plan()
     executor = execution._KnownAdmissionReconcileExecutor()
 
@@ -1141,20 +1141,20 @@ def test_known_admission_execute_reports_scan_mutation_precisely(monkeypatch):
     monkeypatch.setattr(
         admission_executor,
         "reconcile_admission",
-        lambda admission_id, client: {
+        lambda admission_id, client, *, allow_scan: {
             "admissionId": admission_id,
             "bookId": 42,
-            "status": "scan_requested",
-            "registered": False,
-            "scanRequested": True,
+            "status": "registered",
+            "registered": True,
+            "scanRequested": False,
             "registrationConflict": None,
             "stagingRetained": True,
-        },
+        } if allow_scan is False else pytest.fail("automatic reconciliation must not scan"),
     )
 
     result = executor.execute(plan, plan["steps"][1], {})
 
-    assert result["scanRequested"] is True
-    assert result["externalMutationPerformed"] is True
+    assert result["scanRequested"] is False
+    assert result["externalMutationPerformed"] is False
     assert result["libraryBytesChanged"] is False
     assert result["stagingRetained"] is True

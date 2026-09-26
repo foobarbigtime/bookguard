@@ -18,6 +18,7 @@ _PLAN_DECISIONS = {
     "would_reconcile_acquisition",
     "would_review_verified_acquisition",
     "would_reconcile_admission",
+    "would_request_published_admission_scan",
     "would_correct_registration_conflict",
     "would_finalize_acquisition",
     "would_recover_acquisition_failure",
@@ -434,6 +435,25 @@ def _definition(
             ],
         )
 
+    if action == "would_request_published_admission_scan":
+        return (
+            "REQUEST_PUBLISHED_ACQUISITION_SCAN",
+            "PUBLISHED_ACQUISITION_ADMISSION_SCAN_READY",
+            [
+                _step(
+                    "reobserve_published_acquisition_admission",
+                    "Verify the linked acquisition, publication receipt, bytes, and Bindery ownership.",
+                    stop_if_unproven=True,
+                ),
+                _step(
+                    "request_published_acquisition_scan",
+                    "Request one Bindery scan for the exact published acquisition admission.",
+                    external_mutation=True,
+                    stop_if_unproven=True,
+                ),
+            ],
+        )
+
     if action == "would_correct_registration_conflict":
         return (
             "CORRECT_REGISTRATION_CONFLICT",
@@ -643,6 +663,18 @@ def _build_plan(conn, decision: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(decision_evidence.get("recoveryClassification"), dict)
         else {}
     )
+
+    # A pending scan may be observed again, but automatic reconciliation never
+    # sends another scan. Bound the read-only checks to two hours.
+    if (
+        plan_kind == "RECONCILE_ADMISSION"
+        and reason_code == "REGISTRATION_SCAN_PENDING"
+    ):
+        recovery_classification = {
+            "retrySameOperation": True,
+            "maxRetries": 120,
+            "backoffSeconds": [60],
+        }
 
     preconditions = {
         "requiredChecks": required_checks,

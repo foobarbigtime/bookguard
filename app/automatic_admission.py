@@ -220,12 +220,11 @@ class _KnownAdmissionReconcileExecutor:
     ) -> dict[str, Any]:
         admission_id = int(plan["subjectId"])
         try:
-            if str(plan.get("reasonCode") or "") == "REGISTRATION_SCAN_OUTCOME_UNKNOWN":
-                outcome = reconcile_admission(
-                    admission_id, BinderyClient(), allow_scan=False
-                )
-            else:
-                outcome = reconcile_admission(admission_id, BinderyClient())
+            # A scan_requested status means a request was already sent. Automatic
+            # reconciliation only adopts independently proven registration.
+            outcome = reconcile_admission(
+                admission_id, BinderyClient(), allow_scan=False
+            )
         except AdmissionSafetyError as exc:
             raise RuntimeError(str(exc)) from exc
 

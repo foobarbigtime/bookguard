@@ -15,6 +15,10 @@ from .acquisition_admission_execution import (
     register_executor as register_verified_admission_executor,
     run_verified_admission_cycle,
 )
+from .acquisition_admission_scan import (
+    register_executor as register_acquisition_scan_executor,
+    run_published_acquisition_scan_cycle,
+)
 from .acquisition import AcquisitionSafetyError, finalize_ebook_acquisition
 from .config import load_automation_settings
 from .db import ebook_acquisition_by_id, local_conn
@@ -41,6 +45,7 @@ automatic_execution_history = core.automatic_execution_history
 register_registration_conflict_executor()
 register_acquisition_progress_executor()
 register_verified_admission_executor()
+register_acquisition_scan_executor()
 register_publication_proof_executor()
 register_guarded_publication_executor()
 register_publication_scan_executor()
@@ -431,6 +436,7 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
                 "FINALIZE_ACQUISITION",
                 "RECONCILE_ACQUISITION",
                 "PREPARE_ACQUISITION_ADMISSION",
+                "REQUEST_PUBLISHED_ACQUISITION_SCAN",
                 "RECOVER_ADMISSION_PUBLICATION",
                 "SELECT_ALTERNATE_REPLACEMENT",
             }
@@ -442,6 +448,10 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         and (
             item.get("planKind") != "PREPARE_ACQUISITION_ADMISSION"
             or "admit_verified_acquisition" in configured.automatic_action_allowlist
+        )
+        and (
+            item.get("planKind") != "REQUEST_PUBLISHED_ACQUISITION_SCAN"
+            or "request_published_acquisition_scan" in configured.automatic_action_allowlist
         )
         and item.get("state") in {"planned", "ready", "retry_wait"}
     ]
@@ -464,6 +474,8 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             return result
         if kind == "PREPARE_ACQUISITION_ADMISSION":
             return run_verified_admission_cycle(candidate)
+        if kind == "REQUEST_PUBLISHED_ACQUISITION_SCAN":
+            return run_published_acquisition_scan_cycle(candidate)
         if kind == "SELECT_ALTERNATE_REPLACEMENT":
             result = run_alternate_grab_cycle(candidate)
             if result.get("state") in {"waiting", "paused"}:
