@@ -743,7 +743,9 @@ def test_interrupted_alternate_requires_consistent_queue_proof_without_replay(
     assert ebook_replacement_for_acquisition(parent_id)["admission_id"] is None
 
 
-@pytest.mark.parametrize("evidence_change", ["missing", "wrong_book", "changed_bytes"])
+@pytest.mark.parametrize("evidence_change", [
+    "missing", "wrong_book", "changed_bytes", "missing_queue_id", "queue_downloading",
+])
 def test_interrupted_verified_alternate_requires_exact_staged_proof(
     acquisition_setup, monkeypatch, evidence_change,
 ):
@@ -770,7 +772,8 @@ def test_interrupted_verified_alternate_requires_exact_staged_proof(
     elif evidence_change == "wrong_book":
         verification["bookId"] = 99
     update_ebook_acquisition(
-        child_id, "verified", queue_id=77,
+        child_id, "verified",
+        queue_id=None if evidence_change == "missing_queue_id" else 77,
         staged_relative_path=staged.name, staged_sha256=digest,
         verification=verification,
     )
@@ -778,7 +781,9 @@ def test_interrupted_verified_alternate_requires_exact_staged_proof(
         staged.write_bytes(staged.read_bytes() + b"changed")
     client.queue = {"items": [{
         "id": 77, "bookId": 42, "title": client.candidate["title"],
-        "protocol": "usenet", "status": "importExternal",
+        "protocol": "usenet",
+        "status": "downloading" if evidence_change == "queue_downloading"
+        else "importExternal",
     }], "partial": False}
 
     with pytest.raises(automatic_alternate.core.AutomaticExecutionBlocked) as exc:
