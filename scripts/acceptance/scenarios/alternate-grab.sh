@@ -5,7 +5,7 @@
 source "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/scenarios/acquisition-progress.sh"
 
 scenario_description() {
-  printf '%s\n' "Grab one explicit disposable alternate, then adopt an interrupted queue outcome without replay."
+  printf '%s\n' "Grab one disposable alternate, then prove interrupted queue and verified-byte outcomes without replay."
 }
 
 setup_alternate() {
@@ -86,6 +86,25 @@ seed_running_child() {
     "${SCENARIO_IMAGE}" python /app/seed_running.py
 }
 
+seed_verified_child() {
+  docker run --rm --user 99:100 \
+    -e CONFIG_DIR=/config \
+    -e BOOKGUARD_STAGING_ROOT=/staging \
+    -e BINDERY_URL="http://${SCENARIO_FAKE}:8787" \
+    -e BINDERY_API_KEY=acceptance \
+    --network "${SCENARIO_NETWORK}" \
+    -v "${SCENARIO_ROOT}/config:/config:rw" \
+    -v "${SCENARIO_ROOT}/staging:/staging:rw" \
+    -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_alternate_verified.py:/app/seed_verified.py:ro" \
+    "${SCENARIO_IMAGE}" python /app/seed_verified.py
+}
+
+set_verified_queue() {
+  printf '%s\n' '{"queue":[{"id":77,"bookId":101,"title":"Fixture Author - Alternate Fixture alternate epub","protocol":"usenet","status":"importExternal"}],"grabAttempts":0}' \
+    > "${SCENARIO_ROOT}/bindery-state/state.json"
+  chown 99:100 "${SCENARIO_ROOT}/bindery-state/state.json"
+}
+
 assert_no_media() {
   [[ -z "$(find "${SCENARIO_ROOT}/books" -type f -print -quit)" ]] ||
     bg_die "Alternate scenario published an ebook."
@@ -156,4 +175,58 @@ assert child["admission_id"] is None
   bg_assert_contains "${executions}" '"actionCode":"request_alternate_grab"' "execution journal"
   assert_no_media
   bg_note "Disposable alternate grab and interrupted queue adoption passed without admission."
+  scenario_cleanup
+
+  bg_header "INTERRUPTED VERIFIED CHILD: PROVE DURABLE BYTES WITHOUT REPLAY"
+  setup_alternate
+  observe_and_select
+  advance_to_grab_without_allowlist
+  seed_running_child
+  set_verified_queue
+  seed_verified_child
+  local verified_hash
+  verified_hash=$(bg_sha256 "${SCENARIO_ROOT}/staging/Alternate Fixture.epub")
+  start_bookguard automatic "request_alternate_grab"
+  response="${SCENARIO_ROOT}/verified-adopted.json"
+  status=$(post_cycle "${response}")
+  bg_assert_eq "200" "${status}" "verified adoption HTTP"
+  bg_assert_contains "$(cat "${response}")" '"state":"reconciled"' "verified child adopted"
+  bg_assert_contains "$(cat "${response}")" '"admissionAttempted":false' "verified child not admitted"
+  bg_assert_contains "$(cat "${SCENARIO_ROOT}/bindery-state/state.json")" '"grabAttempts":0' "verified child no grab replay"
+  bg_assert_eq "${verified_hash}" "$(bg_sha256 "${SCENARIO_ROOT}/staging/Alternate Fixture.epub")" "verified bytes unchanged"
+  [[ -z "$(find "${SCENARIO_ROOT}/books" -type f -print -quit)" ]] ||
+    bg_die "Verified adoption published an ebook."
+  docker exec "${SCENARIO_APP}" python -c '
+from app.db import ebook_replacement_for_acquisition
+child = ebook_replacement_for_acquisition(1)
+assert child and child["status"] == "verified" and child["queue_id"] == 77
+assert child["verification"]["safeToAdmit"] is True
+assert child["staged_sha256"] == child["verification"]["sha256"]
+assert child["admission_id"] is None
+' || bg_die "Verified child lacks exact durable staged proof."
+  scenario_cleanup
+
+  bg_header "CHANGED VERIFIED BYTES: BLOCK WITHOUT GRAB OR ADMISSION"
+  setup_alternate
+  observe_and_select
+  advance_to_grab_without_allowlist
+  seed_running_child
+  set_verified_queue
+  seed_verified_child
+  printf '%s' changed >> "${SCENARIO_ROOT}/staging/Alternate Fixture.epub"
+  start_bookguard automatic "request_alternate_grab"
+  response="${SCENARIO_ROOT}/verified-changed.json"
+  status=$(post_cycle "${response}")
+  bg_assert_eq "200" "${status}" "changed bytes HTTP"
+  bg_assert_contains "$(cat "${response}")" '"state":"blocked"' "changed verified child blocked"
+  bg_assert_contains "$(cat "${response}")" 'UNCERTAIN_EXTERNAL_OUTCOME' "changed bytes lack exact proof"
+  bg_assert_contains "$(cat "${SCENARIO_ROOT}/bindery-state/state.json")" '"grabAttempts":0' "changed bytes no grab replay"
+  [[ -z "$(find "${SCENARIO_ROOT}/books" -type f -print -quit)" ]] ||
+    bg_die "Changed bytes published an ebook."
+  docker exec "${SCENARIO_APP}" python -c '
+from app.db import ebook_replacement_for_acquisition
+child = ebook_replacement_for_acquisition(1)
+assert child and child["admission_id"] is None
+' || bg_die "Changed verified bytes reached admission."
+  bg_note "Verified restart adopted exact disposable bytes and blocked changed bytes without replay."
 }
