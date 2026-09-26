@@ -23,6 +23,7 @@ _PLAN = "SELECT_ALTERNATE_REPLACEMENT"
 
 def _prove_queue_after_grab(
     client: BinderyClient, book_id: int, title: str, protocol: str,
+    acknowledged_id: int | None = None,
 ) -> dict[str, Any]:
     """Prove one alternate against a complete live queue snapshot."""
     items, partial = workflow._queue_payload(client)
@@ -37,10 +38,17 @@ def _prove_queue_after_grab(
             "Exactly one current queue item is required after the grab."
         )
     queue = matches[0]
-    queue_id = workflow._response_queue_id({"id": queue.get("id")})
+    try:
+        queue_id = _acknowledged_queue_id({"id": queue.get("id")})
+        item_id = _acknowledged_queue_id(queue)
+    except workflow.AcquisitionSafetyError as exc:
+        raise workflow.AcquisitionSafetyError(
+            "The post-grab queue identity is unproven."
+        ) from exc
     if (
         queue_id is None or queue_id <= 0
-        or workflow._response_queue_id(queue) != queue_id
+        or item_id != queue_id
+        or (acknowledged_id is not None and acknowledged_id != queue_id)
         or str(queue.get("title") or "").strip().casefold()
         != title.strip().casefold()
         or str(queue.get("protocol") or "").strip().casefold()
@@ -50,6 +58,35 @@ def _prove_queue_after_grab(
             "The post-grab queue identity is unproven."
         )
     return queue
+
+
+def _acknowledged_queue_id(response: Any) -> int | None:
+    """Require all IDs in a grab acknowledgement to agree before queue adoption."""
+    if not isinstance(response, dict):
+        return None
+    ids: set[int] = set()
+    for source in (response, *(response.get(key) for key in ("item", "queueItem", "queue"))):
+        if not isinstance(source, dict):
+            continue
+        for key in ("id", "queueId"):
+            raw = source.get(key)
+            if raw is None:
+                continue
+            if not (
+                isinstance(raw, int) and not isinstance(raw, bool)
+                or isinstance(raw, str) and raw.strip().isascii()
+                and raw.strip().isdecimal()
+            ):
+                raise workflow.AcquisitionSafetyError("The grab acknowledgement ID is invalid.")
+            if isinstance(raw, str) and len(raw.strip()) > 19:
+                raise workflow.AcquisitionSafetyError("The grab acknowledgement ID is invalid.")
+            parsed = int(raw)
+            if not 0 < parsed <= 2**63 - 1:
+                raise workflow.AcquisitionSafetyError("The grab acknowledgement ID is invalid.")
+            ids.add(parsed)
+    if len(ids) > 1:
+        raise workflow.AcquisitionSafetyError("The grab acknowledgement IDs conflict.")
+    return next(iter(ids), None)
 
 
 class _AlternateGrabExecutor:
@@ -161,17 +198,16 @@ class _AlternateGrabExecutor:
             response = client.grab(int(plan["bookId"]), candidate)
             if isinstance(response, dict) and response.get("accepted") is False:
                 raise workflow.AcquisitionSafetyError("Bindery declined the alternate grab.")
-            queue_id = workflow._response_queue_id(response)
-            grab_response = workflow._safe_grab_response(response)
-            if queue_id is None:
-                # An accepted response may omit the queue ID. Prove it from
-                # a complete fresh queue read without resending the grab.
-                queue = _prove_queue_after_grab(
-                    client, int(plan["bookId"]),
-                    str(candidate["title"]), str(candidate.get("protocol") or ""),
-                )
-                queue_id = workflow._response_queue_id(queue)
-                grab_response = workflow._safe_grab_response(queue)
+            # Even a response with an ID needs independent attribution. After
+            # this POST, any missing or conflicting proof blocks without replay.
+            acknowledged_id = _acknowledged_queue_id(response)
+            queue = _prove_queue_after_grab(
+                client, int(plan["bookId"]),
+                str(candidate["title"]), str(candidate.get("protocol") or ""),
+                acknowledged_id,
+            )
+            queue_id = _acknowledged_queue_id(queue)
+            grab_response = workflow._safe_grab_response(queue)
             update_ebook_acquisition(
                 child_id, "queued",
                 queue_id=queue_id,
@@ -216,7 +252,7 @@ class _AlternateGrabExecutor:
                 client, int(child["book_id"]),
                 str(child["candidate_title"]), str(child["candidate_protocol"] or ""),
             )
-            queue_id = workflow._response_queue_id({"id": queue["id"]})
+            queue_id = _acknowledged_queue_id(queue)
             if child["queue_id"] is not None and queue_id != child["queue_id"]:
                 raise workflow.AcquisitionSafetyError("The linked queue identity changed.")
             reconciled = workflow.reconcile_ebook_acquisition(int(child["id"]), client)
