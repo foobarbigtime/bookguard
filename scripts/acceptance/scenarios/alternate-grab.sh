@@ -100,7 +100,8 @@ seed_verified_child() {
 }
 
 set_verified_queue() {
-  printf '%s\n' '{"queue":[{"id":77,"bookId":101,"title":"Fixture Author - Alternate Fixture alternate epub","protocol":"usenet","status":"importExternal"}],"grabAttempts":0}' \
+  local queue_status=${1:-importExternal}
+  printf '{"queue":[{"id":77,"bookId":101,"title":"Fixture Author - Alternate Fixture alternate epub","protocol":"usenet","status":"%s"}],"grabAttempts":0}\n' "${queue_status}" \
     > "${SCENARIO_ROOT}/bindery-state/state.json"
   chown 99:100 "${SCENARIO_ROOT}/bindery-state/state.json"
 }
@@ -229,4 +230,28 @@ child = ebook_replacement_for_acquisition(1)
 assert child and child["admission_id"] is None
 ' || bg_die "Changed verified bytes reached admission."
   bg_note "Verified restart adopted exact disposable bytes and blocked changed bytes without replay."
+  scenario_cleanup
+
+  bg_header "DOWNLOADING QUEUE: VERIFIED CHILD CANNOT BE ADOPTED"
+  setup_alternate
+  observe_and_select
+  advance_to_grab_without_allowlist
+  seed_running_child
+  set_verified_queue downloading
+  seed_verified_child
+  start_bookguard automatic "request_alternate_grab"
+  response="${SCENARIO_ROOT}/verified-downloading.json"
+  status=$(post_cycle "${response}")
+  bg_assert_eq "200" "${status}" "downloading queue HTTP"
+  bg_assert_contains "$(cat "${response}")" '"state":"blocked"' "downloading queue blocked"
+  bg_assert_contains "$(cat "${response}")" 'completed queue handoff' "handoff must complete"
+  bg_assert_contains "$(cat "${SCENARIO_ROOT}/bindery-state/state.json")" '"grabAttempts":0' "downloading queue no grab replay"
+  [[ -z "$(find "${SCENARIO_ROOT}/books" -type f -print -quit)" ]] ||
+    bg_die "Downloading queue published an ebook."
+  docker exec "${SCENARIO_APP}" python -c '
+from app.db import ebook_replacement_for_acquisition
+child = ebook_replacement_for_acquisition(1)
+assert child and child["admission_id"] is None
+' || bg_die "Downloading queue reached admission."
+  bg_note "Verified restart refused an unfinished queue handoff without replay."
 }
