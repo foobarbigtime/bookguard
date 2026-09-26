@@ -151,6 +151,11 @@ scenario_run() {
   observe_body=$(observe_once)
   bg_assert_contains "${observe_body}" '"planKind":"PREPARE_ACQUISITION_ADMISSION"' "verified admission review plan"
   bg_assert_contains "${observe_body}" '"executionAllowed":false' "admission plan inert"
+  local preview
+  preview=$(curl -fsS -u "${AUTH_USER}:${AUTH_PASSWORD}" \
+    "http://127.0.0.1:${SCENARIO_PORT}/api/automatic/acquisitions/1/admission-preview")
+  bg_assert_contains "${preview}" '"readOnly":true' "admission preview read-only"
+  bg_assert_contains "${preview}" '"reasonCode":"ADMISSION_READINESS"' "writable admission blocked"
   bg_assert_hash "${SCENARIO_ROOT}/staging/Progress Fixture.epub" "${fixture_hash}" "review bytes"
   bg_remove_container "${SCENARIO_APP}"
   start_bookguard automatic "resume_known_transition"
