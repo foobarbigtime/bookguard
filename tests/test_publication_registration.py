@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 from app import publication_registration as registration
+from app import scan_safety
 
 
 def _plan() -> dict:
@@ -91,10 +92,12 @@ def test_exact_scan_request_is_single_and_stops_after_durable_transition(monkeyp
             calls.append("scan")
 
     monkeypatch.setattr(registration, "BinderyClient", FakeClient)
-    monkeypatch.setattr(registration, "_scan_requested",
-                        lambda plan, method, sha: calls.append("durable"))
+    monkeypatch.setattr(registration, "require_quiescent_admissions", lambda _: None)
+    monkeypatch.setattr(registration, "transition_scan_status", lambda **kwargs:
+                        calls.append("claim" if kwargs["to_status"] == "scan_requesting"
+                                     else "durable"))
     result = executor.execute(_plan(), _plan()["steps"][5], _boundary())
-    assert calls == ["scan", "durable"]
+    assert calls == ["claim", "scan", "durable"]
     assert result["status"] == "scan_requested"
     assert result["scanRequested"] is True
     assert result["libraryBytesChanged"] is False
@@ -123,6 +126,7 @@ def test_independently_registered_owner_is_adopted_without_scan(monkeypatch):
 
 def test_unproven_scan_conflict_does_not_mark_scan_requested(monkeypatch):
     executor = registration._KnownPublicationRegistrationExecutor()
+    calls = []
     monkeypatch.setattr(executor, "revalidate", lambda plan, step: _boundary())
 
     class FakeClient:
@@ -130,10 +134,12 @@ def test_unproven_scan_conflict_does_not_mark_scan_requested(monkeypatch):
             raise registration.BinderyClientError("HTTP 409: request refused")
 
     monkeypatch.setattr(registration, "BinderyClient", FakeClient)
-    monkeypatch.setattr(registration, "_scan_requested", lambda *args:
-                        pytest.fail("unproven conflict must not advance admission"))
+    monkeypatch.setattr(registration, "require_quiescent_admissions", lambda _: None)
+    monkeypatch.setattr(registration, "transition_scan_status", lambda **kwargs:
+                        calls.append(kwargs["to_status"]))
     with pytest.raises(registration.BinderyClientError, match="request refused"):
         executor.execute(_plan(), _plan()["steps"][5], _boundary())
+    assert calls == ["scan_requesting"]
 
 
 def test_running_unproven_scan_never_retries(monkeypatch):
@@ -169,12 +175,30 @@ def test_scan_state_transition_requires_exact_published_identity(monkeypatch):
     def local_conn():
         yield conn
 
-    monkeypatch.setattr(registration, "local_conn", local_conn)
-    monkeypatch.setattr(registration, "utc_now", lambda: "now")
+    monkeypatch.setattr(scan_safety, "local_conn", local_conn)
+    monkeypatch.setattr(scan_safety, "utc_now", lambda: "now")
+    identity = {
+        "admission_id": 9, "result_id": 4, "book_id": 101,
+        "stored_path": _plan()["path"], "publication_method": "renameat2",
+    }
     with pytest.raises(registration.AdmissionSafetyError, match="changed"):
-        registration._scan_requested(_plan(), "renameat2", "b" * 64)
-    registration._scan_requested(_plan(), "renameat2", "a" * 64)
+        scan_safety.transition_scan_status(
+            **identity, sha256="b" * 64,
+            from_status="published", to_status="scan_requesting",
+        )
+    scan_safety.transition_scan_status(
+        **identity, sha256="a" * 64,
+        from_status="published", to_status="scan_requesting",
+    )
+    assert conn.execute("SELECT status FROM ebook_admissions").fetchone()[0] == "scan_requesting"
+    scan_safety.transition_scan_status(
+        **identity, sha256="a" * 64,
+        from_status="scan_requesting", to_status="scan_requested",
+    )
     assert conn.execute("SELECT status FROM ebook_admissions").fetchone()[0] == "scan_requested"
     with pytest.raises(registration.AdmissionSafetyError, match="changed"):
-        registration._scan_requested(_plan(), "renameat2", "a" * 64)
+        scan_safety.transition_scan_status(
+            **identity, sha256="a" * 64,
+            from_status="published", to_status="scan_requesting",
+        )
     conn.close()
