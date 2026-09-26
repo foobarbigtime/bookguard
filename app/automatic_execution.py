@@ -4,7 +4,7 @@ import json
 from typing import Any, Protocol
 
 from .automatic_admission import _KnownAdmissionReconcileExecutor
-from .automatic_contracts import AutomaticExecutionBlocked
+from .automatic_contracts import AutomaticExecutionBlocked, AutomaticPostEffectUncertain
 from .automatic_quarantine import _UnsafeMediaQuarantineExecutor
 from .automatic_retry import _TransientAcquisitionRetryExecutor
 from .config import AUTOMATIC_ACTION_CODES, load_automation_settings
@@ -872,6 +872,9 @@ def attempt_automatic_step(plan_id: int) -> dict[str, Any]:
     )
     try:
         result = executor.execute(plan, step, boundary) or {}
+    except AutomaticPostEffectUncertain as exc:
+        # The durable running boundary is the only safe route to read-only adoption.
+        raise AutomaticExecutionBlocked("POST_EFFECT_UNCERTAIN", str(exc)) from exc
     except Exception as exc:
         _record(plan, action_code, step_index, "failed", boundary=boundary, error=str(exc))
         raise AutomaticExecutionBlocked("EXECUTION_FAILED", str(exc)) from exc
