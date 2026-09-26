@@ -549,6 +549,77 @@ def test_guarded_alternate_grabs_once_and_retains_admission_gate(
     assert client.grabs == [(42, "alternate-guid")]
 
 
+def test_alternate_grab_proves_queue_when_response_omits_id(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, _, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+
+    def accepted_without_id(book_id, candidate):
+        client.grabs.append((book_id, candidate["guid"]))
+        client.queue = {"items": [{
+            "id": 77, "bookId": book_id, "title": candidate["title"],
+            "protocol": candidate["protocol"], "status": "downloading",
+        }], "partial": False}
+        return {"accepted": True}
+
+    monkeypatch.setattr(client, "grab", accepted_without_id)
+    outcome = automatic_runner.run_automatic_cycle()
+    child = ebook_replacement_for_acquisition(parent_id)
+
+    assert outcome["state"] == "executed"
+    assert child["status"] == "queued"
+    assert child["queue_id"] == 77
+    assert child["grab_response"]["id"] == 77
+    assert child["admission_id"] is None
+    assert client.grabs == [(42, "alternate-guid")]
+
+
+def test_alternate_grab_blocks_ambiguous_post_grab_queue_without_replay(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, _, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+
+    def accepted_with_ambiguous_queue(book_id, candidate):
+        client.grabs.append((book_id, candidate["guid"]))
+        client.queue = {"items": [{
+            "id": number, "bookId": book_id, "title": candidate["title"],
+            "protocol": candidate["protocol"], "status": "downloading",
+        } for number in (77, 78)], "partial": False}
+        return {"accepted": True}
+
+    monkeypatch.setattr(client, "grab", accepted_with_ambiguous_queue)
+    outcome = automatic_runner.run_automatic_cycle()
+    child = ebook_replacement_for_acquisition(parent_id)
+
+    assert outcome["state"] == "blocked"
+    assert "Exactly one current queue item" in outcome["message"]
+    assert child["status"] == "grab_requested"
+    assert child["queue_id"] is None
+    assert client.grabs == [(42, "alternate-guid")]
+    automatic_runner.run_automatic_cycle()
+    assert client.grabs == [(42, "alternate-guid")]
+
+
+def test_alternate_queue_proof_rejects_conflicting_ids():
+    client = FakeClient()
+    client.queue = {"items": [{
+        "id": 77, "queueId": 78, "bookId": 42,
+        "title": client.candidate["title"], "protocol": "usenet",
+        "status": "downloading",
+    }], "partial": False}
+
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="identity is unproven"):
+        automatic_alternate._prove_queue_after_grab(
+            client, 42, client.candidate["title"], "usenet",
+        )
+
+
 def test_interrupted_alternate_adopts_proven_queue_without_second_grab(
     acquisition_setup, monkeypatch,
 ):

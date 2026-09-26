@@ -21,6 +21,37 @@ _ACTION = "request_alternate_grab"
 _PLAN = "SELECT_ALTERNATE_REPLACEMENT"
 
 
+def _prove_queue_after_grab(
+    client: BinderyClient, book_id: int, title: str, protocol: str,
+) -> dict[str, Any]:
+    """Attribute a grab without a response ID to one complete live queue item."""
+    items, partial = workflow._queue_payload(client)
+    if partial:
+        raise workflow.AcquisitionSafetyError("Bindery queue is partial.")
+    matches = [
+        item for item in workflow._active_or_unknown_queue_items(items)
+        if str(item.get("bookId") or "") == str(book_id)
+    ]
+    if len(matches) != 1:
+        raise workflow.AcquisitionSafetyError(
+            "Exactly one current queue item is required after the grab."
+        )
+    queue = matches[0]
+    queue_id = workflow._response_queue_id({"id": queue.get("id")})
+    if (
+        queue_id is None or queue_id <= 0
+        or workflow._response_queue_id(queue) != queue_id
+        or str(queue.get("title") or "").strip().casefold()
+        != title.strip().casefold()
+        or str(queue.get("protocol") or "").strip().casefold()
+        != protocol.strip().casefold()
+    ):
+        raise workflow.AcquisitionSafetyError(
+            "The post-grab queue identity is unproven."
+        )
+    return queue
+
+
 class _AlternateGrabExecutor:
     action_code = _ACTION
 
@@ -128,15 +159,29 @@ class _AlternateGrabExecutor:
             # Any exception after this point has an uncertain remote outcome.
             # The runner blocks rather than submitting a second grab.
             response = client.grab(int(plan["bookId"]), candidate)
+            if isinstance(response, dict) and response.get("accepted") is False:
+                raise workflow.AcquisitionSafetyError("Bindery declined the alternate grab.")
+            queue_id = workflow._response_queue_id(response)
+            grab_response = workflow._safe_grab_response(response)
+            if queue_id is None:
+                # An accepted response may omit the queue ID. Prove it from
+                # a complete fresh queue read without resending the grab.
+                queue = _prove_queue_after_grab(
+                    client, int(plan["bookId"]),
+                    str(candidate["title"]), str(candidate.get("protocol") or ""),
+                )
+                queue_id = workflow._response_queue_id(queue)
+                grab_response = workflow._safe_grab_response(queue)
             update_ebook_acquisition(
                 child_id, "queued",
-                queue_id=workflow._response_queue_id(response),
-                grab_response=workflow._safe_grab_response(response),
+                queue_id=queue_id,
+                grab_response=grab_response,
             )
             return {
                 "parentAcquisitionId": parent_id,
                 "replacementAcquisitionId": child_id,
                 "status": "queued",
+                "queueId": queue_id,
                 "externalMutationPerformed": True,
                 "admissionAttempted": False,
             }
