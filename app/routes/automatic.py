@@ -13,6 +13,7 @@ from ..acquisition import (
     start_ebook_acquisition,
 )
 from ..acquisition_admission_preflight import acquisition_admission_preview
+from ..admission_prepublication_review import prepublication_failure_preview
 from ..acquisition_coordinator import acquisition_coordinator_status
 from ..alternate_candidate import alternate_candidate_preview
 from ..alternate_selection import (
@@ -267,6 +268,12 @@ def api_automatic_reconcile_acquisition(
 def api_automatic_acquisition_admission_preview(acquisition_id: int):
     """Read-only current admission boundary; never publish or scan."""
     return acquisition_admission_preview(acquisition_id)
+
+
+@router.get("/admissions/{admission_id}/prepublication-preview")
+def api_automatic_prepublication_failure_preview(admission_id: int):
+    """Read-only review of an exact failure before ebook publication began."""
+    return prepublication_failure_preview(admission_id)
 
 
 @router.post("/acquisitions/{acquisition_id}/admit")

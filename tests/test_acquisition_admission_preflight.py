@@ -12,6 +12,7 @@ import app.acquisition_admission_preflight as preflight
 import app.acquisition as acquisition_module
 import app.acquisition_admission_execution as admission_execution
 import app.acquisition_admission_scan as admission_scan
+import app.admission_prepublication_review as prepublication_review
 import app.automatic_admission as admission_reconcile
 import app.automatic_execution as execution_core
 import app.admission as admission_module
@@ -305,6 +306,73 @@ def _seed_published_admission(acquisition_id, staged, destination):
         },
     )
     return admission_id
+
+
+def _failed_prepublication_review(prepared):
+    acquisition_id, client, staged, destination = prepared
+    acquisition = ebook_acquisition_by_id(acquisition_id)
+    result = result_by_id(int(acquisition["result_id"]))
+    admission_id = create_ebook_admission(result, staged.name)
+    update_ebook_admission(
+        admission_id, "failed", failure_stage="before_publication",
+        error="injected failure before publication",
+    )
+    with local_conn() as conn:
+        record_recovery_plans(conn, _admission_decisions(conn, 100))
+        conn.commit()
+    return admission_id
+
+
+def test_prepublication_review_proves_only_current_exact_handoff(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    admission_id = _failed_prepublication_review(prepared)
+    monkeypatch.setattr(prepublication_review, "_exact_ebook_associations", lambda _: [])
+
+    proof = prepublication_review.prepublication_failure_preview(admission_id, client)
+
+    assert proof["ok"] is True
+    assert proof["readOnly"] is True
+    assert proof["publicationAttempted"] is False
+    assert proof["admissionId"] == admission_id
+    assert proof["acquisitionId"] == acquisition_id
+    assert proof["stagedSha256"] == ebook_acquisition_by_id(acquisition_id)["staged_sha256"]
+    assert not destination.exists()
+    assert ebook_admission_by_id(admission_id)["status"] == "failed"
+
+
+@pytest.mark.parametrize("change", [
+    "destination", "staged_bytes", "book_registered", "queue_changed",
+    "competing_journal", "unknown_stage", "existing_owner",
+])
+def test_prepublication_review_blocks_changed_evidence(prepared, monkeypatch, change):
+    acquisition_id, client, staged, destination = prepared
+    admission_id = _failed_prepublication_review(prepared)
+    monkeypatch.setattr(prepublication_review, "_exact_ebook_associations", lambda _: [])
+    if change == "destination":
+        destination.write_bytes(b"occupied")
+    elif change == "staged_bytes":
+        staged.write_bytes(staged.read_bytes() + b"changed")
+    elif change == "book_registered":
+        client.registered = True
+    elif change == "queue_changed":
+        client.queue_status = "downloading"
+    elif change == "competing_journal":
+        acquisition = ebook_acquisition_by_id(acquisition_id)
+        result = result_by_id(int(acquisition["result_id"]))
+        create_ebook_admission(result, staged.name)
+    elif change == "unknown_stage":
+        update_ebook_admission(admission_id, "failed", failure_stage="uncertain")
+    else:
+        monkeypatch.setattr(
+            prepublication_review, "_exact_ebook_associations",
+            lambda _: [{"book_id": 101}],
+        )
+
+    proof = prepublication_review.prepublication_failure_preview(admission_id, client)
+
+    assert proof["ok"] is False
+    assert proof["publicationAttempted"] is False
+    assert ebook_admission_by_id(admission_id)["status"] == "failed"
 
 
 def _scan_plan(acquisition_id, staged, destination):
