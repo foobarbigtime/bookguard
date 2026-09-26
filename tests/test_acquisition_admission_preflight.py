@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import zipfile
 
 import pytest
 
+import app.acquisition_admission_preflight as preflight
 from app.acquisition_admission_preflight import acquisition_admission_preview
 from app.config import settings
 from app.db import (
@@ -169,3 +171,63 @@ def test_preview_blocks_changed_boundary_without_publication(prepared, change, r
     assert preview["admissionAttempted"] is False
     with local_conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM ebook_admissions").fetchone()[0] == 0
+
+
+def test_preview_blocks_same_bytes_replaced_during_verification(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    original = preflight.verify_staged_ebook
+
+    def replace_source(*args):
+        verified = original(*args)
+        replacement = staged.with_suffix(".replacement")
+        replacement.write_bytes(staged.read_bytes())
+        os.replace(replacement, staged)
+        return verified
+
+    monkeypatch.setattr(preflight, "verify_staged_ebook", replace_source)
+    preview = acquisition_admission_preview(acquisition_id, client)
+
+    assert preview["reasonCode"] == "STAGED_BYTES_CHANGED"
+    _assert_no_admission(destination)
+
+
+@pytest.mark.parametrize("change", ["new_admission", "superseded_plan", "changed_acquisition"])
+def test_preview_blocks_durable_change_during_verification(
+    prepared, monkeypatch, change,
+):
+    acquisition_id, client, staged, destination = prepared
+    original = preflight.verify_staged_ebook
+
+    def change_durable_state(*args):
+        verified = original(*args)
+        with local_conn() as conn:
+            if change == "new_admission":
+                conn.execute(
+                    """INSERT INTO ebook_admissions(
+                         result_id, scan_id, book_id, staged_relative_path,
+                         stored_path, local_path, status, created_at, updated_at
+                       ) SELECT result_id, scan_id, book_id, staged_relative_path,
+                         '/data/media/books/Review Fixture.epub',
+                         '/books/Review Fixture.epub', 'preparing',
+                         datetime('now'), datetime('now')
+                         FROM ebook_acquisitions WHERE id=?""",
+                    (acquisition_id,),
+                )
+            elif change == "superseded_plan":
+                conn.execute(
+                    "UPDATE recovery_plans SET state='superseded' WHERE subject_id=?",
+                    (str(acquisition_id),),
+                )
+            else:
+                conn.execute(
+                    "UPDATE ebook_acquisitions SET queue_status='downloading' WHERE id=?",
+                    (acquisition_id,),
+                )
+            conn.commit()
+        return verified
+
+    monkeypatch.setattr(preflight, "verify_staged_ebook", change_durable_state)
+    preview = acquisition_admission_preview(acquisition_id, client)
+
+    assert preview["reasonCode"] == "DURABLE_STATE_CHANGED"
+    assert not destination.exists()
