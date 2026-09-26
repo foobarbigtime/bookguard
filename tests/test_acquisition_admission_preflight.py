@@ -13,6 +13,7 @@ import app.acquisition as acquisition_module
 import app.acquisition_admission_execution as admission_execution
 import app.acquisition_admission_scan as admission_scan
 import app.admission_prepublication_review as prepublication_review
+import app.prepublication_retirement as retirement
 import app.automatic_admission as admission_reconcile
 import app.automatic_execution as execution_core
 import app.admission as admission_module
@@ -373,6 +374,87 @@ def test_prepublication_review_blocks_changed_evidence(prepared, monkeypatch, ch
     assert proof["ok"] is False
     assert proof["publicationAttempted"] is False
     assert ebook_admission_by_id(admission_id)["status"] == "failed"
+
+
+def _prepublication_plan(admission_id):
+    with local_conn() as conn:
+        row = conn.execute(
+            """SELECT id FROM recovery_plans WHERE subject_kind='admission'
+               AND subject_id=? ORDER BY id DESC LIMIT 1""",
+            (str(admission_id),),
+        ).fetchone()
+    return recovery_plan_by_id(int(row["id"]))
+
+
+def test_retirement_requires_separate_allowlist_and_fresh_admission_plan(
+    prepared, monkeypatch,
+):
+    acquisition_id, client, staged, destination = prepared
+    old_signature = _admission_plan(acquisition_id)["signature"]
+    admission_id = _failed_prepublication_review(prepared)
+    monkeypatch.setattr(prepublication_review, "_exact_ebook_associations", lambda _: [])
+    monkeypatch.setattr(retirement, "BinderyClient", lambda: client)
+    monkeypatch.setattr(execution_core, "load_automation_settings", lambda: SimpleNamespace(
+        automation_mode="automatic",
+        automatic_action_allowlist=("retire_proven_prepublication_failure",),
+    ))
+    retirement.register_executor()
+    plan = _prepublication_plan(admission_id)
+    assert [step["code"] for step in plan["steps"]] == [
+        "review_failed_admission", "review_current_handoff",
+        "retire_proven_prepublication_failure",
+    ]
+    outcome = retirement.run_prepublication_retirement_cycle(plan)
+    assert outcome["state"] == "executed"
+    assert outcome["externalMutationAttempted"] is False
+    assert ebook_admission_by_id(admission_id)["status"] == "retired_before_publication"
+    assert ebook_admission_by_id(admission_id)["error"] == "injected failure before publication"
+    assert not destination.exists()
+    assert client.scan_attempts == 0
+
+    with local_conn() as conn:
+        record_recovery_plans(conn, _admission_decisions(conn, 100))
+        record_recovery_plans(conn, _acquisition_decisions(conn, 100))
+        conn.commit()
+    fresh_plan = _admission_plan(acquisition_id)
+    assert fresh_plan["signature"] != old_signature
+    assert fresh_plan["planKind"] == "PREPARE_ACQUISITION_ADMISSION"
+    assert acquisition_admission_preview(acquisition_id, client)["ok"] is True
+    assert ebook_admission_by_id(admission_id)["status"] == "retired_before_publication"
+
+
+@pytest.mark.parametrize("change", ["destination", "staged_bytes", "queue_changed"])
+def test_retirement_blocks_stale_proof(prepared, monkeypatch, change):
+    acquisition_id, client, staged, destination = prepared
+    admission_id = _failed_prepublication_review(prepared)
+    monkeypatch.setattr(prepublication_review, "_exact_ebook_associations", lambda _: [])
+    monkeypatch.setattr(retirement, "BinderyClient", lambda: client)
+    if change == "destination":
+        destination.write_bytes(b"occupied")
+    elif change == "staged_bytes":
+        staged.write_bytes(staged.read_bytes() + b"changed")
+    else:
+        client.queue_status = "downloading"
+    result = retirement.run_prepublication_retirement_cycle(_prepublication_plan(admission_id))
+    assert result["state"] == "blocked"
+    assert ebook_admission_by_id(admission_id)["status"] == "failed"
+    assert client.scan_attempts == 0
+
+
+def test_retired_journal_scan_guard_only_exempts_same_published_path(prepared):
+    acquisition_id, _, staged, destination = prepared
+    old_id = _failed_prepublication_review(prepared)
+    update_ebook_admission(old_id, "retired_before_publication")
+    new_id = _seed_published_admission(acquisition_id, staged, destination)
+    require_quiescent_admissions(new_id)
+    with local_conn() as conn:
+        conn.execute(
+            "UPDATE ebook_admissions SET stored_path=? WHERE id=?",
+            ("/data/media/books/Other Fixture.epub", old_id),
+        )
+        conn.commit()
+    with pytest.raises(admission_module.AdmissionSafetyError):
+        require_quiescent_admissions(new_id)
 
 
 def _scan_plan(acquisition_id, staged, destination):

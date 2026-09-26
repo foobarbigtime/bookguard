@@ -50,7 +50,8 @@ def _review_state(acquisition_id: int, result_id: int):
             (str(acquisition_id),),
         ).fetchone()
         admission = conn.execute(
-            "SELECT id FROM ebook_admissions WHERE result_id=? LIMIT 1",
+            """SELECT id FROM ebook_admissions
+               WHERE result_id=? AND status!='retired_before_publication' LIMIT 1""",
             (int(result_id),),
         ).fetchone()
     return decision, current, dict(recorded) if recorded else None, bool(admission)

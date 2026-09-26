@@ -269,7 +269,7 @@ def test_wrong_snapshot_is_not_published(admission_setup):
     assert recent_ebook_admissions()[0]["failure_stage"] == "before_publication"
 
 
-def test_prepublication_failure_has_read_only_review_plan(admission_setup):
+def test_prepublication_failure_has_separately_guarded_retirement_plan(admission_setup):
     setup = admission_setup
     destination = setup["admission_root"] / setup["relative"]
 
@@ -300,7 +300,8 @@ def test_prepublication_failure_has_read_only_review_plan(admission_setup):
         "reasonCode": classification.reason_code,
     }, {})
     assert plan_kind == classification.plan_kind
-    assert all(step["externalMutation"] is False for step in steps)
+    assert [step["externalMutation"] for step in steps] == [False, False, True]
+    assert steps[-1]["code"] == "retire_proven_prepublication_failure"
 
 
 def test_publication_started_failure_is_not_classified_as_prepublication(

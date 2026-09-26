@@ -33,6 +33,10 @@ from .publication_registration import (
     register_executor as register_publication_scan_executor,
     run_publication_registration_cycle,
 )
+from .prepublication_retirement import (
+    register_executor as register_prepublication_retirement_executor,
+    run_prepublication_retirement_cycle,
+)
 from .recovery_planner import _build_plan
 from .registration_correction import (
     register_executor as register_registration_conflict_executor,
@@ -50,6 +54,7 @@ register_publication_proof_executor()
 register_guarded_publication_executor()
 register_publication_scan_executor()
 register_alternate_grab_executor()
+register_prepublication_retirement_executor()
 
 
 class _FinalizationCleanupExecutor:
@@ -436,6 +441,7 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
                 "FINALIZE_ACQUISITION",
                 "RECONCILE_ACQUISITION",
                 "PREPARE_ACQUISITION_ADMISSION",
+                "REVIEW_ADMISSION_PREPUBLICATION",
                 "REQUEST_PUBLISHED_ACQUISITION_SCAN",
                 "RECOVER_ADMISSION_PUBLICATION",
                 "SELECT_ALTERNATE_REPLACEMENT",
@@ -448,6 +454,10 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         and (
             item.get("planKind") != "PREPARE_ACQUISITION_ADMISSION"
             or "admit_verified_acquisition" in configured.automatic_action_allowlist
+        )
+        and (
+            item.get("planKind") != "REVIEW_ADMISSION_PREPUBLICATION"
+            or "retire_proven_prepublication_failure" in configured.automatic_action_allowlist
         )
         and (
             item.get("planKind") != "REQUEST_PUBLISHED_ACQUISITION_SCAN"
@@ -474,6 +484,8 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             return result
         if kind == "PREPARE_ACQUISITION_ADMISSION":
             return run_verified_admission_cycle(candidate)
+        if kind == "REVIEW_ADMISSION_PREPUBLICATION":
+            return run_prepublication_retirement_cycle(candidate)
         if kind == "REQUEST_PUBLISHED_ACQUISITION_SCAN":
             return run_published_acquisition_scan_cycle(candidate)
         if kind == "SELECT_ALTERNATE_REPLACEMENT":
