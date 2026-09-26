@@ -24,7 +24,7 @@ _PLAN = "SELECT_ALTERNATE_REPLACEMENT"
 def _prove_queue_after_grab(
     client: BinderyClient, book_id: int, title: str, protocol: str,
 ) -> dict[str, Any]:
-    """Attribute a grab without a response ID to one complete live queue item."""
+    """Prove one alternate against a complete live queue snapshot."""
     items, partial = workflow._queue_payload(client)
     if partial:
         raise workflow.AcquisitionSafetyError("Bindery queue is partial.")
@@ -212,25 +212,12 @@ class _AlternateGrabExecutor:
             )
         client = BinderyClient()
         try:
-            items, partial = workflow._queue_payload(client)
-            if partial:
-                raise workflow.AcquisitionSafetyError("Bindery queue is partial.")
-            matches = [
-                item for item in workflow._active_or_unknown_queue_items(items)
-                if str(item.get("bookId") or "") == str(child["book_id"])
-            ]
-            if len(matches) != 1:
-                raise workflow.AcquisitionSafetyError("Exactly one current queue item is required.")
-            queue = matches[0]
-            if (
-                queue.get("id") is None
-                or (child["queue_id"] is not None
-                    and str(queue["id"]) != str(child["queue_id"]))
-                or str(queue.get("title") or "").strip().casefold()
-                != str(child["candidate_title"] or "").strip().casefold()
-                or str(queue.get("protocol") or "").strip().casefold()
-                != str(child["candidate_protocol"] or "").strip().casefold()
-            ):
+            queue = _prove_queue_after_grab(
+                client, int(child["book_id"]),
+                str(child["candidate_title"]), str(child["candidate_protocol"] or ""),
+            )
+            queue_id = workflow._response_queue_id({"id": queue["id"]})
+            if child["queue_id"] is not None and queue_id != child["queue_id"]:
                 raise workflow.AcquisitionSafetyError("The linked queue identity changed.")
             reconciled = workflow.reconcile_ebook_acquisition(int(child["id"]), client)
         except workflow.AcquisitionSafetyError as exc:
@@ -239,7 +226,7 @@ class _AlternateGrabExecutor:
             ) from exc
         after = reconciled.get("acquisition") or {}
         if (
-            str(after.get("queue_id") or "") != str(queue["id"])
+            str(after.get("queue_id") or "") != str(queue_id)
             or str(after.get("status") or "") not in {
                 "queued", "downloading", "awaiting_staging", "staging_observed", "verified",
             }
