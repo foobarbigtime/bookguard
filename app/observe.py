@@ -776,6 +776,11 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
                     "An admission record exists but has not reached the registration scan stage.",
                     "Review the durable admission state before attempting recovery.",
                 ),
+                "scan_requesting": (
+                    "REGISTRATION_SCAN_OUTCOME_UNCERTAIN",
+                    "A one-shot scan claim exists, but its external outcome is unproven.",
+                    "Review Bindery ownership; never send another automatic scan.",
+                ),
             }
             reason_code, reason, next_step = mapping.get(
                 status,

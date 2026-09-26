@@ -162,7 +162,11 @@ def _record(
                 plan_id=excluded.plan_id,
                 state=excluded.state,
                 evidence_revision=excluded.evidence_revision,
-                boundary_json=excluded.boundary_json,
+                boundary_json=CASE
+                    WHEN excluded.boundary_json='{}'
+                    THEN automatic_executions.boundary_json
+                    ELSE excluded.boundary_json
+                END,
                 external_result_json=excluded.external_result_json,
                 error=excluded.error,
                 updated_at=excluded.updated_at,
@@ -445,6 +449,25 @@ def _run_admission_reconcile_cycle(plan: dict[str, Any]) -> dict[str, Any]:
                 "No later admission mutation is enabled by this E4 slice."
             ),
         }
+
+    if str(refreshed.get("reasonCode") or "") == "REGISTRATION_SCAN_PENDING":
+        try:
+            boundary = executor.revalidate(refreshed, steps[index])
+            _require_fresh_boundary(refreshed, boundary)
+        except AutomaticExecutionBlocked as exc:
+            blocked = block_recovery_plan(plan_id, str(exc))
+            return {
+                "ok": False, "state": "blocked", "plan": blocked,
+                "reasonCode": exc.reason_code, "externalMutationAttempted": False,
+            }
+        if boundary["registrationState"] == "scan_required":
+            waiting = schedule_recovery_retry(
+                plan_id, "Bindery registration is still pending; no scan was repeated.",
+            )
+            return {
+                "ok": waiting["state"] != "blocked", "state": waiting["state"],
+                "plan": waiting, "externalMutationAttempted": False,
+            }
 
     try:
         result = attempt_automatic_step(plan_id)

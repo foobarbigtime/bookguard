@@ -664,6 +664,18 @@ def _build_plan(conn, decision: dict[str, Any]) -> dict[str, Any] | None:
         else {}
     )
 
+    # A pending scan may be observed again, but automatic reconciliation never
+    # sends another scan. Bound the read-only checks to two hours.
+    if (
+        plan_kind == "RECONCILE_ADMISSION"
+        and reason_code == "REGISTRATION_SCAN_PENDING"
+    ):
+        recovery_classification = {
+            "retrySameOperation": True,
+            "maxRetries": 120,
+            "backoffSeconds": [60],
+        }
+
     preconditions = {
         "requiredChecks": required_checks,
         "subject": {

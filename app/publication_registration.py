@@ -13,8 +13,9 @@ from .admission import (
     reconcile_admission,
 )
 from .bindery_client import BinderyClient, BinderyClientError
-from .db import ebook_admission_by_id, local_conn, result_by_id, utc_now
+from .db import ebook_admission_by_id, result_by_id
 from .publication_recovery import _bound, _proven_receipt
+from .scan_safety import require_quiescent_admissions, transition_scan_status
 from .staging import StagingSafetyError
 
 
@@ -40,25 +41,6 @@ def _published_receipt(plan: dict[str, Any]) -> dict[str, Any]:
             "PUBLICATION_NOT_PROVEN", "The exact admission has no completed publication journal."
         )
     return receipt
-
-
-def _scan_requested(plan: dict[str, Any], method: str, sha256: str) -> None:
-    with local_conn() as conn:
-        cursor = conn.execute(
-            """
-            UPDATE ebook_admissions
-            SET status='scan_requested', error=NULL, updated_at=?
-            WHERE id=? AND status='published' AND publication_method=?
-              AND staged_sha256=? AND result_id=? AND book_id=? AND stored_path=?
-            """,
-            (
-                utc_now(), int(plan["subjectId"]), method, sha256,
-                int(plan["resultId"]), int(plan["bookId"]), str(plan["path"]),
-            ),
-        )
-        if cursor.rowcount != 1:
-            raise AdmissionSafetyError("Admission changed after the Bindery scan request.")
-        conn.commit()
 
 
 class _KnownPublicationRegistrationExecutor:
@@ -188,6 +170,17 @@ class _KnownPublicationRegistrationExecutor:
                     "libraryBytesChanged": False, "stagingRetained": True,
                 }
 
+            require_quiescent_admissions(admission_id)
+            claim = {
+                "admission_id": admission_id,
+                "result_id": int(plan["resultId"]), "book_id": int(plan["bookId"]),
+                "stored_path": str(plan["path"]),
+                "sha256": fresh["stagedSha256"],
+                "publication_method": fresh["publicationMethod"],
+            }
+            transition_scan_status(
+                **claim, from_status="published", to_status="scan_requesting",
+            )
             try:
                 client.scan_library()
             except BinderyClientError as exc:
@@ -196,7 +189,9 @@ class _KnownPublicationRegistrationExecutor:
                     marker in detail for marker in ("already running", "scan in progress")
                 ):
                     raise
-            _scan_requested(plan, fresh["publicationMethod"], fresh["stagedSha256"])
+            transition_scan_status(
+                **claim, from_status="scan_requesting", to_status="scan_requested",
+            )
             return {
                 "admissionId": admission_id, "bookId": int(plan["bookId"]),
                 "status": "scan_requested", "registered": False,

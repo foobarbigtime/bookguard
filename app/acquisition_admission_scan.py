@@ -16,10 +16,11 @@ from .bindery_client import BinderyClient, BinderyClientError
 from .config import load_automation_settings, settings
 from .db import (
     ebook_acquisition_by_admission_id, ebook_admission_by_id, local_conn,
-    result_by_id, utc_now,
+    result_by_id,
 )
 from .observe import _admission_decisions
 from .recovery_planner import _build_plan
+from .scan_safety import require_quiescent_admissions, transition_scan_status
 from .staging import StagingSafetyError
 
 
@@ -83,24 +84,6 @@ def _prior_scan(admission_id: int, *, except_signature: str = "") -> bool:
         if boundary.get("admissionId") == admission_id:
             return True
     return False
-
-
-def _mark_scan_requested(plan: dict[str, Any], boundary: dict[str, Any]) -> None:
-    with local_conn() as conn:
-        changed = conn.execute(
-            """UPDATE ebook_admissions SET status='scan_requested', error=NULL,
-                      updated_at=?
-               WHERE id=? AND status='published' AND result_id=? AND book_id=?
-                 AND stored_path=? AND staged_sha256=? AND publication_method=?""",
-            (
-                utc_now(), int(plan["subjectId"]), boundary["resultId"],
-                boundary["bookId"], boundary["storedPath"],
-                boundary["stagedSha256"], boundary["publicationMethod"],
-            ),
-        ).rowcount
-        if changed != 1:
-            raise AdmissionSafetyError("Admission changed after the scan request.")
-        conn.commit()
 
 
 class _PublishedAcquisitionScanExecutor:
@@ -255,6 +238,17 @@ class _PublishedAcquisitionScanExecutor:
                 or not settings.allow_actions
             ):
                 raise AdmissionSafetyError("The scan action was disabled before its request.")
+            require_quiescent_admissions(int(plan["subjectId"]))
+            claim = {
+                "admission_id": int(plan["subjectId"]),
+                "result_id": fresh["resultId"], "book_id": fresh["bookId"],
+                "stored_path": fresh["storedPath"],
+                "sha256": fresh["stagedSha256"],
+                "publication_method": fresh["publicationMethod"],
+            }
+            transition_scan_status(
+                **claim, from_status="published", to_status="scan_requesting",
+            )
             client = BinderyClient()
             try:
                 client.scan_library()
@@ -264,7 +258,9 @@ class _PublishedAcquisitionScanExecutor:
                     marker in detail for marker in ("already running", "scan in progress")
                 ):
                     raise
-            _mark_scan_requested(plan, fresh)
+            transition_scan_status(
+                **claim, from_status="scan_requesting", to_status="scan_requested",
+            )
             return {
                 "admissionId": int(plan["subjectId"]), "status": "scan_requested",
                 "scanRequested": True, "externalMutationPerformed": True,
