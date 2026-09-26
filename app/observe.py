@@ -431,6 +431,14 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 evidence=evidence,
             ))
         elif status == "verified":
+            retired = conn.execute(
+                """SELECT id FROM ebook_admissions
+                   WHERE result_id=? AND status='retired_before_publication'
+                   ORDER BY id""",
+                (int(row["result_id"]),),
+            ).fetchall()
+            if retired:
+                evidence["retiredAdmissionIds"] = [int(item["id"]) for item in retired]
             proven, snapshot = _durable_admission_review_snapshot(row)
             evidence.update(snapshot)
             decisions.append(_decision(
@@ -616,7 +624,17 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
             "failureStage": str(row["failure_stage"] or ""),
             "recordedError": str(row["error"] or ""),
         }
-        if status == "registered":
+        if status == "retired_before_publication":
+            decisions.append(_decision(
+                **common,
+                state=status,
+                decision="no_action",
+                reason_code="ADMISSION_RETIRED_BEFORE_PUBLICATION",
+                reason="The failed journal was retained after proof that publication had not begun.",
+                next_step="Review the separately guarded acquisition admission plan.",
+                evidence=evidence,
+            ))
+        elif status == "registered":
             decisions.append(_decision(
                 **common,
                 state=status,

@@ -18,12 +18,27 @@ def require_quiescent_admissions(target_id: int) -> None:
     root = root.resolve(strict=True)
     bindery_root = Path(configured.admission_bindery_root)
     with local_conn() as conn:
+        target = conn.execute(
+            "SELECT status, stored_path, publication_method FROM ebook_admissions WHERE id=?",
+            (int(target_id),),
+        ).fetchone()
         rows = conn.execute(
-            """SELECT id, status, publication_method, stored_path
+            """SELECT id, status, publication_method, failure_stage, stored_path
                FROM ebook_admissions WHERE id<>?""", (int(target_id),),
         ).fetchall()
     for row in rows:
         if row["status"] == "registered":
+            continue
+        if (
+            row["status"] == "retired_before_publication"
+            and row["failure_stage"] == "before_publication"
+            and not row["publication_method"]
+            and target is not None
+            and target["status"] == "published"
+            and target["publication_method"]
+            and target["stored_path"] == row["stored_path"]
+        ):
+            # The target's separately proven publication now occupies this path.
             continue
         if row["publication_method"]:
             raise AdmissionSafetyError(

@@ -45,6 +45,7 @@ AUTOMATIC_ACTION_CODES = frozenset({
     "request_published_acquisition_scan",
     "prove_supported_no_replace_method",
     "retry_guarded_publication",
+    "retire_proven_prepublication_failure",
     "scan_and_reconcile_registration",
 })
 DEFAULT_MAX_STAGED_EBOOK_BYTES = 512 * 1024 * 1024

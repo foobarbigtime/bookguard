@@ -118,7 +118,8 @@ class _VerifiedAcquisitionAdmissionExecutor:
                 "SELECT * FROM ebook_admissions WHERE id=?", (admission_id,),
             ).fetchone()
             count = conn.execute(
-                "SELECT COUNT(*) FROM ebook_admissions WHERE result_id=?",
+                """SELECT COUNT(*) FROM ebook_admissions
+                   WHERE result_id=? AND status!='retired_before_publication'""",
                 (int(plan["resultId"]),),
             ).fetchone()[0]
             running = conn.execute(
@@ -261,7 +262,8 @@ class _VerifiedAcquisitionAdmissionExecutor:
 
             with local_conn() as conn:
                 rows = conn.execute(
-                    "SELECT id FROM ebook_admissions WHERE result_id=?",
+                    """SELECT id FROM ebook_admissions
+                       WHERE result_id=? AND status!='retired_before_publication'""",
                     (int(plan["resultId"]),),
                 ).fetchall()
             if len(rows) != 1:

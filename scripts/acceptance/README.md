@@ -117,3 +117,8 @@ publishes one verified ebook without overwrite or scan, and a seeded interrupted
 journal adopts exact published bytes without another publication. The Bindery scan
 remains a separate allowlisted mutation.
 It never mounts or reads the production library.
+
+The `prepublication-retirement` scenario seeds a failed admission before any publication,
+requires a separate exact allowlist to retire only its local journal, and proves that
+the refreshed acquisition plan still cannot publish with that retirement allowlist.
+It retains staged bytes and never requests a Bindery scan.

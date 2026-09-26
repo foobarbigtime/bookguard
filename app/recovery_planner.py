@@ -585,6 +585,12 @@ def _definition(
                         "Independently review staged bytes, absent destination, Bindery identity, and the verified acquisition before authorizing any retry.",
                         stop_if_unproven=True,
                     ),
+                    _step(
+                        "retire_proven_prepublication_failure",
+                        "Retain the failed journal as retired only after exact fresh proof; a new admission still requires its separate allowlist and full guarded checks.",
+                        external_mutation=True,
+                        stop_if_unproven=True,
+                    ),
                 ],
             )
         if code == "ADMISSION_PUBLICATION_PRIMITIVE_UNSUPPORTED":
