@@ -453,6 +453,7 @@ def test_retired_journal_scan_guard_only_exempts_same_published_path(prepared):
             ("/data/media/books/Other Fixture.epub", old_id),
         )
         conn.commit()
+    destination.with_name("Other Fixture.epub").write_bytes(b"unvetted")
     with pytest.raises(admission_module.AdmissionSafetyError):
         require_quiescent_admissions(new_id)
 
