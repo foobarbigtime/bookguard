@@ -12,6 +12,7 @@ from ..acquisition import (
     reconcile_ebook_acquisition,
     start_ebook_acquisition,
 )
+from ..acquisition_admission_preflight import acquisition_admission_preview
 from ..acquisition_coordinator import acquisition_coordinator_status
 from ..alternate_candidate import alternate_candidate_preview
 from ..alternate_selection import (
@@ -260,6 +261,12 @@ def api_automatic_reconcile_acquisition(
         return reconcile_ebook_acquisition(acquisition_id)
     except AcquisitionSafetyError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/acquisitions/{acquisition_id}/admission-preview")
+def api_automatic_acquisition_admission_preview(acquisition_id: int):
+    """Read-only current admission boundary; never publish or scan."""
+    return acquisition_admission_preview(acquisition_id)
 
 
 @router.post("/acquisitions/{acquisition_id}/admit")
