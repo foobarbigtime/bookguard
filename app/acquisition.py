@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sqlite3
 import threading
 from typing import Any, Callable
 
@@ -42,6 +43,10 @@ from .staging import (
 
 class AcquisitionSafetyError(RuntimeError):
     pass
+
+
+class AcquisitionPostPublicationUncertain(AcquisitionSafetyError):
+    """Publication returned, but its acquisition link could not be read durably."""
 
 
 _acquisition_lock = threading.Lock()
@@ -911,14 +916,20 @@ def admit_ebook_acquisition(
             )
             raise AcquisitionSafetyError(str(exc)) from exc
 
-        update_ebook_acquisition(
-            acquisition_id,
-            "admitted",
-            admission_id=int(admitted["admissionId"]),
-        )
+        try:
+            update_ebook_acquisition(
+                acquisition_id,
+                "admitted",
+                admission_id=int(admitted["admissionId"]),
+            )
+            linked = ebook_acquisition_by_id(acquisition_id)
+        except sqlite3.Error as exc:
+            raise AcquisitionPostPublicationUncertain(
+                "Publication returned, but the acquisition link could not be confirmed."
+            ) from exc
         return {
             "ok": True,
-            "acquisition": ebook_acquisition_by_id(acquisition_id),
+            "acquisition": linked,
             "admission": admitted,
             "message": (
                 "The verified acquisition was submitted to guarded admission. "

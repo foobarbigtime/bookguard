@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import sqlite3
 from types import SimpleNamespace
 import zipfile
 
 import pytest
 
 import app.acquisition_admission_preflight as preflight
+import app.acquisition as acquisition_module
 import app.acquisition_admission_execution as admission_execution
 import app.acquisition_admission_scan as admission_scan
 import app.automatic_admission as admission_reconcile
@@ -574,6 +576,76 @@ def test_interrupted_admission_adopts_only_proven_journal(prepared, monkeypatch)
     assert result["status"] == "published"
     assert ebook_acquisition_by_id(acquisition_id)["admission_id"] == admission_id
     assert destination.read_bytes() == staged.read_bytes()
+
+
+def test_post_publication_link_failure_is_classified_as_uncertain(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    monkeypatch.setattr(acquisition_module, "_automation_settings", lambda: SimpleNamespace(
+        automatic_reacquisition=True,
+    ))
+    original_update = acquisition_module.update_ebook_acquisition
+
+    def fail_link(acquisition_id, status, **kwargs):
+        if status == "admitted":
+            raise sqlite3.OperationalError("injected link failure")
+        return original_update(acquisition_id, status, **kwargs)
+
+    monkeypatch.setattr(acquisition_module, "update_ebook_acquisition", fail_link)
+    monkeypatch.setattr(
+        acquisition_module, "admit_staged_ebook",
+        lambda *_args, **_kwargs: {
+            "admissionId": _seed_published_admission(acquisition_id, staged, destination),
+        },
+    )
+
+    with pytest.raises(acquisition_module.AcquisitionPostPublicationUncertain):
+        acquisition_module.admit_ebook_acquisition(
+            acquisition_id, client, before_publish=lambda _: None, request_scan=False,
+        )
+    assert ebook_acquisition_by_id(acquisition_id)["status"] == "verified"
+    assert destination.read_bytes() == staged.read_bytes()
+
+
+def test_post_publication_failure_waits_then_adopts_without_replay(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    monkeypatch.setattr(admission_execution, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_module, "_exact_ebook_associations", lambda _: [])
+    monkeypatch.setattr(execution_core, "load_automation_settings", lambda: SimpleNamespace(
+        automation_mode="automatic",
+        automatic_action_allowlist=("admit_verified_acquisition",),
+    ))
+    publications = []
+
+    def publish_then_fail(*_args, **_kwargs):
+        publications.append(_seed_published_admission(acquisition_id, staged, destination))
+        raise acquisition_module.AcquisitionPostPublicationUncertain("link write failed")
+
+    monkeypatch.setattr(admission_execution, "admit_ebook_acquisition", publish_then_fail)
+    plan = _admission_plan(acquisition_id)
+    waiting = admission_execution.run_verified_admission_cycle(plan)
+    receipt = execution_core._existing(
+        plan["signature"], "admit_verified_acquisition", 1,
+    )
+    assert waiting["state"] == "waiting"
+    assert waiting["reasonCode"] == "POST_EFFECT_UNCERTAIN"
+    assert waiting["plan"]["state"] == "ready"
+    assert receipt["state"] == "running"
+    assert receipt["boundary"]["stagedSha256"] == ebook_acquisition_by_id(
+        acquisition_id,
+    )["staged_sha256"]
+
+    monkeypatch.setattr(
+        admission_execution, "admit_ebook_acquisition",
+        lambda *_args, **_kwargs: pytest.fail("publication must not repeat"),
+    )
+    adopted = admission_execution.run_verified_admission_cycle(
+        recovery_plan_by_id(int(plan["id"])),
+    )
+    assert adopted["state"] == "reconciled"
+    assert len(publications) == 1
+    assert ebook_acquisition_by_id(acquisition_id)["admission_id"] == publications[0]
+    assert destination.read_bytes() == staged.read_bytes()
+    assert client.scan_attempts == 0
 
 
 @pytest.mark.parametrize("change", ["missing_journal", "changed_destination", "replaced_source"])

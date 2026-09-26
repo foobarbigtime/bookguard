@@ -6,8 +6,9 @@ from typing import Any
 
 from . import automatic_execution as core
 from .acquisition import (
-    AcquisitionSafetyError, _AWAITING_STAGING_QUEUE_STATUSES, _queue_payload,
-    _queue_status, admit_ebook_acquisition,
+    AcquisitionPostPublicationUncertain, AcquisitionSafetyError,
+    _AWAITING_STAGING_QUEUE_STATUSES, _queue_payload, _queue_status,
+    admit_ebook_acquisition,
 )
 from .acquisition_admission_preflight import (
     _source_identity, acquisition_admission_preview,
@@ -17,6 +18,7 @@ from .admission import (
     AdmissionSafetyError, _book_has_ebook, _result_matches_book,
     admission_readiness, admission_reconcile_preview,
 )
+from .automatic_contracts import AutomaticPostEffectUncertain
 from .bindery_client import BinderyClient, BinderyClientError
 from .config import load_automation_settings, settings
 from .db import ebook_acquisition_by_id, local_conn, result_by_id, utc_now
@@ -182,10 +184,13 @@ class _VerifiedAcquisitionAdmissionExecutor:
             except Exception as exc:
                 raise AdmissionSafetyError(str(exc)) from exc
 
-        result = admit_ebook_acquisition(
-            int(plan["subjectId"]), BinderyClient(),
-            before_publish=before_publish, request_scan=False,
-        )
+        try:
+            result = admit_ebook_acquisition(
+                int(plan["subjectId"]), BinderyClient(),
+                before_publish=before_publish, request_scan=False,
+            )
+        except AcquisitionPostPublicationUncertain as exc:
+            raise AutomaticPostEffectUncertain(str(exc)) from exc
         admission = result.get("admission") or {}
         acquisition = result.get("acquisition") or {}
         if (
@@ -373,6 +378,11 @@ def run_verified_admission_cycle(plan: dict[str, Any]) -> dict[str, Any]:
     except core.AutomaticExecutionBlocked as exc:
         if exc.reason_code in {"ACTION_NOT_ALLOWLISTED", "EXECUTOR_NOT_REGISTERED"}:
             raise
+        if exc.reason_code == "POST_EFFECT_UNCERTAIN":
+            return {
+                "ok": False, "state": "waiting", "plan": core.recovery_plan_by_id(plan_id),
+                "reasonCode": exc.reason_code, "externalMutationAttempted": True,
+            }
         blocked = core.block_recovery_plan(plan_id, str(exc))
         return {
             "ok": False, "state": "blocked", "plan": blocked,
