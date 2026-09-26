@@ -285,6 +285,54 @@ def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:
     return decisions
 
 
+def _durable_admission_review_snapshot(row) -> tuple[bool, dict[str, Any]]:
+    """Review persisted identity only; a future executor must recheck live bytes."""
+    try:
+        verification = json.loads(row["verification_json"] or "{}")
+    except (TypeError, ValueError):
+        verification = {}
+    if not isinstance(verification, dict):
+        verification = {}
+    staged_path = str(row["staged_relative_path"] or "")
+    staged_sha = str(row["staged_sha256"] or "")
+    revision = hashlib.sha256(
+        json.dumps(verification, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    proven = all((
+        row["admission_id"] is None,
+        isinstance(row["result_id"], int) and row["result_id"] > 0,
+        isinstance(row["book_id"], int) and row["book_id"] > 0,
+        row["linked_result_id"] == row["result_id"],
+        row["linked_book_id"] == row["book_id"],
+        isinstance(row["queue_id"], int) and row["queue_id"] > 0,
+        str(row["queue_status"] or "").casefold() in {
+            "completed", "importexternal", "importheld", "importpending", "importing",
+        },
+        bool(staged_path) and not staged_path.startswith("/")
+        and all(part not in {"", ".", ".."} for part in staged_path.split("/")),
+        len(staged_sha) == 64 and all(char in "0123456789abcdef" for char in staged_sha),
+        verification.get("safeToAdmit") is True,
+        verification.get("stableDuringVerification") is True,
+        verification.get("verdict") == "VERIFIED_CORRECT",
+        verification.get("bookId") == row["book_id"],
+        verification.get("relativePath") == staged_path,
+        isinstance(verification.get("size"), int)
+        and not isinstance(verification.get("size"), bool)
+        and verification["size"] > 0,
+        verification.get("sha256") == staged_sha,
+        isinstance(verification.get("confidence"), int)
+        and not isinstance(verification.get("confidence"), bool)
+        and verification["confidence"] >= 99,
+        verification.get("admissionBlockers") == [],
+    ))
+    return proven, {
+        "stagedRelativePath": staged_path,
+        "stagedSha256": staged_sha,
+        "verificationRevision": revision,
+        "verifiedSnapshotMatches": proven,
+    }
+
+
 def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
     if not _table_exists(conn, "ebook_acquisitions"):
         return []
@@ -294,7 +342,8 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
                a.candidate_guid, a.candidate_title, a.candidate_indexer,
                a.candidate_protocol, a.queue_id, a.queue_status,
                a.observed_relative_path, a.staged_relative_path, a.staged_sha256,
-               a.error, r.title, r.author, r.stored_path
+               a.verification_json, a.error, r.id AS linked_result_id,
+               r.book_id AS linked_book_id, r.title, r.author, r.stored_path
         FROM ebook_acquisitions a
         LEFT JOIN scan_results r ON r.id=a.result_id
         ORDER BY a.id DESC
@@ -382,18 +431,30 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 evidence=evidence,
             ))
         elif status == "verified":
+            proven, snapshot = _durable_admission_review_snapshot(row)
+            evidence.update(snapshot)
             decisions.append(_decision(
                 **common,
                 state=status,
-                decision="attention",
-                reason_code="EXPLICIT_ADMISSION_REQUIRED",
+                decision="would_review_verified_acquisition" if proven else "attention",
+                reason_code=(
+                    "VERIFIED_ACQUISITION_REVIEW_AVAILABLE" if proven
+                    else "ACQUISITION_VERIFICATION_UNPROVEN"
+                ),
                 reason=(
-                    "The staged replacement is verified, but current policy still "
-                    "requires an explicit admission decision."
+                    "The durable verified acquisition has an exact staged identity "
+                    "for a separate admission review."
+                    if proven else
+                    "The verified acquisition's durable identity or safety snapshot "
+                    "is incomplete or contradictory."
                 ),
                 next_step=(
-                    "Review the verified acquisition and admission evidence. Observe "
-                    "Mode will not publish the file."
+                    "Review the proposed admission; no publication is enabled. Fresh "
+                    "staged bytes, book identity, queue handoff, destination, and "
+                    "readiness must be proven before any future mutation."
+                    if proven else
+                    "Inspect the acquisition and repair the evidence through an explicit "
+                    "guarded workflow before considering admission."
                 ),
                 evidence=evidence,
             ))
