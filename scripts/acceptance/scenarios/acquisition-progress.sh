@@ -153,7 +153,7 @@ scenario_run() {
   bg_assert_contains "${observe_body}" '"executionAllowed":false' "admission plan inert"
   bg_assert_hash "${SCENARIO_ROOT}/staging/Progress Fixture.epub" "${fixture_hash}" "review bytes"
   bg_remove_container "${SCENARIO_APP}"
-  start_bookguard automatic "resume_known_transition,admit_verified_acquisition"
+  start_bookguard automatic "resume_known_transition"
 
   response="${SCENARIO_ROOT}/replay.json"
   http_status=$(post_cycle "${response}")
