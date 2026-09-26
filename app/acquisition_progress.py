@@ -21,6 +21,37 @@ from .recovery_planner import _build_plan
 from .staging import StagingSafetyError, list_staged_ebooks, resolve_staged_file
 
 
+def _queue_identity(
+    acquisition: dict[str, Any], items: list[dict[str, Any]],
+) -> tuple[dict[str, Any], bool, bool]:
+    """Check the exact handoff and competing active work against one queue read."""
+    queue_id = acquisition.get("queue_id")
+    exact = [
+        item for item in items
+        if queue_id is not None and str(item.get("id") or "") == str(queue_id)
+    ]
+    queue = exact[0] if len(exact) == 1 else {}
+    exact_identity = (
+        isinstance(queue_id, int) and not isinstance(queue_id, bool) and queue_id > 0
+        and len(exact) == 1
+        and (queue.get("queueId") is None
+             or str(queue["queueId"]) == str(queue_id))
+        and str(queue.get("bookId") or "") == str(acquisition["book_id"])
+        and bool(str(acquisition.get("candidate_title") or "").strip())
+        and bool(str(acquisition.get("candidate_protocol") or "").strip())
+        and str(queue.get("title") or "").strip().casefold()
+        == str(acquisition.get("candidate_title") or "").strip().casefold()
+        and str(queue.get("protocol") or "").strip().casefold()
+        == str(acquisition.get("candidate_protocol") or "").strip().casefold()
+    )
+    no_competing = not any(
+        str(item.get("bookId") or "") == str(acquisition["book_id"])
+        and str(item.get("id") or "") != str(queue_id)
+        for item in _active_or_unknown_queue_items(items)
+    )
+    return queue, exact_identity, no_competing
+
+
 class _KnownAcquisitionProgressExecutor:
     action_code = "resume_known_transition"
     _statuses = {"queued", "downloading", "awaiting_staging", "staging_observed"}
@@ -57,10 +88,7 @@ class _KnownAcquisitionProgressExecutor:
                 "DEPENDENCY_UNAVAILABLE", str(exc)
             ) from exc
         queue_id = acquisition.get("queue_id")
-        exact = [
-            item for item in items
-            if queue_id is not None and str(item.get("id") or "") == str(queue_id)
-        ]
+        queue, exact_identity, no_competing = _queue_identity(acquisition, items)
         staged = list(inventory.get("items") or [])
         fingerprint = (
             (str(staged[0]["relativePath"]), int(staged[0]["size"]),
@@ -76,7 +104,6 @@ class _KnownAcquisitionProgressExecutor:
                 raise core.AutomaticExecutionBlocked(
                     "STAGING_IDENTITY_UNPROVEN", str(exc)
                 ) from exc
-        queue = exact[0] if len(exact) == 1 else {}
         checks = [
             {"code": "CURRENT_PLAN", "ok": (
                 current.get("signature") == plan.get("signature")
@@ -91,19 +118,8 @@ class _KnownAcquisitionProgressExecutor:
                 and acquisition.get("book_id") == plan.get("bookId")
             )},
             {"code": "COMPLETE_QUEUE", "ok": not partial},
-            {"code": "EXACT_QUEUE_IDENTITY", "ok": (
-                queue_id is not None and len(exact) == 1
-                and str(queue.get("bookId") or "") == str(acquisition["book_id"])
-                and str(queue.get("title") or "").strip().casefold()
-                == str(acquisition.get("candidate_title") or "").strip().casefold()
-                and str(queue.get("protocol") or "").strip().casefold()
-                == str(acquisition.get("candidate_protocol") or "").strip().casefold()
-            )},
-            {"code": "NO_COMPETING_QUEUE", "ok": not any(
-                str(item.get("bookId") or "") == str(acquisition["book_id"])
-                and str(item.get("id") or "") != str(queue_id)
-                for item in _active_or_unknown_queue_items(items)
-            )},
+            {"code": "EXACT_QUEUE_IDENTITY", "ok": exact_identity},
+            {"code": "NO_COMPETING_QUEUE", "ok": no_competing},
             {"code": "QUEUE_HANDOFF_COMPLETE", "ok": (
                 _queue_status(queue) in _AWAITING_STAGING_QUEUE_STATUSES
             )},
@@ -183,11 +199,27 @@ class _KnownAcquisitionProgressExecutor:
         acquisition = ebook_acquisition_by_id(int(plan["subjectId"])) or {}
         fingerprint = boundary.get("fingerprint")
         before_status = str(boundary.get("beforeStatus") or "")
-        if not fingerprint or acquisition.get("queue_id") != boundary.get("queueId"):
+        if (
+            plan.get("planKind") != "RECONCILE_ACQUISITION"
+            or plan.get("subjectKind") != "acquisition"
+            or plan.get("reasonCode") != "ACQUISITION_PROGRESSABLE"
+            or acquisition.get("result_id") != plan.get("resultId")
+            or acquisition.get("book_id") != plan.get("bookId")
+            or acquisition.get("admission_id") is not None
+            or not fingerprint
+            or acquisition.get("queue_id") != boundary.get("queueId")
+        ):
             raise core.AutomaticExecutionBlocked(
                 "UNCERTAIN_EXTERNAL_OUTCOME", "Interrupted queue identity is unproven."
             )
         try:
+            items, partial = _queue_payload(BinderyClient())
+            queue, exact_identity, no_competing = _queue_identity(acquisition, items)
+            if (
+                partial or not exact_identity or not no_competing
+                or _queue_status(queue) not in _AWAITING_STAGING_QUEUE_STATUSES
+            ):
+                raise ValueError("The current queue handoff is unproven.")
             inventory = list_staged_ebooks(1000)
             staged = inventory.get("items") or []
             actual = (
@@ -214,7 +246,7 @@ class _KnownAcquisitionProgressExecutor:
                 )
             else:
                 proven = False
-        except (StagingSafetyError, ValueError) as exc:
+        except (AcquisitionSafetyError, StagingSafetyError, OSError, ValueError) as exc:
             raise core.AutomaticExecutionBlocked(
                 "UNCERTAIN_EXTERNAL_OUTCOME", str(exc)
             ) from exc
