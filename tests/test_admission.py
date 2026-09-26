@@ -10,6 +10,8 @@ import pytest
 
 import app.admission as admission
 import app.ebook_extraction as ebook_extraction
+from app.recovery_classifier import classify_admission_failure
+from app.recovery_planner import _definition
 from app.db import (
     ebook_admission_by_id,
     init_local_db,
@@ -264,6 +266,68 @@ def test_wrong_snapshot_is_not_published(admission_setup):
         )
 
     assert not (setup["admission_root"] / setup["relative"]).exists()
+    assert recent_ebook_admissions()[0]["failure_stage"] == "before_publication"
+
+
+def test_prepublication_failure_has_read_only_review_plan(admission_setup):
+    setup = admission_setup
+    destination = setup["admission_root"] / setup["relative"]
+
+    def refuse_before_publish(_admission_id):
+        raise admission.AdmissionSafetyError("injected pre-publication stop")
+
+    with pytest.raises(admission.AdmissionSafetyError, match="pre-publication stop"):
+        admission.admit_staged_ebook(
+            setup["result"], setup["staged"].name, FakeClient(),
+            before_publish=refuse_before_publish, request_scan=False,
+        )
+
+    record = recent_ebook_admissions()[0]
+    assert record["status"] == "failed"
+    assert record["failure_stage"] == "before_publication"
+    assert record["publication_method"] is None
+    assert record["staged_sha256"]
+    assert not destination.exists()
+    classification = classify_admission_failure(
+        record["status"], record["error"], record["publication_method"],
+        failure_stage=record["failure_stage"], verified_snapshot=True,
+    )
+    assert classification.plan_kind == "REVIEW_ADMISSION_PREPUBLICATION"
+    assert classification.retry_same_operation is False
+    assert classification.max_retries == 0
+    plan_kind, _, steps = _definition({
+        "decision": "would_recover_admission_failure",
+        "reasonCode": classification.reason_code,
+    }, {})
+    assert plan_kind == classification.plan_kind
+    assert all(step["externalMutation"] is False for step in steps)
+
+
+def test_publication_started_failure_is_not_classified_as_prepublication(
+    admission_setup, monkeypatch,
+):
+    setup = admission_setup
+    destination = setup["admission_root"] / setup["relative"]
+
+    def uncertain_publish(_snapshot, target):
+        target.write_bytes(b"possibly published")
+        raise OSError("injected uncertain post-publication failure")
+
+    monkeypatch.setattr(admission, "_publish_no_replace", uncertain_publish)
+    with pytest.raises(admission.AdmissionSafetyError, match="uncertain"):
+        admission.admit_staged_ebook(
+            setup["result"], setup["staged"].name, FakeClient(),
+            request_scan=False,
+        )
+
+    record = recent_ebook_admissions()[0]
+    assert record["status"] == "failed"
+    assert record["failure_stage"] is None
+    assert destination.read_bytes() == b"possibly published"
+    assert classify_admission_failure(
+        record["status"], record["error"], record["publication_method"],
+        failure_stage=record["failure_stage"], verified_snapshot=True,
+    ) is None
 
 
 def test_existing_destination_is_never_overwritten(admission_setup):

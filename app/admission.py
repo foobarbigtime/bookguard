@@ -525,6 +525,7 @@ def admit_staged_ebook(
         raise AdmissionSafetyError("Another admission operation is already running.")
     admission_id: int | None = None
     temp_path: Path | None = None
+    publication_started = False
     try:
         readiness = admission_readiness(client)
         if not readiness["ready"]:
@@ -597,6 +598,7 @@ def admit_staged_ebook(
         _seal_snapshot(temp_path, snapshot_hash)
         if before_publish is not None:
             before_publish(admission_id)
+        publication_started = True
         publication_method = _publish_no_replace(temp_path, destination)
         temp_path = None
         update_ebook_admission(
@@ -669,11 +671,19 @@ def admit_staged_ebook(
     except (OSError, StagingSafetyError, BinderyClientError) as exc:
         error = str(exc)
         if admission_id is not None:
-            update_ebook_admission(admission_id, "failed", error=error)
+            update_ebook_admission(
+                admission_id, "failed",
+                failure_stage="before_publication" if not publication_started else None,
+                error=error,
+            )
         raise AdmissionSafetyError(error) from exc
     except AdmissionSafetyError as exc:
         if admission_id is not None:
-            update_ebook_admission(admission_id, "failed", error=str(exc))
+            update_ebook_admission(
+                admission_id, "failed",
+                failure_stage="before_publication" if not publication_started else None,
+                error=str(exc),
+            )
         raise
     finally:
         _cleanup_private_snapshot(temp_path)
