@@ -280,7 +280,7 @@ def _seed_published_admission(acquisition_id, staged, destination):
     admission_id = create_ebook_admission(result, staged.name)
     destination.write_bytes(staged.read_bytes())
     update_ebook_admission(
-        admission_id, "scan_requested",
+        admission_id, "published",
         staged_sha256=acquisition["staged_sha256"],
         publication_method="private-snapshot-link",
         verification={
@@ -305,6 +305,7 @@ def test_interrupted_admission_adopts_only_proven_journal(prepared, monkeypatch)
     assert result["reconciledAfterRestart"] is True
     assert result["externalMutationPerformed"] is False
     assert result["scanRequested"] is False
+    assert result["status"] == "published"
     assert ebook_acquisition_by_id(acquisition_id)["admission_id"] == admission_id
     assert destination.read_bytes() == staged.read_bytes()
 

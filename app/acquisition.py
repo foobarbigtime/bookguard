@@ -865,6 +865,7 @@ def admit_ebook_acquisition(
     client: BinderyClient | None = None,
     *,
     before_publish: Callable[[int], None] | None = None,
+    request_scan: bool = True,
 ) -> dict[str, Any]:
     """Hand one verified acquisition to the existing guarded admission transaction."""
     client = client or BinderyClient()
@@ -896,11 +897,12 @@ def admit_ebook_acquisition(
         if not result:
             raise AcquisitionSafetyError("The acquisition's scan result no longer exists.")
         try:
-            if before_publish is None:
+            if before_publish is None and request_scan:
                 admitted = admit_staged_ebook(result, relative_path, client)
             else:
                 admitted = admit_staged_ebook(
                     result, relative_path, client, before_publish=before_publish,
+                    request_scan=request_scan,
                 )
         except AdmissionSafetyError as exc:
             update_ebook_acquisition(

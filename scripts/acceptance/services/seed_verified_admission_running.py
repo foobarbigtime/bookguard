@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed a running receipt and exact published bytes without a Bindery scan."""
+"""Seed a running receipt and exact unscanned published bytes."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def main() -> None:
     with source.open("rb") as reader, destination.open("xb") as writer:
         shutil.copyfileobj(reader, writer)
     update_ebook_admission(
-        admission_id, "scan_requested",
+        admission_id, "published",
         staged_sha256=boundary["stagedSha256"],
         publication_method="private-snapshot-link",
         verification=acquisition["verification"],

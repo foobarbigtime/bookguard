@@ -53,20 +53,21 @@ scenario_run() {
   assert_scans 0
   bg_remove_container "${SCENARIO_APP}"
 
-  bg_header "EXACT ALLOWLIST: ONE GUARDED PUBLICATION AND SCAN"
+  bg_header "EXACT ALLOWLIST: ONE GUARDED PUBLICATION, NO SCAN"
   start_bookguard automatic "admit_verified_acquisition"
   response="${SCENARIO_ROOT}/admitted.json"
   status=$(post_cycle "${response}")
   bg_assert_eq "200" "${status}" "admission HTTP"
   bg_assert_contains "$(cat "${response}")" '"state":"executed"' "admission executed"
-  bg_assert_contains "$(cat "${response}")" '"status":"scan_requested"' "admission journal"
+  bg_assert_contains "$(cat "${response}")" '"status":"published"' "admission journal"
+  bg_assert_contains "$(cat "${response}")" '"scanRequested":false' "scan separately gated"
   bg_assert_hash "${SCENARIO_ROOT}/admission-books/${RELATIVE}" "${staged_hash}" "published bytes"
   bg_assert_hash "${SCENARIO_ROOT}/staging/${RELATIVE}" "${staged_hash}" "staging retained"
-  assert_scans 1
+  assert_scans 0
   response="${SCENARIO_ROOT}/replay.json"
   status=$(post_cycle "${response}")
   bg_assert_eq "200" "${status}" "no replay HTTP"
-  assert_scans 1
+  assert_scans 0
   bg_remove_container "${SCENARIO_APP}"
 
   bg_header "INTERRUPTED ADMISSION: ADOPT WITHOUT REPUBLISHING OR SCANNING"
@@ -88,5 +89,5 @@ scenario_run() {
   bg_assert_hash "${SCENARIO_ROOT}/admission-books/${RELATIVE}" "${staged_hash}" "adopted bytes"
   bg_assert_hash "${SCENARIO_ROOT}/staging/${RELATIVE}" "${staged_hash}" "staging retained"
   assert_scans 0
-  bg_note "Disposable admission and interrupted-outcome adoption passed without duplicate publication or scan."
+  bg_note "Disposable publication and interrupted-outcome adoption passed; Bindery scan remains separately gated."
 }

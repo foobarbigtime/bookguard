@@ -184,7 +184,7 @@ class _VerifiedAcquisitionAdmissionExecutor:
 
         result = admit_ebook_acquisition(
             int(plan["subjectId"]), BinderyClient(),
-            before_publish=before_publish,
+            before_publish=before_publish, request_scan=False,
         )
         admission = result.get("admission") or {}
         acquisition = result.get("acquisition") or {}
@@ -208,7 +208,7 @@ class _VerifiedAcquisitionAdmissionExecutor:
             "publicationMethod": str(admission["publicationMethod"]),
             "externalMutationPerformed": True,
             "libraryBytesChanged": True,
-            "scanRequested": admission.get("binderyScan") in {"requested", "already_running"},
+            "scanRequested": False,
             "stagingRetained": True,
         }
 
@@ -262,13 +262,13 @@ class _VerifiedAcquisitionAdmissionExecutor:
             if len(rows) != 1:
                 raise AdmissionSafetyError("Exactly one admission journal is required.")
             admission_id = int(rows[0]["id"])
-            preview = admission_reconcile_preview(admission_id, client)
+            preview = admission_reconcile_preview(
+                admission_id, client, allow_published_without_scan=True,
+            )
             admission = preview if preview.get("safe") else None
-            if not admission or preview.get("status") not in {
-                "scan_requested", "scan_request_failed",
-            } or preview.get("registrationState") not in {
-                "scan_required", "registered",
-            }:
+            if not admission or preview.get("status") != "published" or (
+                preview.get("registrationState") != "scan_required"
+            ):
                 raise AdmissionSafetyError("Published admission outcome is unproven.")
 
             with local_conn() as conn:

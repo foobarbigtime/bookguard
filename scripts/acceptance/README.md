@@ -113,6 +113,7 @@ publication, and an idle post-verification replay. It never calls a Bindery muta
 
 The `acquisition-admission` scenario uses a separate writable disposable admission root
 and fake Bindery. It proves an empty allowlist publishes nothing, exact allowlisting
-publishes one verified ebook without overwrite and requests one scan, and a seeded
-interrupted journal adopts exact published bytes without another publication or scan.
+publishes one verified ebook without overwrite or scan, and a seeded interrupted
+journal adopts exact published bytes without another publication. The Bindery scan
+remains a separate allowlisted mutation.
 It never mounts or reads the production library.
