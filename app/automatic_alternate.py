@@ -260,6 +260,14 @@ class _AlternateGrabExecutor:
             if child["queue_id"] is not None and queue_id != child["queue_id"]:
                 raise workflow.AcquisitionSafetyError("The linked queue identity changed.")
             if child["status"] == "verified":
+                if child["queue_id"] is None:
+                    raise workflow.AcquisitionSafetyError(
+                        "The verified alternate has no durable queue identity."
+                    )
+                if workflow._queue_status(queue) not in workflow._AWAITING_STAGING_QUEUE_STATUSES:
+                    raise workflow.AcquisitionSafetyError(
+                        "The verified alternate has no completed queue handoff."
+                    )
                 inventory = list_staged_ebooks(1000)
                 staged = inventory.get("items") or []
                 if inventory.get("truncated") or len(staged) != 1:
