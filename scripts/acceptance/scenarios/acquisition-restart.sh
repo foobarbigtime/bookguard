@@ -40,6 +40,9 @@ scenario_run() {
 
   bg_header "INTERRUPTED OBSERVATION: EXACT QUEUE ADOPTION"
   setup_progress_fixture
+  start_bookguard observe ""
+  bg_assert_contains "$(observe_once)" '"planKind":"RECONCILE_ACQUISITION"' "planned observation"
+  bg_remove_container "${SCENARIO_APP}"
   seed_running_observation
   start_bookguard automatic "resume_known_transition"
   response="${SCENARIO_ROOT}/adopted.json"
@@ -53,6 +56,9 @@ scenario_run() {
 
   bg_header "INTERRUPTED OBSERVATION: CONTRADICTORY QUEUE BLOCKS"
   setup_progress_fixture
+  start_bookguard observe ""
+  bg_assert_contains "$(observe_once)" '"planKind":"RECONCILE_ACQUISITION"' "planned observation"
+  bg_remove_container "${SCENARIO_APP}"
   seed_running_observation
   cat > "${SCENARIO_ROOT}/bindery-state/state.json" <<'JSON'
 {"queue":[{"id":77,"queueId":78,"bookId":101,"title":"Progress Fixture release","protocol":"usenet","status":"importExternal"}],"partial":false,"queueStatus":200}
