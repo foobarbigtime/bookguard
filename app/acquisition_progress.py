@@ -52,6 +52,23 @@ def _queue_identity(
     return queue, exact_identity, no_competing
 
 
+def _verified_snapshot_matches(
+    acquisition: dict[str, Any], book_id: int, fingerprint: tuple, staged_hash: str,
+) -> bool:
+    verification = acquisition.get("verification")
+    return bool(
+        isinstance(verification, dict)
+        and verification.get("safeToAdmit") is True
+        and verification.get("stableDuringVerification") is True
+        and verification.get("verdict") == "VERIFIED_CORRECT"
+        and verification.get("bookId") == book_id
+        and verification.get("relativePath") == fingerprint[0]
+        and verification.get("size") == fingerprint[1]
+        and verification.get("sha256") == staged_hash
+        and not verification.get("admissionBlockers")
+    )
+
+
 class _KnownAcquisitionProgressExecutor:
     action_code = "resume_known_transition"
     _statuses = {"queued", "downloading", "awaiting_staging", "staging_observed"}
@@ -243,6 +260,10 @@ class _KnownAcquisitionProgressExecutor:
                     acquisition.get("staged_relative_path") == fingerprint[0]
                     and bool(acquisition.get("staged_sha256"))
                     and boundary["stagedSha256"] == acquisition["staged_sha256"]
+                    and _verified_snapshot_matches(
+                        acquisition, int(plan["bookId"]), tuple(fingerprint),
+                        str(boundary["stagedSha256"]),
+                    )
                 )
             else:
                 proven = False
