@@ -175,9 +175,12 @@ def acquisition_admission_preview(
         return _blocked("DEPENDENCY_OR_IDENTITY_UNPROVEN", str(exc))
     return {
         "ok": True, "readOnly": True, "admissionAttempted": False,
-        "acquisitionId": acquisition_id, "planSignature": plan["signature"],
+        "acquisitionId": acquisition_id, "resultId": plan["resultId"],
+        "bookId": plan["bookId"], "queueId": acquisition["queue_id"],
+        "planSignature": plan["signature"],
         "evidenceRevision": plan["evidenceRevision"],
         "stagedRelativePath": fingerprint[0], "stagedSha256": staged_hash,
+        "sourceIdentity": list(source_identity),
         "destination": str(destination), "binderyPath": bindery_path,
         "message": "Current evidence is suitable for review; publication remains disabled.",
     }

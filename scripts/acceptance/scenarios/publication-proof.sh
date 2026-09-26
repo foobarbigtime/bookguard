@@ -41,6 +41,7 @@ start_bookguard() {
     -e BOOKGUARD_ALLOW_ACTIONS=true \
     -e BOOKGUARD_AUTOMATION_MODE="${mode}" \
     -e BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST="${allowlist}" \
+    -e BOOKGUARD_AUTOMATIC_REACQUISITION="${SCENARIO_REACQUISITION:-false}" \
     -e BOOKGUARD_ADMISSION_ENABLED=true \
     -e BOOKGUARD_STAGING_ROOT=/staging \
     -e BOOKGUARD_ADMISSION_ROOT=/admission-books \
@@ -81,9 +82,10 @@ setup_disposable_admission() {
     -v "${SCENARIO_ROOT}/staging:/staging:rw" \
     -v "${SCENARIO_ROOT}/admission-books:/admission-books:rw" \
     -v "${SCENARIO_ROOT}/bindery-state:/bindery:rw" \
+    -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/${SCENARIO_SEED_SCRIPT:-seed_publication_proof_fixture.py}:/app/seed_fixture.py:ro" \
     -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_publication_proof_fixture.py:/app/seed_publication_proof_fixture.py:ro" \
     -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_registration_conflict_fixture.py:/app/seed_registration_conflict_fixture.py:ro" \
-    "${SCENARIO_IMAGE}" python /app/seed_publication_proof_fixture.py
+    "${SCENARIO_IMAGE}" python /app/seed_fixture.py
   printf '%s\n' '{"settings":{"import.mode":"external","import.drop_folder":"/data/bookguard-staging","autoGrab.enabled":"false"},"queue":[],"partial":false,"scanAttempts":0}' \
     > "${SCENARIO_ROOT}/bindery-state/state.json"
   chown 99:100 "${SCENARIO_ROOT}/bindery-state/state.json"

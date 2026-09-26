@@ -7,14 +7,17 @@ import zipfile
 import pytest
 
 import app.acquisition_admission_preflight as preflight
+import app.acquisition_admission_execution as admission_execution
+import app.admission as admission_module
 from app.acquisition_admission_preflight import acquisition_admission_preview
 from app.config import settings
 from app.db import (
-    add_result, create_ebook_acquisition, create_scan, finish_scan,
-    init_local_db, local_conn, update_ebook_acquisition,
+    add_result, create_ebook_acquisition, create_ebook_admission, create_scan,
+    ebook_acquisition_by_id, finish_scan, init_local_db, local_conn,
+    result_by_id, update_ebook_acquisition, update_ebook_admission,
 )
 from app.observe import _acquisition_decisions
-from app.recovery_planner import record_recovery_plans
+from app.recovery_planner import record_recovery_plans, recovery_plan_by_id
 from app.staging import verify_staged_ebook
 
 
@@ -231,3 +234,107 @@ def test_preview_blocks_durable_change_during_verification(
 
     assert preview["reasonCode"] == "DURABLE_STATE_CHANGED"
     assert not destination.exists()
+
+
+def _admission_plan(acquisition_id):
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM recovery_plans WHERE subject_id=? ORDER BY id DESC LIMIT 1",
+            (str(acquisition_id),),
+        ).fetchone()
+    return recovery_plan_by_id(int(row["id"]))
+
+
+def test_live_admission_boundary_requires_exact_plan(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    monkeypatch.setattr(admission_execution, "BinderyClient", lambda: client)
+    plan = _admission_plan(acquisition_id)
+    boundary = admission_execution.EXECUTOR.revalidate(plan, plan["steps"][1])
+
+    assert boundary["ok"] is True
+    assert boundary["queueId"] == 77
+    assert len(boundary["sourceIdentity"]) == 5
+    assert boundary["stagedSha256"] == ebook_acquisition_by_id(acquisition_id)["staged_sha256"]
+    _assert_no_admission(destination)
+
+
+def test_live_admission_rechecks_before_guarded_primitive(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    monkeypatch.setattr(admission_execution, "BinderyClient", lambda: client)
+    plan = _admission_plan(acquisition_id)
+    boundary = admission_execution.EXECUTOR.revalidate(plan, plan["steps"][1])
+    staged.write_bytes(staged.read_bytes() + b"changed")
+    monkeypatch.setattr(
+        admission_execution, "admit_ebook_acquisition",
+        lambda *_: pytest.fail("guarded admission must not be called"),
+    )
+
+    with pytest.raises(admission_execution.core.AutomaticExecutionBlocked):
+        admission_execution.EXECUTOR.execute(plan, plan["steps"][1], boundary)
+    _assert_no_admission(destination)
+
+
+def _seed_published_admission(acquisition_id, staged, destination):
+    acquisition = ebook_acquisition_by_id(acquisition_id)
+    result = result_by_id(int(acquisition["result_id"]))
+    admission_id = create_ebook_admission(result, staged.name)
+    destination.write_bytes(staged.read_bytes())
+    update_ebook_admission(
+        admission_id, "published",
+        staged_sha256=acquisition["staged_sha256"],
+        publication_method="private-snapshot-link",
+        verification={
+            "safeToAdmit": True, "sha256": acquisition["staged_sha256"],
+        },
+    )
+    return admission_id
+
+
+def test_interrupted_admission_adopts_only_proven_journal(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    monkeypatch.setattr(admission_execution, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_module, "_exact_ebook_associations", lambda _: [])
+    plan = _admission_plan(acquisition_id)
+    boundary = admission_execution.EXECUTOR.revalidate(plan, plan["steps"][1])
+    admission_id = _seed_published_admission(acquisition_id, staged, destination)
+
+    result = admission_execution.EXECUTOR.reconcile_uncertain(
+        plan, plan["steps"][1], {"state": "running", "boundary": boundary},
+    )
+
+    assert result["reconciledAfterRestart"] is True
+    assert result["externalMutationPerformed"] is False
+    assert result["scanRequested"] is False
+    assert result["status"] == "published"
+    assert ebook_acquisition_by_id(acquisition_id)["admission_id"] == admission_id
+    assert destination.read_bytes() == staged.read_bytes()
+
+
+@pytest.mark.parametrize("change", ["missing_journal", "changed_destination", "replaced_source"])
+def test_interrupted_admission_never_replays_unproven_publication(
+    prepared, monkeypatch, change,
+):
+    acquisition_id, client, staged, destination = prepared
+    monkeypatch.setattr(admission_execution, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_module, "_exact_ebook_associations", lambda _: [])
+    plan = _admission_plan(acquisition_id)
+    boundary = admission_execution.EXECUTOR.revalidate(plan, plan["steps"][1])
+    if change != "missing_journal":
+        _seed_published_admission(acquisition_id, staged, destination)
+    if change == "changed_destination":
+        destination.write_bytes(b"wrong bytes")
+    elif change == "replaced_source":
+        replacement = staged.with_suffix(".replacement")
+        replacement.write_bytes(staged.read_bytes())
+        os.replace(replacement, staged)
+    monkeypatch.setattr(
+        admission_execution, "admit_ebook_acquisition",
+        lambda *_: pytest.fail("publication must never be replayed"),
+    )
+
+    with pytest.raises(admission_execution.core.AutomaticExecutionBlocked) as exc:
+        admission_execution.EXECUTOR.reconcile_uncertain(
+            plan, plan["steps"][1], {"state": "running", "boundary": boundary},
+        )
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+    assert ebook_acquisition_by_id(acquisition_id)["status"] == "verified"

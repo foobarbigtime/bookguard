@@ -10,7 +10,7 @@ import stat
 import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from .bindery_client import BinderyClient, BinderyClientError
 from .config import ConfigurationError, load_automation_settings, settings
@@ -516,6 +516,9 @@ def admit_staged_ebook(
     result: dict[str, Any],
     relative_path: str,
     client: BinderyClient | None = None,
+    *,
+    before_publish: Callable[[int], None] | None = None,
+    request_scan: bool = True,
 ) -> dict[str, Any]:
     """Verify, durably record, and atomically publish one staged ebook."""
     if not _admission_lock.acquire(blocking=False):
@@ -592,6 +595,8 @@ def admit_staged_ebook(
             verification=verification,
         )
         _seal_snapshot(temp_path, snapshot_hash)
+        if before_publish is not None:
+            before_publish(admission_id)
         publication_method = _publish_no_replace(temp_path, destination)
         temp_path = None
         update_ebook_admission(
@@ -600,26 +605,29 @@ def admit_staged_ebook(
             publication_method=publication_method,
         )
 
-        scan_state = "requested"
+        scan_state = "not_requested"
         scan_warning = ""
-        try:
-            client.scan_library()
-            update_ebook_admission(admission_id, "scan_requested")
-        except BinderyClientError as exc:
-            if "HTTP 409" in str(exc):
-                scan_state = "already_running"
+        if request_scan:
+            scan_state = "requested"
+            try:
+                client.scan_library()
                 update_ebook_admission(admission_id, "scan_requested")
-            else:
-                scan_state = "request_failed"
-                scan_warning = str(exc)
-                update_ebook_admission(
-                    admission_id,
-                    "scan_request_failed",
-                    error=scan_warning,
-                )
+            except BinderyClientError as exc:
+                if "HTTP 409" in str(exc):
+                    scan_state = "already_running"
+                    update_ebook_admission(admission_id, "scan_requested")
+                else:
+                    scan_state = "request_failed"
+                    scan_warning = str(exc)
+                    update_ebook_admission(
+                        admission_id,
+                        "scan_request_failed",
+                        error=scan_warning,
+                    )
 
         response_status = (
             "scan_request_failed" if scan_state == "request_failed"
+            else "published" if scan_state == "not_requested"
             else "scan_requested"
         )
         return {
@@ -741,6 +749,8 @@ def _verified_staged_source(admission: dict[str, Any]) -> Path:
 def admission_reconcile_preview(
     admission_id: int,
     client: BinderyClient | None = None,
+    *,
+    allow_published_without_scan: bool = False,
 ) -> dict[str, Any]:
     """Read-only E4 boundary for one known admission registration transition.
 
@@ -815,15 +825,18 @@ def admission_reconcile_preview(
     checks = {
         "actionsEnabled": settings.allow_actions,
         "admissionEnabled": configured.admission_enabled,
-        "workflowStateScanRequested": status in {
-            "scan_requested", "scan_request_failed"
-        },
         "verifiedSnapshotPresent": bool(staged_sha256),
         "resultIdentityUnchanged": result_matches,
         "publishedBytesCurrent": published_path.is_file(),
         "stagedBytesCurrent": staged_path.is_file(),
         "binderyOwnershipConsistent": ownership_consistent,
     }
+    if allow_published_without_scan:
+        checks["workflowStatePublished"] = status == "published"
+    else:
+        checks["workflowStateScanRequested"] = status in {
+            "scan_requested", "scan_request_failed"
+        }
     blockers = [name for name, passed in checks.items() if not passed]
 
     return {
