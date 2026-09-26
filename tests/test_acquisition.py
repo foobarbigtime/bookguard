@@ -654,8 +654,9 @@ def test_alternate_queue_proof_rejects_conflicting_ids():
         )
 
 
-def test_interrupted_alternate_adopts_proven_queue_without_second_grab(
-    acquisition_setup, monkeypatch,
+@pytest.mark.parametrize("conflicting_queue_id", [None, 78])
+def test_interrupted_alternate_requires_consistent_queue_proof_without_replay(
+    acquisition_setup, monkeypatch, conflicting_queue_id,
 ):
     parent_id, plan, client = _selected_alternate_for_live_test(
         acquisition_setup, monkeypatch,
@@ -675,6 +676,7 @@ def test_interrupted_alternate_adopts_proven_queue_without_second_grab(
         "items": [{
             "id": 77, "bookId": 42, "title": client.candidate["title"],
             "protocol": "usenet", "status": "downloading",
+            **({"queueId": conflicting_queue_id} if conflicting_queue_id else {}),
         }],
         "partial": False,
     }
@@ -686,9 +688,14 @@ def test_interrupted_alternate_adopts_proven_queue_without_second_grab(
 
     adopted = automatic_runner.run_automatic_cycle()
 
-    assert adopted["state"] == "reconciled"
     assert client.grabs == []
-    assert ebook_replacement_for_acquisition(parent_id)["queue_id"] == 77
+    if conflicting_queue_id:
+        assert adopted["state"] == "blocked"
+        assert "identity is unproven" in adopted["message"]
+        assert ebook_replacement_for_acquisition(parent_id)["queue_id"] is None
+    else:
+        assert adopted["state"] == "reconciled"
+        assert ebook_replacement_for_acquisition(parent_id)["queue_id"] == 77
     assert ebook_replacement_for_acquisition(parent_id)["admission_id"] is None
 
 
