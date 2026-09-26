@@ -67,9 +67,8 @@ post_cycle() {
     "http://127.0.0.1:${SCENARIO_PORT}/api/automatic/run"
 }
 
-scenario_run() {
-  local seed_output fixture_hash observe_body response http_status executions
-
+setup_progress_fixture() {
+  local seed_output
   SCENARIO_ROOT=$(bg_reset_scenario_root "${BG_ACCEPTANCE_SCENARIO}")
   SCENARIO_APP=$(bg_container_name "${BG_ACCEPTANCE_SCENARIO}" app)
   SCENARIO_FAKE=$(bg_container_name "${BG_ACCEPTANCE_SCENARIO}" bindery)
@@ -87,7 +86,7 @@ scenario_run() {
     -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_acquisition_progress_fixture.py:/app/seed_progress.py:ro" \
     "${SCENARIO_IMAGE}" python /app/seed_progress.py)
   bg_note "${seed_output}"
-  fixture_hash=$(bg_sha256 "${SCENARIO_ROOT}/staging/Progress Fixture.epub")
+  SCENARIO_FIXTURE_HASH=$(bg_sha256 "${SCENARIO_ROOT}/staging/Progress Fixture.epub")
   cat > "${SCENARIO_ROOT}/bindery-state/state.json" <<'JSON'
 {"queue":[{"id":77,"bookId":101,"title":"Progress Fixture release","protocol":"usenet","status":"importExternal"}],"partial":false,"queueStatus":200}
 JSON
@@ -101,6 +100,12 @@ JSON
     -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/fake_bindery_acquisition_progress.py:/acceptance/fake_bindery.py:ro" \
     -e FAKE_BINDERY_STATE=/state/state.json -e PORT=8787 \
     "${SCENARIO_IMAGE}" python /acceptance/fake_bindery.py >/dev/null
+}
+
+scenario_run() {
+  local fixture_hash observe_body response http_status executions
+  setup_progress_fixture
+  fixture_hash=${SCENARIO_FIXTURE_HASH}
 
   bg_header "OBSERVE: PLAN ONLY"
   start_bookguard observe ""
