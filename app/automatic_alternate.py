@@ -6,6 +6,7 @@ from typing import Any
 
 from . import acquisition as workflow
 from . import automatic_execution as core
+from .acquisition_progress import _verified_snapshot_matches
 from .alternate_candidate import _candidate_fingerprint, alternate_candidate_preview
 from .alternate_selection import alternate_selection_by_acquisition
 from .bindery_client import BinderyClient
@@ -15,6 +16,8 @@ from .db import (
     result_by_id,
     update_ebook_acquisition,
 )
+from .file_safety import sha256_file
+from .staging import StagingSafetyError, list_staged_ebooks, resolve_staged_file
 
 
 _ACTION = "request_alternate_grab"
@@ -238,6 +241,7 @@ class _AlternateGrabExecutor:
             or str(child["candidate_protocol"] or "") != selected["candidate"]["protocol"]
             or int(child["result_id"]) != int(plan["resultId"])
             or int(child["book_id"]) != int(plan["bookId"])
+            or child["admission_id"] is not None
             or child["status"] not in {
                 "grab_requested", "queued", "downloading", "awaiting_staging",
                 "staging_observed", "verified",
@@ -255,8 +259,31 @@ class _AlternateGrabExecutor:
             queue_id = _acknowledged_queue_id(queue)
             if child["queue_id"] is not None and queue_id != child["queue_id"]:
                 raise workflow.AcquisitionSafetyError("The linked queue identity changed.")
+            if child["status"] == "verified":
+                inventory = list_staged_ebooks(1000)
+                staged = inventory.get("items") or []
+                if inventory.get("truncated") or len(staged) != 1:
+                    raise workflow.AcquisitionSafetyError(
+                        "The verified alternate has no unique staged source."
+                    )
+                fingerprint = (
+                    str(staged[0]["relativePath"]), int(staged[0]["size"]),
+                    int(staged[0]["modifiedNs"]),
+                )
+                _, staged_path = resolve_staged_file(fingerprint[0])
+                staged_hash = sha256_file(staged_path)
+                if (
+                    child.get("staged_relative_path") != fingerprint[0]
+                    or child.get("staged_sha256") != staged_hash
+                    or not _verified_snapshot_matches(
+                        child, int(plan["bookId"]), fingerprint, staged_hash,
+                    )
+                ):
+                    raise workflow.AcquisitionSafetyError(
+                        "The verified alternate's staged evidence is unproven."
+                    )
             reconciled = workflow.reconcile_ebook_acquisition(int(child["id"]), client)
-        except workflow.AcquisitionSafetyError as exc:
+        except (workflow.AcquisitionSafetyError, StagingSafetyError, OSError, ValueError) as exc:
             raise core.AutomaticExecutionBlocked(
                 "UNCERTAIN_EXTERNAL_OUTCOME", str(exc)
             ) from exc
