@@ -743,6 +743,93 @@ def test_interrupted_alternate_requires_consistent_queue_proof_without_replay(
     assert ebook_replacement_for_acquisition(parent_id)["admission_id"] is None
 
 
+@pytest.mark.parametrize("evidence_change", ["missing", "wrong_book", "changed_bytes"])
+def test_interrupted_verified_alternate_requires_exact_staged_proof(
+    acquisition_setup, monkeypatch, evidence_change,
+):
+    parent_id, plan, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    executor = automatic_alternate._EXECUTOR
+    boundary = executor.revalidate(plan, {"code": "request_alternate_grab"})
+    child_id = create_ebook_acquisition(
+        acquisition_setup["result"], client.candidate,
+        replacement_for_acquisition_id=parent_id,
+    )
+    staged = acquisition_setup["staging"] / "Bel Canto - Ann Patchett.epub"
+    _write_epub(staged, "Bel Canto", "Ann Patchett")
+    digest = hashlib.sha256(staged.read_bytes()).hexdigest()
+    verification = {
+        "safeToAdmit": True, "stableDuringVerification": True,
+        "verdict": "VERIFIED_CORRECT", "bookId": 42,
+        "relativePath": staged.name, "size": staged.stat().st_size,
+        "sha256": digest, "admissionBlockers": [],
+    }
+    if evidence_change == "missing":
+        verification = None
+    elif evidence_change == "wrong_book":
+        verification["bookId"] = 99
+    update_ebook_acquisition(
+        child_id, "verified", queue_id=77,
+        staged_relative_path=staged.name, staged_sha256=digest,
+        verification=verification,
+    )
+    if evidence_change == "changed_bytes":
+        staged.write_bytes(staged.read_bytes() + b"changed")
+    client.queue = {"items": [{
+        "id": 77, "bookId": 42, "title": client.candidate["title"],
+        "protocol": "usenet", "status": "importExternal",
+    }], "partial": False}
+
+    with pytest.raises(automatic_alternate.core.AutomaticExecutionBlocked) as exc:
+        executor.reconcile_uncertain(
+            plan, {"code": "request_alternate_grab"}, {"boundary": boundary},
+        )
+
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+    assert client.grabs == []
+    assert ebook_replacement_for_acquisition(parent_id)["admission_id"] is None
+
+
+def test_interrupted_verified_alternate_adopts_exact_safe_snapshot(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, plan, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    executor = automatic_alternate._EXECUTOR
+    boundary = executor.revalidate(plan, {"code": "request_alternate_grab"})
+    child_id = create_ebook_acquisition(
+        acquisition_setup["result"], client.candidate,
+        replacement_for_acquisition_id=parent_id,
+    )
+    staged = acquisition_setup["staging"] / "Bel Canto - Ann Patchett.epub"
+    _write_epub(staged, "Bel Canto", "Ann Patchett")
+    digest = hashlib.sha256(staged.read_bytes()).hexdigest()
+    update_ebook_acquisition(
+        child_id, "verified", queue_id=77,
+        staged_relative_path=staged.name, staged_sha256=digest,
+        verification={
+            "safeToAdmit": True, "stableDuringVerification": True,
+            "verdict": "VERIFIED_CORRECT", "bookId": 42,
+            "relativePath": staged.name, "size": staged.stat().st_size,
+            "sha256": digest, "admissionBlockers": [],
+        },
+    )
+    client.queue = {"items": [{
+        "id": 77, "bookId": 42, "title": client.candidate["title"],
+        "protocol": "usenet", "status": "importExternal",
+    }], "partial": False}
+
+    adopted = executor.reconcile_uncertain(
+        plan, {"code": "request_alternate_grab"}, {"boundary": boundary},
+    )
+
+    assert adopted["status"] == "verified"
+    assert adopted["admissionAttempted"] is False
+    assert client.grabs == []
+
+
 def test_alternate_grab_refuses_queue_arriving_during_final_search(
     acquisition_setup, monkeypatch,
 ):
