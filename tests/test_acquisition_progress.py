@@ -147,6 +147,77 @@ def test_proven_interrupted_observation_can_be_adopted(monkeypatch):
     assert result["externalMutationPerformed"] is False
 
 
+def test_interrupted_observation_refuses_queue_outage(monkeypatch):
+    acquisition = _fixture(monkeypatch)
+    acquisition.update(status="staging_observed", observed_relative_path="book.epub",
+                       observed_size=100, observed_modified_ns=123)
+
+    def unavailable(_):
+        raise progress.AcquisitionSafetyError("Bindery queue unavailable.")
+
+    monkeypatch.setattr(progress, "_queue_payload", unavailable)
+    with pytest.raises(progress.core.AutomaticExecutionBlocked) as exc:
+        progress.EXECUTOR.reconcile_uncertain(
+            _plan(), _plan()["steps"][1],
+            {"boundary": {"queueId": 23, "fingerprint": ["book.epub", 100, 123],
+                          "stagedSha256": "a" * 64, "beforeStatus": "queued"}},
+        )
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+
+
+@pytest.mark.parametrize("queue, partial", [
+    ([], False),
+    ([{"id": 23, "bookId": 10, "title": "Expected",
+       "protocol": "torrent", "status": "importexternal"}], False),
+    ([{"id": 23, "queueId": 24, "bookId": 9, "title": "Expected",
+       "protocol": "torrent", "status": "importexternal"}], False),
+    ([{"id": 23, "bookId": 9, "title": "Changed",
+       "protocol": "torrent", "status": "importexternal"}], False),
+    ([{"id": 23, "bookId": 9, "title": "Expected",
+       "protocol": "torrent", "status": "importexternal"},
+      {"id": 24, "bookId": 9, "title": "Other",
+       "protocol": "torrent", "status": "downloading"}], False),
+    ([{"id": 23, "bookId": 9, "title": "Expected",
+       "protocol": "torrent", "status": "importexternal"}], True),
+])
+def test_interrupted_observation_refuses_changed_queue_without_replay(
+    monkeypatch, queue, partial,
+):
+    acquisition = _fixture(monkeypatch)
+    acquisition.update(status="staging_observed", observed_relative_path="book.epub",
+                       observed_size=100, observed_modified_ns=123)
+    monkeypatch.setattr(progress, "_queue_payload", lambda _: (queue, partial))
+    monkeypatch.setattr(progress, "reconcile_ebook_acquisition",
+                        lambda *args, **kwargs: pytest.fail("must not replay"))
+
+    with pytest.raises(progress.core.AutomaticExecutionBlocked) as exc:
+        progress.EXECUTOR.reconcile_uncertain(
+            _plan(), _plan()["steps"][1],
+            {"boundary": {"queueId": 23, "fingerprint": ["book.epub", 100, 123],
+                          "stagedSha256": "a" * 64, "beforeStatus": "queued"}},
+        )
+
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+
+
+@pytest.mark.parametrize("changed", [
+    {"result_id": 8}, {"book_id": 10}, {"admission_id": 99},
+])
+def test_interrupted_observation_refuses_changed_durable_identity(
+    monkeypatch, changed,
+):
+    acquisition = _fixture(monkeypatch)
+    acquisition.update(status="staging_observed", observed_relative_path="book.epub",
+                       observed_size=100, observed_modified_ns=123, **changed)
+    with pytest.raises(progress.core.AutomaticExecutionBlocked) as exc:
+        progress.EXECUTOR.reconcile_uncertain(
+            _plan(), _plan()["steps"][1],
+            {"boundary": {"queueId": 23, "fingerprint": ["book.epub", 100, 123],
+                          "stagedSha256": "a" * 64, "beforeStatus": "queued"}},
+        )
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+
+
 def test_interrupted_verification_cannot_adopt_unchanged_observation(monkeypatch):
     acquisition = _fixture(monkeypatch)
     acquisition.update(status="staging_observed", observed_relative_path="book.epub",
