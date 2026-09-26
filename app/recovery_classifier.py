@@ -59,6 +59,15 @@ def classify_acquisition_failure(status: str, error: str) -> RecoveryClassificat
         "temporarily unavailable",
     )
     if status_code in transient_statuses or any(marker in folded for marker in transient_markers):
+        # A POST timeout or 5xx cannot prove whether Bindery accepted the grab.
+        # Only a named read failure can authorize another request; a generic
+        # transport error has no durable stage and must go to Attention.
+        if (
+            folded.startswith("bindery grab failed:")
+            or re.search(r"\bPOST\s+/queue/grab\b", text, re.IGNORECASE)
+            or not re.search(r"\bBindery GET /[a-z]", text, re.IGNORECASE)
+        ):
+            return None
         return RecoveryClassification(
             recoverable=True,
             reason_code="ACQUISITION_TRANSIENT_BINDERY_FAILURE",
