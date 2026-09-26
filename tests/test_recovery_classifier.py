@@ -23,7 +23,7 @@ def test_already_imported_acquisition_selects_alternate_candidate():
 def test_transient_acquisition_has_bounded_backoff():
     classified = classify_acquisition_failure(
         "failed",
-        "Bindery POST /queue/grab returned HTTP 503: temporarily unavailable",
+        "Bindery GET /book/42 returned HTTP 503: temporarily unavailable",
     )
 
     assert classified is not None
@@ -31,6 +31,16 @@ def test_transient_acquisition_has_bounded_backoff():
     assert classified.retry_same_operation is True
     assert classified.max_retries == 3
     assert classified.backoff_seconds == (30, 120, 300)
+
+
+def test_uncertain_grab_and_unstaged_transport_errors_never_authorize_retry():
+    for error in (
+        "Bindery grab failed: Bindery POST /queue/grab returned HTTP 503",
+        "Bindery grab failed: Bindery request failed: Read timed out",
+        "Bindery POST /queue/grab returned HTTP 429: temporarily unavailable",
+        "timeout contacting Bindery",
+    ):
+        assert classify_acquisition_failure("failed", error) is None
 
 
 def test_admission_errno22_before_publication_requires_capability_recovery():
