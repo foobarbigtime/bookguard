@@ -4,12 +4,13 @@
 from app import automatic_execution as execution
 from app.acquisition_progress import EXECUTOR
 from app.db import update_ebook_acquisition
-from app.observe import run_observe_cycle
-from app.recovery_planner import record_recovery_step_success, recovery_plan_by_id
+from app.recovery_planner import (
+    record_recovery_step_success, recovery_plan_by_id, recovery_plan_snapshot,
+)
 
 
 plans = [
-    plan for plan in run_observe_cycle()["plans"]
+    plan for plan in recovery_plan_snapshot(100)["items"]
     if plan["planKind"] == "RECONCILE_ACQUISITION"
 ]
 assert len(plans) == 1, "Expected one disposable acquisition plan"
