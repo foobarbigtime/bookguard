@@ -115,6 +115,23 @@ def classify_admission_failure(
             max_retries=0,
         )
 
+    if (
+        str(failure_stage or "") == "before_publication"
+        and not str(publication_method or "").strip()
+    ):
+        return RecoveryClassification(
+            recoverable=True,
+            reason_code="ADMISSION_FAILED_BEFORE_PUBLICATION",
+            plan_kind="REVIEW_ADMISSION_PREPUBLICATION",
+            explanation=(
+                "The admission failed before its publication call. Review the exact "
+                "journal, staged bytes, destination absence, and Bindery identity "
+                "before designing a guarded retry. No retry is enabled."
+            ),
+            retry_same_operation=False,
+            max_retries=0,
+        )
+
     # A generic failed admission does not record which Bindery operation (if
     # any) failed. Even a verified snapshot cannot prove whether publication
     # already happened, so a timeout alone cannot authorize the same retry.

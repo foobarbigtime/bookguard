@@ -570,6 +570,23 @@ def _definition(
 
     if action == "would_recover_admission_failure":
         code = str(decision.get("reasonCode") or "")
+        if code == "ADMISSION_FAILED_BEFORE_PUBLICATION":
+            return (
+                "REVIEW_ADMISSION_PREPUBLICATION",
+                code,
+                [
+                    _step(
+                        "review_failed_admission",
+                        "Confirm the exact failed journal is marked before publication and has no publication method.",
+                        stop_if_unproven=True,
+                    ),
+                    _step(
+                        "review_current_handoff",
+                        "Independently review staged bytes, absent destination, Bindery identity, and the verified acquisition before authorizing any retry.",
+                        stop_if_unproven=True,
+                    ),
+                ],
+            )
         if code == "ADMISSION_PUBLICATION_PRIMITIVE_UNSUPPORTED":
             return (
                 "RECOVER_ADMISSION_PUBLICATION",
