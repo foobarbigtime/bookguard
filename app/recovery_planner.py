@@ -16,6 +16,7 @@ _PLAN_DECISIONS = {
     "would_quarantine_unsafe",
     "would_repair_metadata",
     "would_reconcile_acquisition",
+    "would_review_verified_acquisition",
     "would_reconcile_admission",
     "would_correct_registration_conflict",
     "would_finalize_acquisition",
@@ -389,6 +390,25 @@ def _definition(
                 _step(
                     "resume_known_transition",
                     "Resume only the previously authorized acquisition transition whose prerequisites remain true.",
+                    external_mutation=True,
+                    stop_if_unproven=True,
+                ),
+            ],
+        )
+
+    if action == "would_review_verified_acquisition":
+        return (
+            "PREPARE_ACQUISITION_ADMISSION",
+            str(decision.get("reasonCode") or "VERIFIED_ACQUISITION_REVIEW_AVAILABLE"),
+            [
+                _step(
+                    "review_verified_acquisition",
+                    "Review the exact durable staged verification and acquisition linkage.",
+                    stop_if_unproven=True,
+                ),
+                _step(
+                    "admit_verified_acquisition",
+                    "Future separately allowlisted admission must revalidate live queue, bytes, book, destination, and readiness before publication.",
                     external_mutation=True,
                     stop_if_unproven=True,
                 ),

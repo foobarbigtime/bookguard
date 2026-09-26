@@ -146,6 +146,15 @@ scenario_run() {
   [[ ! -e "${SCENARIO_ROOT}/books/Progress Fixture.epub" ]] ||
     bg_die "Acquisition progression unexpectedly published library bytes."
 
+  bg_remove_container "${SCENARIO_APP}"
+  start_bookguard observe ""
+  observe_body=$(observe_once)
+  bg_assert_contains "${observe_body}" '"planKind":"PREPARE_ACQUISITION_ADMISSION"' "verified admission review plan"
+  bg_assert_contains "${observe_body}" '"executionAllowed":false' "admission plan inert"
+  bg_assert_hash "${SCENARIO_ROOT}/staging/Progress Fixture.epub" "${fixture_hash}" "review bytes"
+  bg_remove_container "${SCENARIO_APP}"
+  start_bookguard automatic "resume_known_transition"
+
   response="${SCENARIO_ROOT}/replay.json"
   http_status=$(post_cycle "${response}")
   bg_assert_eq "200" "${http_status}" "post-verification HTTP"
