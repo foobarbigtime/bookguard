@@ -679,6 +679,50 @@ def _admission_decisions(conn, limit: int) -> list[dict[str, Any]]:
                 ),
                 evidence=evidence,
             ))
+        elif status == "published":
+            linked = conn.execute(
+                """SELECT id, status, result_id, book_id, staged_relative_path,
+                          staged_sha256 FROM ebook_acquisitions WHERE admission_id=?""",
+                (int(row["id"]),),
+            ).fetchall()
+            try:
+                verification = json.loads(row["verification_json"] or "{}")
+            except (TypeError, ValueError):
+                verification = {}
+            if not isinstance(verification, dict):
+                verification = {}
+            proven = (
+                len(linked) == 1
+                and linked[0]["status"] == "admitted"
+                and linked[0]["result_id"] == row["result_id"]
+                and linked[0]["book_id"] == row["book_id"]
+                and linked[0]["staged_relative_path"] == row["staged_relative_path"]
+                and linked[0]["staged_sha256"] == row["staged_sha256"]
+                and verification.get("safeToAdmit") is True
+                and verification.get("sha256") == row["staged_sha256"]
+                and bool(row["publication_method"] and row["staged_sha256"])
+            )
+            evidence["acquisitionId"] = linked[0]["id"] if proven else None
+            decisions.append(_decision(
+                **common,
+                state=status,
+                decision="would_request_published_admission_scan" if proven else "attention",
+                reason_code=(
+                    "PUBLISHED_ACQUISITION_ADMISSION_SCAN_READY" if proven
+                    else "PUBLISHED_ADMISSION_PROVENANCE_UNCLEAR"
+                ),
+                reason=(
+                    "A linked verified acquisition has a published admission awaiting "
+                    "a separately authorized Bindery scan."
+                    if proven else "Published admission provenance is incomplete."
+                ),
+                next_step=(
+                    "Recheck the exact publication receipt, bytes, identity, ownership, "
+                    "and readiness before one allowlisted scan request."
+                    if proven else "Review the durable admission and acquisition link."
+                ),
+                evidence=evidence,
+            ))
         else:
             recovery = classify_admission_failure(
                 status,

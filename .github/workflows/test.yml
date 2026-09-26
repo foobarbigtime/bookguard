@@ -23,6 +23,7 @@ jobs:
       - run: ./scripts/smoke-test.sh
       - run: sudo scripts/acceptance/run acquisition-progress
       - run: sudo scripts/acceptance/run acquisition-admission
+      - run: sudo scripts/acceptance/run acquisition-scan
       - run: sudo scripts/acceptance/run acquisition-restart
       - run: sudo scripts/acceptance/run publication-recovery
       - run: sudo scripts/acceptance/run publication-scan

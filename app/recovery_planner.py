@@ -18,6 +18,7 @@ _PLAN_DECISIONS = {
     "would_reconcile_acquisition",
     "would_review_verified_acquisition",
     "would_reconcile_admission",
+    "would_request_published_admission_scan",
     "would_correct_registration_conflict",
     "would_finalize_acquisition",
     "would_recover_acquisition_failure",
@@ -428,6 +429,25 @@ def _definition(
                 _step(
                     "reconcile_known_admission",
                     "Resume only the existing guarded admission/reconciliation transition.",
+                    external_mutation=True,
+                    stop_if_unproven=True,
+                ),
+            ],
+        )
+
+    if action == "would_request_published_admission_scan":
+        return (
+            "REQUEST_PUBLISHED_ACQUISITION_SCAN",
+            "PUBLISHED_ACQUISITION_ADMISSION_SCAN_READY",
+            [
+                _step(
+                    "reobserve_published_acquisition_admission",
+                    "Verify the linked acquisition, publication receipt, bytes, and Bindery ownership.",
+                    stop_if_unproven=True,
+                ),
+                _step(
+                    "request_published_acquisition_scan",
+                    "Request one Bindery scan for the exact published acquisition admission.",
                     external_mutation=True,
                     stop_if_unproven=True,
                 ),

@@ -42,6 +42,7 @@ AUTOMATIC_ACTION_CODES = frozenset({
     "retry_grab_once",
     "reconcile_after_retry",
     "admit_verified_acquisition",
+    "request_published_acquisition_scan",
     "prove_supported_no_replace_method",
     "retry_guarded_publication",
     "scan_and_reconcile_registration",

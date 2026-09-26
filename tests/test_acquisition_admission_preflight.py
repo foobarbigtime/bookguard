@@ -2,21 +2,23 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+from types import SimpleNamespace
 import zipfile
 
 import pytest
 
 import app.acquisition_admission_preflight as preflight
 import app.acquisition_admission_execution as admission_execution
+import app.acquisition_admission_scan as admission_scan
 import app.admission as admission_module
 from app.acquisition_admission_preflight import acquisition_admission_preview
 from app.config import settings
 from app.db import (
     add_result, create_ebook_acquisition, create_ebook_admission, create_scan,
-    ebook_acquisition_by_id, finish_scan, init_local_db, local_conn,
+    ebook_acquisition_by_id, ebook_admission_by_id, finish_scan, init_local_db, local_conn,
     result_by_id, update_ebook_acquisition, update_ebook_admission,
 )
-from app.observe import _acquisition_decisions
+from app.observe import _acquisition_decisions, _admission_decisions
 from app.recovery_planner import record_recovery_plans, recovery_plan_by_id
 from app.staging import verify_staged_ebook
 
@@ -25,6 +27,10 @@ class FakeClient:
     def __init__(self):
         self.queue_status = "importExternal"
         self.registered = False
+        self.scan_attempts = 0
+
+    def scan_library(self):
+        self.scan_attempts += 1
 
     def list_queue(self):
         return {"items": [{
@@ -288,6 +294,125 @@ def _seed_published_admission(acquisition_id, staged, destination):
         },
     )
     return admission_id
+
+
+def _scan_plan(acquisition_id, staged, destination):
+    original_plan = _admission_plan(acquisition_id)
+    original_boundary = admission_execution.EXECUTOR.revalidate(
+        original_plan, original_plan["steps"][1],
+    )
+    admission_id = _seed_published_admission(acquisition_id, staged, destination)
+    update_ebook_acquisition(acquisition_id, "admitted", admission_id=admission_id)
+    admission_execution.core._record(
+        original_plan, "admit_verified_acquisition", 1, "succeeded",
+        boundary=original_boundary,
+        external_result={
+            "admissionId": admission_id, "acquisitionId": acquisition_id,
+            "status": "published", "scanRequested": False,
+            "stagedSha256": original_boundary["stagedSha256"],
+            "publicationMethod": "private-snapshot-link",
+        },
+    )
+    with local_conn() as conn:
+        decisions = _admission_decisions(conn, 100)
+        record_recovery_plans(conn, decisions)
+        conn.commit()
+        row = conn.execute(
+            "SELECT id FROM recovery_plans WHERE subject_kind='admission' AND subject_id=?",
+            (str(admission_id),),
+        ).fetchone()
+    return admission_id, recovery_plan_by_id(int(row["id"]))
+
+
+def test_published_acquisition_scan_one_request_and_no_replay(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    monkeypatch.setattr(admission_execution, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_scan, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_scan, "load_automation_settings", lambda: SimpleNamespace(
+        automation_mode="automatic",
+        automatic_action_allowlist={"request_published_acquisition_scan"},
+        automatic_reacquisition=True, admission_enabled=True,
+    ))
+    monkeypatch.setattr(admission_module, "_exact_ebook_associations", lambda _: [])
+    admission_id, plan = _scan_plan(acquisition_id, staged, destination)
+    assert plan["planKind"] == "REQUEST_PUBLISHED_ACQUISITION_SCAN"
+    boundary = admission_scan.EXECUTOR.revalidate(plan, plan["steps"][1])
+    admission_scan.core._require_fresh_boundary(plan, boundary)
+    admission_scan.core._record(
+        plan, "request_published_acquisition_scan", 1, "running",
+        boundary=boundary, increment_attempt=True,
+    )
+
+    result = admission_scan.EXECUTOR.execute(plan, plan["steps"][1], boundary)
+
+    assert result["status"] == "scan_requested"
+    assert client.scan_attempts == 1
+    assert ebook_admission_by_id(admission_id)["status"] == "scan_requested"
+    assert destination.read_bytes() == staged.read_bytes()
+    with pytest.raises(admission_scan.core.AutomaticExecutionBlocked):
+        admission_scan.EXECUTOR.revalidate(plan, plan["steps"][1])
+    assert client.scan_attempts == 1
+
+
+def test_interrupted_scan_blocks_when_post_outcome_unknown(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    monkeypatch.setattr(admission_execution, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_scan, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_module, "_exact_ebook_associations", lambda _: [])
+    _, plan = _scan_plan(acquisition_id, staged, destination)
+    boundary = admission_scan.EXECUTOR.revalidate(plan, plan["steps"][1])
+    admission_scan.core._record(
+        plan, "request_published_acquisition_scan", 1, "running",
+        boundary=boundary, increment_attempt=True,
+    )
+
+    with pytest.raises(admission_scan.core.AutomaticExecutionBlocked) as error:
+        admission_scan.EXECUTOR.reconcile_uncertain(
+            plan, plan["steps"][1], {"boundary": boundary, "state": "running"},
+        )
+
+    assert error.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+    assert client.scan_attempts == 0
+
+
+def test_interrupted_scan_adopts_durable_scan_status_without_post(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    monkeypatch.setattr(admission_execution, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_scan, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_module, "_exact_ebook_associations", lambda _: [])
+    admission_id, plan = _scan_plan(acquisition_id, staged, destination)
+    boundary = admission_scan.EXECUTOR.revalidate(plan, plan["steps"][1])
+    admission_scan.core._record(
+        plan, "request_published_acquisition_scan", 1, "running",
+        boundary=boundary, increment_attempt=True,
+    )
+    update_ebook_admission(admission_id, "scan_requested")
+
+    result = admission_scan.EXECUTOR.reconcile_uncertain(
+        plan, plan["steps"][1], {"boundary": boundary, "state": "running"},
+    )
+
+    assert result["status"] == "scan_requested"
+    assert result["reconciledAfterRestart"] is True
+    assert client.scan_attempts == 0
+
+
+def test_scan_blocks_changed_published_bytes_before_post(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    monkeypatch.setattr(admission_execution, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_scan, "BinderyClient", lambda: client)
+    monkeypatch.setattr(admission_module, "_exact_ebook_associations", lambda _: [])
+    _, plan = _scan_plan(acquisition_id, staged, destination)
+    boundary = admission_scan.EXECUTOR.revalidate(plan, plan["steps"][1])
+    admission_scan.core._record(
+        plan, "request_published_acquisition_scan", 1, "running",
+        boundary=boundary, increment_attempt=True,
+    )
+    destination.write_bytes(b"different disposable bytes")
+
+    with pytest.raises(admission_module.AdmissionSafetyError):
+        admission_scan.EXECUTOR.execute(plan, plan["steps"][1], boundary)
+    assert client.scan_attempts == 0
 
 
 def test_interrupted_admission_adopts_only_proven_journal(prepared, monkeypatch):
