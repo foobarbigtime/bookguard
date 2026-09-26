@@ -229,3 +229,43 @@ def test_interrupted_verification_cannot_adopt_unchanged_observation(monkeypatch
                           "stagedSha256": "a" * 64, "beforeStatus": "staging_observed"}},
         )
     assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+
+
+@pytest.mark.parametrize("verified_snapshot", [
+    None,
+    {"safeToAdmit": True, "stableDuringVerification": True,
+     "verdict": "VERIFIED_CORRECT", "bookId": 10, "relativePath": "book.epub",
+     "size": 100, "sha256": "a" * 64, "admissionBlockers": []},
+])
+def test_interrupted_verification_requires_exact_safe_snapshot(
+    monkeypatch, verified_snapshot,
+):
+    acquisition = _fixture(monkeypatch)
+    acquisition.update(status="verified", staged_relative_path="book.epub",
+                       staged_sha256="a" * 64, verification=verified_snapshot)
+    with pytest.raises(progress.core.AutomaticExecutionBlocked) as exc:
+        progress.EXECUTOR.reconcile_uncertain(
+            _plan(), _plan()["steps"][1],
+            {"boundary": {"queueId": 23, "fingerprint": ["book.epub", 100, 123],
+                          "stagedSha256": "a" * 64, "beforeStatus": "staging_observed"}},
+        )
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+
+
+def test_interrupted_verification_adopts_matching_safe_snapshot(monkeypatch):
+    acquisition = _fixture(monkeypatch)
+    acquisition.update(
+        status="verified", staged_relative_path="book.epub", staged_sha256="a" * 64,
+        verification={
+            "safeToAdmit": True, "stableDuringVerification": True,
+            "verdict": "VERIFIED_CORRECT", "bookId": 9, "relativePath": "book.epub",
+            "size": 100, "sha256": "a" * 64, "admissionBlockers": [],
+        },
+    )
+    result = progress.EXECUTOR.reconcile_uncertain(
+        _plan(), _plan()["steps"][1],
+        {"boundary": {"queueId": 23, "fingerprint": ["book.epub", 100, 123],
+                      "stagedSha256": "a" * 64, "beforeStatus": "staging_observed"}},
+    )
+    assert result["status"] == "verified"
+    assert result["reconciledAfterRestart"] is True
