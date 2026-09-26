@@ -245,7 +245,7 @@ def test_transient_retry_schedule_is_bounded_and_durable(monkeypatch, tmp_path):
         update_ebook_acquisition(
             acquisition_id,
             "failed",
-            error="Bindery POST /queue/grab returned HTTP 503: temporarily unavailable",
+            error="Bindery GET /book/3001 returned HTTP 503: temporarily unavailable",
         )
 
         monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
