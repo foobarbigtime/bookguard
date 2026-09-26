@@ -308,7 +308,7 @@ def test_automatic_cycle_advances_proven_read_only_steps_before_retry(monkeypatc
     assert result["externalMutationAttempted"] is True
 
 
-def test_live_retry_failure_returns_to_bounded_backoff(monkeypatch):
+def test_pregrab_read_failure_returns_to_bounded_backoff(monkeypatch):
     plan = {
         "id": 13,
         "subjectId": "21",
@@ -344,7 +344,7 @@ def test_live_retry_failure_returns_to_bounded_backoff(monkeypatch):
         lambda plan_id: (_ for _ in ()).throw(
             execution.AutomaticExecutionBlocked(
                 "EXECUTION_FAILED",
-                "Bindery POST /queue/grab returned HTTP 503: temporarily unavailable",
+                "Bindery GET /book/21 returned HTTP 503: temporarily unavailable",
             )
         ),
     )
@@ -354,7 +354,7 @@ def test_live_retry_failure_returns_to_bounded_backoff(monkeypatch):
         lambda acquisition_id: {
             "id": acquisition_id,
             "status": "failed",
-            "error": "Bindery POST /queue/grab returned HTTP 503: temporarily unavailable",
+            "error": "Bindery GET /book/21 returned HTTP 503: temporarily unavailable",
         },
     )
     monkeypatch.setattr(
