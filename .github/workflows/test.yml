@@ -36,3 +36,4 @@ jobs:
       - run: sudo scripts/acceptance/run quarantine-replacement-proof
       - run: sudo scripts/acceptance/run quarantine-candidate-selection
       - run: sudo scripts/acceptance/run quarantine-grab
+      - run: sudo scripts/acceptance/run quarantine-handoff
