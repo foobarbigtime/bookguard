@@ -79,6 +79,10 @@ bg_assert_safe_acceptance_root() {
     bg_die "Acceptance root must not be the repository root."
     return 1
   fi
+  if [[ -L "${root}" ]]; then
+    bg_die "Acceptance root must not be a symlink: ${root}"
+    return 1
+  fi
   if [[ "${basename_root}" != *acceptance* ]]; then
     bg_die "Acceptance root basename must contain 'acceptance': ${root}"
     return 1
@@ -98,6 +102,14 @@ bg_prepare_acceptance_root() {
     return 1
   fi
   root=$(bg_acceptance_root)
+  if [[ -e "${root}" ]]; then
+    if [[ ! -d "${root}" || -L "${root}" \
+          || -L "${root}/.bookguard-acceptance-root" \
+          || "$(cat "${root}/.bookguard-acceptance-root" 2>/dev/null)" != "BookGuard disposable acceptance root" ]]; then
+      bg_die "Existing acceptance root is not marked as disposable: ${root}"
+      return 1
+    fi
+  fi
   if ! mkdir -p -- "${root}"; then
     bg_die "Could not create acceptance root: ${root}"
     return 1
@@ -127,10 +139,52 @@ bg_reset_scenario_root() {
       return 1
       ;;
   esac
-  rm -rf -- "${target}"
+  if [[ -e "${target}" || -L "${target}" ]]; then
+    bg_cleanup_scenario_root "${scenario}" || return 1
+  fi
   mkdir -p -- "${target}"
   printf '%s\n' "BookGuard disposable scenario root" > "${target}/.bookguard-acceptance-scenario"
   printf '%s\n' "${target}"
+}
+
+bg_cleanup_scenario_root() {
+  local scenario=$1 root target
+  if [[ ! "${scenario}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+    bg_die "Unsafe scenario name: ${scenario}"
+    return 1
+  fi
+  if ! bg_assert_safe_acceptance_root; then
+    return 1
+  fi
+  root=$(bg_acceptance_root)
+  target="${root}/${scenario}"
+  if [[ ! -e "${target}" && ! -L "${target}" ]]; then
+    return 0
+  fi
+  if [[ ! -d "${root}" || -L "${root}" || -L "${root}/.bookguard-acceptance-root" \
+        || "$(cat "${root}/.bookguard-acceptance-root" 2>/dev/null)" != "BookGuard disposable acceptance root" \
+        || ! -d "${target}" || -L "${target}" \
+        || -L "${target}/.bookguard-acceptance-scenario" \
+        || "$(cat "${target}/.bookguard-acceptance-scenario" 2>/dev/null)" != "BookGuard disposable scenario root" ]]; then
+    bg_die "Refusing to clean an unmarked or linked acceptance path: ${target}"
+    return 1
+  fi
+  rm -rf -- "${target}"
+}
+
+bg_cleanup_default_image() {
+  local image=${SCENARIO_IMAGE:-} expected short_head
+  [[ -n "${image}" && -z "${BOOKGUARD_ACCEPTANCE_IMAGE:-}" ]] || return 0
+  if ! short_head=$(bg_repo_short_head); then
+    return 1
+  fi
+  expected="bookguard:acceptance-${short_head}"
+  [[ "${image}" == "${expected}" ]] || return 0
+  # Never force-remove a shared image or remove an operator-supplied tag.
+  docker image rm "${image}" >/dev/null 2>&1 || {
+    bg_note "Acceptance image ${image} remains in use; clean it after other runs finish." >&2
+    return 0
+  }
 }
 
 bg_sha256() {
@@ -196,6 +250,22 @@ bg_remove_container() {
 bg_remove_network() {
   local name=$1
   docker network rm "${name}" >/dev/null 2>&1 || true
+}
+
+bg_assert_scenario_resources_removed() {
+  local name
+  for name in "${SCENARIO_APP:-}" "${SCENARIO_FAKE:-}"; do
+    [[ -n "${name}" ]] || continue
+    if docker container inspect "${name}" >/dev/null 2>&1; then
+      bg_die "Disposable container remains after cleanup: ${name}"
+      return 1
+    fi
+  done
+  name=${SCENARIO_NETWORK:-}
+  if [[ -n "${name}" ]] && docker network inspect "${name}" >/dev/null 2>&1; then
+    bg_die "Disposable network remains after cleanup: ${name}"
+    return 1
+  fi
 }
 
 bg_create_network() {

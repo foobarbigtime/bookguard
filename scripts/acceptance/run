@@ -108,6 +108,15 @@ acceptance_exit() {
   if declare -F scenario_cleanup >/dev/null; then
     scenario_cleanup || true
   fi
+  if declare -F scenario_requires_docker >/dev/null && scenario_requires_docker; then
+    bg_assert_scenario_resources_removed || status=1
+    bg_cleanup_default_image || status=1
+  fi
+  if [[ ${status} -eq 0 ]] \
+      && declare -F scenario_requires_acceptance_root >/dev/null \
+      && scenario_requires_acceptance_root; then
+    bg_cleanup_scenario_root "${SCENARIO}" || status=1
+  fi
   if [[ ${status} -eq 0 ]]; then
     printf '\nPASS: %s\n' "${SCENARIO}"
   else
