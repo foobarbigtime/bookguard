@@ -400,6 +400,8 @@ def quarantine_plan_paused(plan: dict[str, Any]) -> bool:
         return False
     steps = list(plan.get("steps") or [])
     index = int(plan.get("currentStep") or 0)
+    if index <= 2:
+        return False
     code = str(steps[index].get("code") or "") if 0 <= index < len(steps) else ""
     return code not in {
         "revalidate_unsafe_verdict",
