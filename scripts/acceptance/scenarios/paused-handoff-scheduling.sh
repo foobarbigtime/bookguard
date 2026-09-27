@@ -21,6 +21,7 @@ scenario_run() {
   result=$(docker exec -i "${SCENARIO_APP}" python - \
     < "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/${SCENARIO_PROOF_SCRIPT:-prove_paused_handoff_scheduling.py}")
   bg_assert_contains "${result}" '"pausedHandoffs": 1' "earlier paused handoff"
+  bg_assert_contains "${result}" '"snapshots": 1' "one plan selection"
   bg_assert_contains "${result}" '"planKind": "QUARANTINE_UNSAFE_MEDIA"' "later work item"
   [[ ! -e "${SCENARIO_ROOT}/books/${RELATIVE}" ]] || bg_die "unsafe source remained active"
   bg_assert_hash "${SCENARIO_ROOT}/quarantine/101/Conflict Fixture.epub" \
