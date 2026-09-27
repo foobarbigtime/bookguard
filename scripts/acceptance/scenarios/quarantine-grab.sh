@@ -45,12 +45,12 @@ start_bookguard() {
   bg_wait_http "http://127.0.0.1:${SCENARIO_PORT}/health" 45 1
 }
 
-scenario_run() {
-  local response status plan_id selected sibling_hash state
+setup_and_grab() {
+  local response status plan_id selected
   setup_disposable_quarantine
   mkdir -p "${SCENARIO_ROOT}/staging"
   chown 99:100 "${SCENARIO_ROOT}/staging"
-  sibling_hash=$(bg_sha256 "${SCENARIO_ROOT}/books/Other/Unrelated.epub")
+  SCENARIO_SIBLING_HASH=$(bg_sha256 "${SCENARIO_ROOT}/books/Other/Unrelated.epub")
   docker run --rm -i --user 99:100 \
     -v "${SCENARIO_ROOT}/bindery-state:/state:rw" \
     "${SCENARIO_IMAGE}" python - /state/state.json <<'PY'
@@ -113,6 +113,12 @@ child = ebook_replacement_for_quarantine_plan(1)
 assert child and child["queue_id"] == 77 and child["status"] == "queued"
 assert child["admission_id"] is None
 '
+  SCENARIO_PLAN_ID=${plan_id}
+}
+
+scenario_run() {
+  local response status state
+  setup_and_grab
   response="${SCENARIO_ROOT}/after-grab.json"
   status=$(post_cycle "${response}")
   bg_assert_eq "200" "${status}" "post-grab HTTP"
@@ -121,7 +127,7 @@ assert child["admission_id"] is None
   bg_assert_contains "${state}" '"grabAttempts":1' "one exact grab"
   bg_assert_contains "${state}" '"scanAttempts":0' "no scan"
   bg_assert_hash "${SCENARIO_ROOT}/books/Other/Unrelated.epub" \
-    "${sibling_hash}" "unrelated media"
+    "${SCENARIO_SIBLING_HASH}" "unrelated media"
   [[ ! -e "${SCENARIO_ROOT}/books/${RELATIVE}" ]] || bg_die "Unsafe source was restored."
   assert_associations 0
   bg_note "One disposable replacement queued; no ebook was admitted or scanned."

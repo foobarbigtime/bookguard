@@ -339,6 +339,7 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT a.id, a.result_id, a.book_id, a.status, a.admission_id,
+               a.replacement_for_quarantine_plan_id,
                a.candidate_guid, a.candidate_title, a.candidate_indexer,
                a.candidate_protocol, a.queue_id, a.queue_status,
                a.observed_relative_path, a.staged_relative_path, a.staged_sha256,
@@ -380,6 +381,10 @@ def _acquisition_decisions(conn, limit: int) -> list[dict[str, Any]]:
             "queueStatus": str(row["queue_status"] or ""),
             "recordedError": str(row["error"] or ""),
         }
+        if row["replacement_for_quarantine_plan_id"] is not None:
+            evidence["replacementForQuarantinePlanId"] = int(
+                row["replacement_for_quarantine_plan_id"]
+            )
         linked_admission = None
         linked_admission_status = ""
         linked_admission_identity_matches = False
