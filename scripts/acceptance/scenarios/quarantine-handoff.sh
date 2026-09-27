@@ -16,8 +16,8 @@ observe_handoff() {
     "http://127.0.0.1:${SCENARIO_PORT}/api/automatic/observe/run"
 }
 
-scenario_run() {
-  local response status observed staged_hash state
+setup_verified_handoff() {
+  local response status observed
   setup_and_grab
   bg_remove_container "${SCENARIO_APP}"
 
@@ -39,7 +39,7 @@ PY
     -v "${SCENARIO_ROOT}/staging:/staging:rw" \
     -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_quarantine_handoff.py:/app/seed_handoff.py:ro" \
     "${SCENARIO_IMAGE}" python /app/seed_handoff.py
-  staged_hash=$(bg_sha256 "${SCENARIO_ROOT}/staging/Conflict Fixture.epub")
+  SCENARIO_STAGED_HASH=$(bg_sha256 "${SCENARIO_ROOT}/staging/Conflict Fixture.epub")
 
   bg_header "OBSERVE LINKED CHILD"
   start_bookguard observe ""
@@ -80,8 +80,13 @@ assert _verified_snapshot_matches(
     child["staged_sha256"],
 )
 '
+}
+
+scenario_run() {
+  local state
+  setup_verified_handoff
   bg_assert_hash "${SCENARIO_ROOT}/staging/Conflict Fixture.epub" \
-    "${staged_hash}" "verified staged bytes"
+    "${SCENARIO_STAGED_HASH}" "verified staged bytes"
   bg_assert_hash "${SCENARIO_ROOT}/books/Other/Unrelated.epub" \
     "${SCENARIO_SIBLING_HASH}" "unrelated media"
   [[ ! -e "${SCENARIO_ROOT}/books/${RELATIVE}" ]] || bg_die "Unsafe source was restored."
