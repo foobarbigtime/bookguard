@@ -249,7 +249,8 @@ def test_runner_delegates_when_older_supported_plan_is_not_finalization(monkeypa
     monkeypatch.setattr(
         core,
         "run_automatic_cycle",
-        lambda limit, selected_plan=None: {"state": "core", "limit": limit,\n                                           "selectedId": selected_plan["id"]},
+        lambda limit, selected_plan=None: {"state": "core", "limit": limit,
+            "selectedId": selected_plan["id"]},
     )
 
     result = runner.run_automatic_cycle(33)
