@@ -7,6 +7,10 @@ from .automatic_alternate import (
     register_executor as register_alternate_grab_executor,
     run_alternate_grab_cycle,
 )
+from .automatic_quarantine_grab import (
+    register_executor as register_quarantine_grab_executor,
+    run_quarantine_grab_cycle,
+)
 from .acquisition_progress import (
     register_executor as register_acquisition_progress_executor,
     run_acquisition_progress_cycle,
@@ -22,6 +26,7 @@ from .acquisition_admission_scan import (
 from .acquisition import AcquisitionSafetyError, finalize_ebook_acquisition
 from .config import load_automation_settings
 from .db import ebook_acquisition_by_id, local_conn
+from .quarantine_selection import quarantine_selection_by_result
 from .finalization import finalization_preview
 from .observe import _acquisition_decisions
 from .publication_proof import register_executor as register_publication_proof_executor
@@ -54,6 +59,7 @@ register_publication_proof_executor()
 register_guarded_publication_executor()
 register_publication_scan_executor()
 register_alternate_grab_executor()
+register_quarantine_grab_executor()
 register_prepublication_retirement_executor()
 
 
@@ -475,6 +481,18 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         if candidate.get("state") == "retry_wait":
             has_retry_wait = True
             continue
+        if (
+            kind == "QUARANTINE_UNSAFE_MEDIA"
+            and int(candidate.get("currentStep") or 0) == 3
+            and "reacquire_expected_media" in configured.automatic_action_allowlist
+            and quarantine_selection_by_result(int(candidate["subjectId"])) is not None
+        ):
+            result = run_quarantine_grab_cycle(candidate)
+            if result.get("externalMutationAttempted") is False and result.get("state") == "waiting":
+                if first_waiting is None:
+                    first_waiting = result
+                continue
+            return result
         if core.quarantine_plan_paused(candidate):
             if first_paused is None:
                 first_paused = core.paused_quarantine_result(candidate)
