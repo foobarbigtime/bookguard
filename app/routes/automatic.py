@@ -40,6 +40,7 @@ from ..config import ConfigurationError, load_automation_settings
 from ..db import result_by_id
 from ..observe import observe_snapshot, run_observe_cycle
 from ..preimport import PreImportSafetyError, preimport_readiness
+from ..quarantine_replacement import quarantine_replacement_preview
 from ..staging import StagingSafetyError, list_staged_ebooks, verify_staged_ebook
 from .models import ConfirmationRequest, require_confirmation
 
@@ -217,6 +218,15 @@ def api_automatic_alternate_selection(acquisition_id: int):
     if selected is None:
         raise HTTPException(status_code=404, detail="No alternate candidate is selected.")
     return selected
+
+
+@router.get("/plans/{plan_id}/quarantine-replacement-preview")
+def api_quarantine_replacement_preview(plan_id: int):
+    """Read-only proof of completed unsafe-media quarantine custody."""
+    try:
+        return quarantine_replacement_preview(plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/plans/{plan_id}/alternate-selection")
