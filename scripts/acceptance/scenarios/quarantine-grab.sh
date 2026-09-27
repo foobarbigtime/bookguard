@@ -95,7 +95,8 @@ print(plans[0]["id"])
   status=$(post_cycle "${response}")
   bg_assert_eq "200" "${status}" "paused HTTP"
   bg_assert_contains "$(cat "${response}")" '"state":"paused"' "no implicit grab"
-  bg_assert_contains "$(cat "${SCENARIO_ROOT}/bindery-state/state.json")" '"grabAttempts":0' "no grab"
+  bg_assert_contains "$(tr -d '[:space:]' < "${SCENARIO_ROOT}/bindery-state/state.json")" \
+    '"grabAttempts":0' "no grab"
   bg_remove_container "${SCENARIO_APP}"
 
   bg_header "EXACT ALLOWLIST: ONE DISPOSABLE GRAB"
