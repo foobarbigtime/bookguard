@@ -985,6 +985,32 @@ def test_acquisition_subject_reconcile_admission_is_not_a_live_candidate(monkeyp
     assert result["state"] == "executed"
 
 
+def test_core_runner_skips_completed_quarantine_for_independent_ready_item(monkeypatch):
+    paused = {
+        "id": 3, "planKind": "QUARANTINE_UNSAFE_MEDIA", "state": "ready",
+        "currentStep": 3,
+        "steps": [{"code": "a"}, {"code": "b"},
+                  {"code": "quarantine_exact_media"},
+                  {"code": "reacquire_expected_media"}],
+    }
+    ready = {**_admission_plan(subject_kind="admission", subject_id="51"), "id": 4}
+    calls = []
+    monkeypatch.setattr(execution, "load_automation_settings",
+                        lambda: _configured())
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(execution, "recovery_plan_snapshot",
+                        lambda limit: {"items": [paused, ready]})
+    monkeypatch.setattr(execution, "_run_admission_reconcile_cycle",
+                        lambda plan: calls.append(plan["id"])
+                        or {"state": "executed", "plan": plan,
+                            "externalMutationAttempted": True})
+
+    result = execution.run_automatic_cycle()
+
+    assert calls == [4]
+    assert result["plan"]["id"] == 4
+
+
 def test_reconcile_known_admission_requires_explicit_allowlist(monkeypatch):
     plan = _admission_plan()
 
