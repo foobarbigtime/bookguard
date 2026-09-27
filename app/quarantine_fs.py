@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import errno
+import hashlib
 import os
 from pathlib import Path
 import stat
+import uuid
 
 from .file_safety import sha256_file
 from .no_replace import rename_no_replace
@@ -25,15 +28,23 @@ class QuarantineCommitError(RuntimeError):
 
 
 def _move_no_replace(source: Path, destination: Path) -> None:
-    """Move with an atomic destination claim; fail closed on unsupported mounts."""
+    """Move with an atomic destination claim, including separate bind mounts."""
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     source_fd = os.open(source.parent, flags)
     try:
         destination_fd = os.open(destination.parent, flags)
         try:
-            if rename_no_replace(
-                source_fd, source.name, destination_fd, destination.name, destination
-            ):
+            try:
+                if rename_no_replace(
+                    source_fd, source.name, destination_fd, destination.name, destination
+                ):
+                    return
+            except OSError as exc:
+                if exc.errno != errno.EXDEV:
+                    raise
+                _copy_move_across_mounts(
+                    source_fd, source.name, destination_fd, destination.name, destination
+                )
                 return
             # A link claims a regular-file destination atomically when renameat2
             # is unavailable. No checked shutil.move or directory rename fallback:
@@ -53,6 +64,85 @@ def _move_no_replace(source: Path, destination: Path) -> None:
             os.close(destination_fd)
     finally:
         os.close(source_fd)
+
+
+def _copy_move_across_mounts(
+    source_directory_fd: int,
+    source_name: str,
+    destination_directory_fd: int,
+    destination_name: str,
+    destination: Path,
+) -> None:
+    """Copy to a private destination file, publish no-replace, then remove source."""
+    source_fd = os.open(source_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_directory_fd)
+    private_name = f".bookguard-quarantine-{uuid.uuid4().hex}.tmp"
+    private_fd = None
+    published = False
+    try:
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise QuarantineMoveError("Cross-mount quarantine requires a regular file.")
+        private_fd = os.open(
+            private_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600, dir_fd=destination_directory_fd,
+        )
+        digest = hashlib.sha256()
+        while chunk := os.read(source_fd, 1024 * 1024):
+            digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(private_fd, view)
+                if written < 1:
+                    raise OSError("Quarantine copy made no progress.")
+                view = view[written:]
+        os.fchmod(private_fd, stat.S_IMODE(before.st_mode))
+        os.utime(private_fd, ns=(before.st_atime_ns, before.st_mtime_ns))
+        os.fsync(private_fd)
+        after = os.fstat(source_fd)
+        current = os.stat(source_name, dir_fd=source_directory_fd, follow_symlinks=False)
+        identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+        for info in (after, current):
+            if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns) != identity:
+                raise QuarantineMoveError("Source changed during quarantine copy.")
+        os.lseek(source_fd, 0, os.SEEK_SET)
+        check = hashlib.sha256()
+        while chunk := os.read(source_fd, 1024 * 1024):
+            check.update(chunk)
+        if check.digest() != digest.digest() or os.fstat(source_fd).st_mtime_ns != before.st_mtime_ns:
+            raise QuarantineMoveError("Source bytes changed during quarantine copy.")
+        if not rename_no_replace(
+            destination_directory_fd, private_name,
+            destination_directory_fd, destination_name, destination,
+        ):
+            os.link(
+                private_name, destination_name,
+                src_dir_fd=destination_directory_fd,
+                dst_dir_fd=destination_directory_fd, follow_symlinks=False,
+            )
+            published = True
+            os.unlink(private_name, dir_fd=destination_directory_fd)
+        else:
+            published = True
+        os.fsync(destination_directory_fd)
+        current = os.stat(source_name, dir_fd=source_directory_fd, follow_symlinks=False)
+        if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns) != identity:
+            raise QuarantineMoveError("Source changed after quarantine publication; both copies retained.")
+        os.unlink(source_name, dir_fd=source_directory_fd)
+        os.fsync(source_directory_fd)
+    finally:
+        private_info = os.fstat(private_fd) if private_fd is not None else None
+        if private_fd is not None:
+            os.close(private_fd)
+        os.close(source_fd)
+        if not published and private_info is not None:
+            try:
+                current = os.stat(
+                    private_name, dir_fd=destination_directory_fd, follow_symlinks=False
+                )
+                if (current.st_dev, current.st_ino) == (private_info.st_dev, private_info.st_ino):
+                    os.unlink(private_name, dir_fd=destination_directory_fd)
+            except FileNotFoundError:
+                pass
 
 
 def _verify_source_restored(

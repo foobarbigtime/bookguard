@@ -166,3 +166,36 @@ def test_directory_move_fails_closed_without_atomic_rename(tmp_path, monkeypatch
 
     assert (source / "chapter.txt").read_bytes() == b"bytes"
     assert not destination.exists()
+
+
+def test_cross_mount_copy_publishes_without_overwrite_and_can_rollback(tmp_path, monkeypatch):
+    import errno
+    import app.quarantine_fs as quarantine_fs
+
+    original = quarantine_fs.rename_no_replace
+
+    def cross_mount(*args):
+        if args[1] == "Book.epub":
+            raise OSError(errno.EXDEV, "separate bind mounts")
+        return original(*args)
+
+    monkeypatch.setattr(quarantine_fs, "rename_no_replace", cross_mount)
+    source = tmp_path / "Book.epub"
+    source.write_bytes(b"verified bytes")
+    destination = tmp_path / "quarantine" / "Book.epub"
+    destination.parent.mkdir()
+    destination.write_bytes(b"other bytes")
+
+    with pytest.raises(QuarantineMoveError):
+        move_to_quarantine(source, source, destination)
+    assert source.read_bytes() == b"verified bytes"
+    assert destination.read_bytes() == b"other bytes"
+    assert sorted(p.name for p in destination.parent.iterdir()) == ["Book.epub"]
+
+    destination.unlink()
+    move_to_quarantine(source, source, destination, expected_sha256=sha256_file(source))
+    assert not source.exists()
+    assert destination.read_bytes() == b"verified bytes"
+    rollback_quarantine_move(source, source, destination, expected_sha256=sha256_file(destination))
+    assert source.read_bytes() == b"verified bytes"
+    assert not destination.exists()
