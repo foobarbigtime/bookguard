@@ -36,11 +36,13 @@ runner.core.recovery_plan_snapshot = snapshot
 runner.run_publication_recovery_cycle = paused_handoff
 result = runner.run_automatic_cycle()
 assert calls["paused"] == 1
+assert calls["snapshot"] == 1
 assert result["state"] == "executed"
 assert result["plan"]["planKind"] == "QUARANTINE_UNSAFE_MEDIA"
 assert result["externalMutationAttempted"] is True
 print(json.dumps({
     "pausedHandoffs": calls["paused"],
+    "snapshots": calls["snapshot"],
     "state": result["state"],
     "planKind": result["plan"]["planKind"],
     "externalMutationAttempted": result["externalMutationAttempted"],

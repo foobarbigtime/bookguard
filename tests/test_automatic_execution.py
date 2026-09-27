@@ -1252,3 +1252,30 @@ def test_only_completed_retry_reports_paused(monkeypatch):
     assert result["state"] == "paused"
     assert result["plan"]["id"] == 3
     assert result["externalMutationAttempted"] is False
+
+
+def test_selected_core_plan_runs_without_selecting_again(monkeypatch):
+    plan = {"id": 7, "planKind": "QUARANTINE_UNSAFE_MEDIA", "state": "ready"}
+    expected = {"state": "executed", "plan": plan,
+                "externalMutationAttempted": True}
+    monkeypatch.setattr(execution, "load_automation_settings", lambda: _configured())
+    monkeypatch.setattr(execution, "recovery_plan_snapshot",
+                        lambda limit: pytest.fail("Selected plan was reselected"))
+    monkeypatch.setattr(execution, "promote_due_recovery_retries",
+                        lambda: pytest.fail("Selected plan was rescheduled"))
+    monkeypatch.setattr(execution, "_run_unsafe_quarantine_cycle",
+                        lambda chosen: expected if chosen is plan else pytest.fail(
+                            "Wrong plan was dispatched"))
+
+    assert execution.run_automatic_cycle(selected_plan=plan) is expected
+
+
+def test_selected_core_plan_rejects_unsupported_or_waiting_work(monkeypatch):
+    monkeypatch.setattr(execution, "load_automation_settings", lambda: _configured())
+    for plan in (
+        {"id": 7, "planKind": "FINALIZE_ACQUISITION", "state": "ready"},
+        {"id": 8, "planKind": "RETRY_ACQUISITION_TRANSIENT", "state": "retry_wait"},
+    ):
+        with pytest.raises(execution.AutomaticExecutionBlocked) as exc:
+            execution.run_automatic_cycle(selected_plan=plan)
+        assert exc.value.reason_code == "PLAN_NOT_READY"
