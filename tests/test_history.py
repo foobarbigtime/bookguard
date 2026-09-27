@@ -712,7 +712,7 @@ def test_recovery_plan_history_detail_is_human_readable(tmp_path):
     assert detail["kind"] == "recovery-plan"
     assert detail["status"] == "planned"
     assert detail["title"] == "Bel Canto"
-    assert "planning/audit state only" in detail["summary"]
+    assert "execution outcomes are recorded separately" in detail["summary"]
 
     recovery = detail["recoverySummary"]
     assert recovery["planKind"] == "RECOVER_WRONG_CONTENT"
