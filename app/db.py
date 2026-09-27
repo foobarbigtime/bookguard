@@ -300,6 +300,7 @@ def init_local_db() -> None:
                 candidate_indexer TEXT,
                 candidate_protocol TEXT,
                 replacement_for_acquisition_id INTEGER,
+                replacement_for_quarantine_plan_id INTEGER,
                 status TEXT NOT NULL,
                 queue_id INTEGER,
                 queue_status TEXT,
@@ -381,10 +382,20 @@ def init_local_db() -> None:
                 "ALTER TABLE ebook_acquisitions "
                 "ADD COLUMN replacement_for_acquisition_id INTEGER"
             )
+        if "replacement_for_quarantine_plan_id" not in acquisition_columns:
+            conn.execute(
+                "ALTER TABLE ebook_acquisitions "
+                "ADD COLUMN replacement_for_quarantine_plan_id INTEGER"
+            )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_ebook_replacement_parent "
             "ON ebook_acquisitions(replacement_for_acquisition_id) "
             "WHERE replacement_for_acquisition_id IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_replacement_plan "
+            "ON ebook_acquisitions(replacement_for_quarantine_plan_id) "
+            "WHERE replacement_for_quarantine_plan_id IS NOT NULL"
         )
 
         recovery_plan_columns = {
@@ -767,6 +778,7 @@ def create_ebook_acquisition(
     candidate: dict,
     *,
     replacement_for_acquisition_id: int | None = None,
+    replacement_for_quarantine_plan_id: int | None = None,
 ) -> int:
     now = utc_now()
     with local_conn() as conn:
@@ -775,8 +787,9 @@ def create_ebook_acquisition(
             INSERT INTO ebook_acquisitions(
                 result_id, scan_id, book_id, candidate_guid, candidate_title,
                 candidate_indexer, candidate_protocol,
-                replacement_for_acquisition_id, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'preparing', ?, ?)
+                replacement_for_acquisition_id,
+                replacement_for_quarantine_plan_id, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', ?, ?)
             """,
             (
                 result["id"],
@@ -787,6 +800,7 @@ def create_ebook_acquisition(
                 str(candidate.get("indexerName") or candidate.get("indexer") or ""),
                 str(candidate.get("protocol") or ""),
                 replacement_for_acquisition_id,
+                replacement_for_quarantine_plan_id,
                 now,
                 now,
             ),
@@ -801,6 +815,16 @@ def ebook_replacement_for_acquisition(acquisition_id: int) -> dict | None:
             "SELECT * FROM ebook_acquisitions "
             "WHERE replacement_for_acquisition_id=? LIMIT 1",
             (int(acquisition_id),),
+        ).fetchone()
+    return _decode_ebook_acquisition(row) if row else None
+
+
+def ebook_replacement_for_quarantine_plan(plan_id: int) -> dict | None:
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM ebook_acquisitions "
+            "WHERE replacement_for_quarantine_plan_id=? LIMIT 1",
+            (int(plan_id),),
         ).fetchone()
     return _decode_ebook_acquisition(row) if row else None
 
