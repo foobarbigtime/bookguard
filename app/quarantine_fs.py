@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import os
 from pathlib import Path
-import shutil
+import stat
 
 from .file_safety import sha256_file
+from .no_replace import rename_no_replace
 
 
 class QuarantineMoveError(RuntimeError):
@@ -20,6 +22,37 @@ class QuarantineCommitError(RuntimeError):
         self.cause = cause
         self.rollback_error = rollback_error
         super().__init__(str(cause))
+
+
+def _move_no_replace(source: Path, destination: Path) -> None:
+    """Move with an atomic destination claim; fail closed on unsupported mounts."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    source_fd = os.open(source.parent, flags)
+    try:
+        destination_fd = os.open(destination.parent, flags)
+        try:
+            if rename_no_replace(
+                source_fd, source.name, destination_fd, destination.name, destination
+            ):
+                return
+            # A link claims a regular-file destination atomically when renameat2
+            # is unavailable. No checked shutil.move or directory rename fallback:
+            # both can replace an entry created between check and mutation.
+            info = os.stat(source.name, dir_fd=source_fd, follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode):
+                raise QuarantineMoveError("No-replace directory move is unsupported.")
+            os.link(
+                source.name, destination.name, src_dir_fd=source_fd,
+                dst_dir_fd=destination_fd, follow_symlinks=False,
+            )
+            current = os.stat(source.name, dir_fd=source_fd, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                raise QuarantineMoveError("Source changed after destination claim.")
+            os.unlink(source.name, dir_fd=source_fd)
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
 
 
 def _verify_source_restored(
@@ -54,13 +87,13 @@ def rollback_quarantine_move(
     """Restore one quarantine move and verify the original source again."""
     mutation_source.parent.mkdir(parents=True, exist_ok=True)
 
-    if destination.exists() and mutation_source.exists():
+    if os.path.lexists(destination) and os.path.lexists(mutation_source):
         raise QuarantineMoveError(
             "Both the quarantine destination and original mutation path exist; "
             "rollback state is ambiguous."
         )
-    if destination.exists():
-        shutil.move(str(destination), str(mutation_source))
+    if os.path.lexists(destination):
+        _move_no_replace(destination, mutation_source)
 
     _verify_source_restored(
         observed_source,
@@ -77,7 +110,7 @@ def move_to_quarantine(
 ) -> None:
     """Move one source to quarantine and verify the post-move filesystem state."""
     try:
-        shutil.move(str(mutation_source), str(destination))
+        _move_no_replace(mutation_source, destination)
     except Exception as exc:
         raise QuarantineMoveError(str(exc)) from exc
 

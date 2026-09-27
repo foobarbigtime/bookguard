@@ -258,3 +258,43 @@ def test_epub_repair_can_add_completely_missing_title_and_author(tmp_path):
     current = ebook_metadata(str(epub))
     assert current["title"] == "Bel Canto"
     assert current["author"] == "Ann Patchett"
+
+
+def test_hard_linked_epub_is_not_eligible_for_repair(tmp_path):
+    epub = tmp_path / "book.epub"
+    _make_epub(epub, "Patchett, Ann", "Bel Canto")
+    seeding_copy = tmp_path / "downloads-book.epub"
+    seeding_copy.hardlink_to(epub)
+    before_bytes = epub.read_bytes()
+
+    preview = build_repair_preview(_result(epub))
+    assert preview["eligible"] is False
+    assert preview["safe"] is False
+    assert "hard-linked" in preview["reason"]
+
+    with pytest.raises(RepairError, match="hard-linked"):
+        apply_repair_changes(
+            {
+                "kind": "EPUB_METADATA",
+                "after": {"path": str(epub), "title": "Bel Canto", "author": "Ann Patchett"},
+            }
+        )
+    # Both names still share one inode with the original bytes.
+    assert epub.stat().st_ino == seeding_copy.stat().st_ino
+    assert seeding_copy.read_bytes() == before_bytes
+
+
+def test_hard_linked_audio_is_not_written(tmp_path):
+    track = tmp_path / "01.mp3"
+    track.write_bytes(b"not really audio")
+    (tmp_path / "seed.mp3").hardlink_to(track)
+
+    with pytest.raises(RepairError, match="hard-linked"):
+        apply_repair_changes(
+            {
+                "kind": "AUDIO_TAGS",
+                "before": {"files": [{"path": str(track), "tags": {}}]},
+                "after": {"files": [{"path": str(track), "tags": {"album": "Bel Canto"}}]},
+            }
+        )
+    assert track.read_bytes() == b"not really audio"

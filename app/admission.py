@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import errno
 import hashlib
 import os
@@ -24,6 +23,7 @@ from .db import (
     update_ebook_admission,
 )
 from .file_safety import roots_overlap, sha256_file
+from .no_replace import rename_no_replace as _rename_no_replace
 from .staging import (
     MIN_ADMISSION_CONFIDENCE,
     StagingSafetyError,
@@ -361,53 +361,6 @@ def _copy_stable_snapshot(
         raise
     finally:
         os.close(source_fd)
-
-
-def _rename_no_replace(
-    source_directory_fd: int,
-    source_name: str,
-    destination_directory_fd: int,
-    destination_name: str,
-    destination: Path,
-) -> bool:
-    """Rename without replacement, or report that the filesystem lacks support."""
-    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
-    if renameat2 is None:
-        return False
-    renameat2.argtypes = [
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    ]
-    renameat2.restype = ctypes.c_int
-    result = renameat2(
-        source_directory_fd,
-        os.fsencode(source_name),
-        destination_directory_fd,
-        os.fsencode(destination_name),
-        1,  # RENAME_NOREPLACE
-    )
-    if result == 0:
-        return True
-
-    error_number = ctypes.get_errno()
-    if error_number == errno.EEXIST:
-        raise FileExistsError(
-            error_number,
-            os.strerror(error_number),
-            destination,
-        )
-    unsupported_errors = {
-        errno.EINVAL,
-        errno.ENOSYS,
-        errno.EOPNOTSUPP,
-        errno.ENOTSUP,
-    }
-    if error_number in unsupported_errors:
-        return False
-    raise OSError(error_number, os.strerror(error_number), destination)
 
 
 def _publish_no_replace(temp_path: Path, destination: Path) -> str:

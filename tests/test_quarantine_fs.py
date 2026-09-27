@@ -84,3 +84,85 @@ def test_rollback_fails_closed_when_source_and_destination_both_exist(tmp_path):
 
     with pytest.raises(QuarantineMoveError, match="rollback state is ambiguous"):
         rollback_quarantine_move(source, source, destination)
+
+
+def test_move_never_replaces_a_destination_created_after_allocation(tmp_path):
+    source = tmp_path / "Book.epub"
+    source.write_bytes(b"suspect bytes")
+    destination = tmp_path / "quarantine" / "Book.epub"
+    destination.parent.mkdir()
+    # Simulates another quarantine claiming the name after it was allocated.
+    destination.write_bytes(b"earlier quarantined bytes")
+
+    with pytest.raises(QuarantineMoveError):
+        move_to_quarantine(source, source, destination)
+
+    assert source.read_bytes() == b"suspect bytes"
+    assert destination.read_bytes() == b"earlier quarantined bytes"
+
+
+def test_directory_move_never_merges_into_existing_destination(tmp_path):
+    source = tmp_path / "library" / "Audiobook"
+    source.mkdir(parents=True)
+    (source / "01.mp3").write_bytes(b"track")
+    destination = tmp_path / "quarantine" / "Audiobook"
+    destination.mkdir(parents=True)
+    (destination / "other.mp3").write_bytes(b"other")
+
+    with pytest.raises(QuarantineMoveError):
+        move_to_quarantine(source, source, destination)
+
+    assert (source / "01.mp3").read_bytes() == b"track"
+    assert sorted(p.name for p in destination.iterdir()) == ["other.mp3"]
+
+
+def test_file_move_preserves_inode_and_removes_source(tmp_path):
+    source = tmp_path / "Book.epub"
+    source.write_bytes(b"bytes")
+    inode = source.stat().st_ino
+    destination = tmp_path / "quarantine" / "Book.epub"
+    destination.parent.mkdir()
+
+    move_to_quarantine(source, source, destination)
+
+    assert not source.exists()
+    assert destination.stat().st_ino == inode
+    assert destination.stat().st_nlink == 1
+
+
+def test_file_move_fails_closed_when_no_replace_methods_are_unsupported(tmp_path, monkeypatch):
+    import errno
+    import app.quarantine_fs as quarantine_fs
+
+    def no_links(*args, **kwargs):
+        raise OSError(errno.EPERM, "links not supported")
+
+    monkeypatch.setattr(quarantine_fs.os, "link", no_links)
+    monkeypatch.setattr(quarantine_fs, "rename_no_replace", lambda *args: False)
+    source = tmp_path / "Book.epub"
+    source.write_bytes(b"bytes")
+    destination = tmp_path / "quarantine" / "Book.epub"
+    destination.parent.mkdir()
+
+    with pytest.raises(QuarantineMoveError):
+        move_to_quarantine(source, source, destination)
+
+    assert source.read_bytes() == b"bytes"
+    assert not destination.exists()
+
+
+def test_directory_move_fails_closed_without_atomic_rename(tmp_path, monkeypatch):
+    import app.quarantine_fs as quarantine_fs
+
+    monkeypatch.setattr(quarantine_fs, "rename_no_replace", lambda *args: False)
+    source = tmp_path / "Book"
+    source.mkdir()
+    (source / "chapter.txt").write_bytes(b"bytes")
+    destination = tmp_path / "quarantine" / "Book"
+    destination.parent.mkdir()
+
+    with pytest.raises(QuarantineMoveError, match="unsupported"):
+        move_to_quarantine(source, source, destination)
+
+    assert (source / "chapter.txt").read_bytes() == b"bytes"
+    assert not destination.exists()
