@@ -51,7 +51,9 @@ scenario_run() {
   mkdir -p "${SCENARIO_ROOT}/staging"
   chown 99:100 "${SCENARIO_ROOT}/staging"
   sibling_hash=$(bg_sha256 "${SCENARIO_ROOT}/books/Other/Unrelated.epub")
-  python - "${SCENARIO_ROOT}/bindery-state/state.json" <<'PY'
+  docker run --rm -i --user 99:100 \
+    -v "${SCENARIO_ROOT}/bindery-state:/state:rw" \
+    "${SCENARIO_IMAGE}" python - /state/state.json <<'PY'
 import json
 import sys
 from pathlib import Path
