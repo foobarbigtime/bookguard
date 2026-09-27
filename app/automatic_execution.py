@@ -560,7 +560,9 @@ def _run_admission_reconcile_cycle(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
+def run_automatic_cycle(
+    limit: int = 100, *, selected_plan: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Advance at most one E4 work item and perform at most one external mutation.
 
     Live E4 executors are added one mutation class at a time. This coordinator
@@ -575,67 +577,78 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             "BOOKGUARD_AUTOMATION_MODE must be automatic.",
         )
 
-    promoted = promote_due_recovery_retries()
-    snapshot = recovery_plan_snapshot(limit)
-    supported = [
-        item
-        for item in snapshot["items"]
-        if (
-            item.get("planKind") in {
-                "RETRY_ACQUISITION_TRANSIENT",
-                "QUARANTINE_UNSAFE_MEDIA",
-            }
-            or (
-                item.get("planKind") == "RECONCILE_ADMISSION"
-                and item.get("subjectKind") == "admission"
+    if selected_plan is not None:
+        plan = selected_plan
+        kind = str(plan.get("planKind") or "")
+        if not (
+            kind in {"RETRY_ACQUISITION_TRANSIENT", "QUARANTINE_UNSAFE_MEDIA"}
+            or (kind == "RECONCILE_ADMISSION" and plan.get("subjectKind") == "admission")
+        ) or plan.get("state") not in {"planned", "ready"}:
+            raise AutomaticExecutionBlocked(
+                "PLAN_NOT_READY", "The selected core plan is not executable."
             )
-        )
-        and item.get("state") in {"planned", "ready", "retry_wait"}
-    ]
-    supported.sort(key=lambda item: int(item["id"]))
-    candidates = [
-        item for item in supported
-        if item["state"] != "retry_wait" and not quarantine_plan_paused(item)
-    ]
+    else:
+        promoted = promote_due_recovery_retries()
+        snapshot = recovery_plan_snapshot(limit)
+        supported = [
+            item
+            for item in snapshot["items"]
+            if (
+                item.get("planKind") in {
+                    "RETRY_ACQUISITION_TRANSIENT",
+                    "QUARANTINE_UNSAFE_MEDIA",
+                }
+                or (
+                    item.get("planKind") == "RECONCILE_ADMISSION"
+                    and item.get("subjectKind") == "admission"
+                )
+            )
+            and item.get("state") in {"planned", "ready", "retry_wait"}
+        ]
+        supported.sort(key=lambda item: int(item["id"]))
+        candidates = [
+            item for item in supported
+            if item["state"] != "retry_wait" and not quarantine_plan_paused(item)
+        ]
 
-    if not candidates:
-        waiting = next((item for item in supported if item["state"] == "retry_wait"), None)
-        if waiting:
+        if not candidates:
+            waiting = next((item for item in supported if item["state"] == "retry_wait"), None)
+            if waiting:
+                return {
+                    "ok": True,
+                    "state": "retry_wait",
+                    "plan": waiting,
+                    "externalMutationAttempted": False,
+                    "message": "The bounded retry interval has not elapsed.",
+                }
+            paused = next((item for item in supported if quarantine_plan_paused(item)), None)
+            if paused:
+                return paused_quarantine_result(paused)
             return {
                 "ok": True,
-                "state": "retry_wait",
-                "plan": waiting,
+                "state": "idle",
+                "promotedPlanIds": [int(item["id"]) for item in promoted],
                 "externalMutationAttempted": False,
-                "message": "The bounded retry interval has not elapsed.",
+                "message": "No supported E4 recovery plan is ready for automatic work.",
             }
-        paused = next((item for item in supported if quarantine_plan_paused(item)), None)
-        if paused:
-            return paused_quarantine_result(paused)
-        return {
-            "ok": True,
-            "state": "idle",
-            "promotedPlanIds": [int(item["id"]) for item in promoted],
-            "externalMutationAttempted": False,
-            "message": "No supported E4 recovery plan is ready for automatic work.",
-        }
 
-    first_paused_retry = None
-    plan = None
-    for candidate in candidates:
-        if retry_plan_paused(candidate):
-            handoff = _handoff_completed_retry(candidate)
-            if handoff is not None:
-                return handoff
-            if first_paused_retry is None:
-                first_paused_retry = candidate
-            continue
-        plan = candidate
-        break
-    if plan is None:
-        if first_paused_retry is not None:
-            return paused_retry_result(first_paused_retry)
-        # All candidates were filtered before the loop, so this is unreachable.
-        raise RuntimeError("No ready core recovery plan was selected.")
+        first_paused_retry = None
+        plan = None
+        for candidate in candidates:
+            if retry_plan_paused(candidate):
+                handoff = _handoff_completed_retry(candidate)
+                if handoff is not None:
+                    return handoff
+                if first_paused_retry is None:
+                    first_paused_retry = candidate
+                continue
+            plan = candidate
+            break
+        if plan is None:
+            if first_paused_retry is not None:
+                return paused_retry_result(first_paused_retry)
+            # All candidates were filtered before the loop, so this is unreachable.
+            raise RuntimeError("No ready core recovery plan was selected.")
     plan_id = int(plan["id"])
 
     if str(plan.get("planKind") or "") == "QUARANTINE_UNSAFE_MEDIA":
