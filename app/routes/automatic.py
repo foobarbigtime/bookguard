@@ -41,6 +41,10 @@ from ..db import result_by_id
 from ..observe import observe_snapshot, run_observe_cycle
 from ..preimport import PreImportSafetyError, preimport_readiness
 from ..quarantine_replacement import quarantine_replacement_preview
+from ..quarantine_selection import (
+    bind_quarantine_candidate, quarantine_candidate_preview,
+    quarantine_selection_by_result,
+)
 from ..staging import StagingSafetyError, list_staged_ebooks, verify_staged_ebook
 from .models import ConfirmationRequest, require_confirmation
 
@@ -227,6 +231,35 @@ def api_quarantine_replacement_preview(plan_id: int):
         return quarantine_replacement_preview(plan_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/plans/{plan_id}/quarantine-candidate-preview")
+def api_quarantine_candidate_preview(
+    plan_id: int, candidate_guid: str = Query(min_length=1, max_length=4096),
+):
+    """Review one release without choosing or grabbing it."""
+    try:
+        return quarantine_candidate_preview(plan_id, candidate_guid)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/results/{result_id}/quarantine-candidate-selection")
+def api_quarantine_candidate_selection(result_id: int):
+    selected = quarantine_selection_by_result(result_id)
+    if selected is None:
+        raise HTTPException(status_code=404, detail="No quarantine candidate is selected.")
+    return selected
+
+
+@router.post("/plans/{plan_id}/quarantine-candidate-selection")
+def api_bind_quarantine_candidate(plan_id: int, payload: EbookAcquisitionRequest):
+    """Save an explicit immutable choice; no external mutation is authorized."""
+    require_confirmation(payload, "SELECT_QUARANTINE_REPLACEMENT_CANDIDATE")
+    try:
+        return bind_quarantine_candidate(plan_id, payload.candidateGuid)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/plans/{plan_id}/alternate-selection")
