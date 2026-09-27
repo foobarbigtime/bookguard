@@ -69,4 +69,38 @@ scenario_run() {
   [[ ! -e "${SCENARIO_ROOT}/admission-books/${RELATIVE}" ]] || bg_die "ebook published without admission allowlist"
   assert_scans 0
   bg_note "Disposable journal retired without publication or Bindery scan; new admission remains separately gated."
+
+  bg_header "INTERRUPTED RETIREMENT: OBSERVE, RESTART, AND ADOPT"
+  scenario_cleanup
+  setup_verified_admission
+  staged_hash=$(bg_sha256 "${SCENARIO_ROOT}/staging/${RELATIVE}")
+  observe_admission_plan
+  start_bookguard observe ""
+  docker exec -i "${SCENARIO_APP}" python - \
+    < "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_prepublication_failure.py"
+  bg_remove_container "${SCENARIO_APP}"
+  observe_retirement
+  start_bookguard automatic "retire_proven_prepublication_failure"
+  docker exec -i "${SCENARIO_APP}" python - \
+    < "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_prepublication_retirement_running.py"
+  bg_remove_container "${SCENARIO_APP}"
+  observe_retirement_after_crash
+  start_bookguard automatic "retire_proven_prepublication_failure"
+  response="${SCENARIO_ROOT}/adopted.json"
+  status=$(post_cycle "${response}")
+  bg_assert_eq "200" "${status}" "interrupted retirement HTTP"
+  bg_assert_contains "$(cat "${response}")" '"state":"reconciled"' "retirement receipt adopted"
+  bg_assert_contains "$(cat "${response}")" '"reconciledAfterRestart":true' "no repeat transition"
+  [[ ! -e "${SCENARIO_ROOT}/admission-books/${RELATIVE}" ]] || bg_die "ebook published during adoption"
+  bg_assert_hash "${SCENARIO_ROOT}/staging/${RELATIVE}" "${staged_hash}" "staged bytes"
+  assert_scans 0
+  bg_note "Interrupted local retirement was adopted after Observe and restart without publication or scan."
+}
+
+observe_retirement_after_crash() {
+  start_bookguard observe ""
+  curl -fsS -u "${AUTH_USER}:${AUTH_PASSWORD}" \
+    -H 'Content-Type: application/json' -d '{"confirm":"RUN_OBSERVE_MODE"}' \
+    "http://127.0.0.1:${SCENARIO_PORT}/api/automatic/observe/run" >/dev/null
+  bg_remove_container "${SCENARIO_APP}"
 }

@@ -1075,6 +1075,10 @@ def record_recovery_plans(
         subject_id = str(decision.get("subjectId") or "")
         plan = _build_plan(conn, decision)
         if plan is None:
+            if _retired_admission_has_running_receipt(conn, decision):
+                # Keep only the exact interrupted local retirement step runnable
+                # until its receipt is adopted or blocked. It cannot retire again.
+                continue
             _supersede_active(
                 conn,
                 subject_kind,
@@ -1085,6 +1089,28 @@ def record_recovery_plans(
             continue
         plans.append(_persist_plan(conn, plan, timestamp))
     return plans
+
+
+def _retired_admission_has_running_receipt(conn, decision: dict[str, Any]) -> bool:
+    if (
+        decision.get("subjectKind") != "admission"
+        or decision.get("reasonCode") != "ADMISSION_RETIRED_BEFORE_PUBLICATION"
+        or not _table_exists(conn, "automatic_executions")
+    ):
+        return False
+    return conn.execute(
+        """SELECT 1 FROM recovery_plans AS p
+           JOIN automatic_executions AS e
+             ON e.plan_id=p.id AND e.plan_signature=p.signature
+             AND e.evidence_revision=p.evidence_revision
+             AND e.step_index=p.current_step
+           WHERE p.subject_kind='admission' AND p.subject_id=?
+             AND p.plan_kind='REVIEW_ADMISSION_PREPUBLICATION'
+             AND p.state IN ('planned', 'ready')
+             AND e.action_code='retire_proven_prepublication_failure'
+             AND e.state='running' LIMIT 1""",
+        (str(decision.get("subjectId")),),
+    ).fetchone() is not None
 
 
 def recovery_plan_by_id(plan_id: int) -> dict[str, Any] | None:

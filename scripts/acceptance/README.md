@@ -122,3 +122,4 @@ The `prepublication-retirement` scenario seeds a failed admission before any pub
 requires a separate exact allowlist to retire only its local journal, and proves that
 the refreshed acquisition plan still cannot publish with that retirement allowlist.
 It retains staged bytes and never requests a Bindery scan.
+It also checks adoption of an interrupted local retirement after Observe and restart.

@@ -441,6 +441,73 @@ def test_retirement_blocks_stale_proof(prepared, monkeypatch, change):
     assert client.scan_attempts == 0
 
 
+@pytest.mark.parametrize("retired_before_restart", [False, True])
+def test_interrupted_retirement_never_retries_local_transition(
+    prepared, monkeypatch, retired_before_restart,
+):
+    _, client, _, destination = prepared
+    admission_id = _failed_prepublication_review(prepared)
+    monkeypatch.setattr(prepublication_review, "_exact_ebook_associations", lambda _: [])
+    monkeypatch.setattr(retirement, "BinderyClient", lambda: client)
+    monkeypatch.setattr(execution_core, "load_automation_settings", lambda: SimpleNamespace(
+        automation_mode="automatic",
+        automatic_action_allowlist=("retire_proven_prepublication_failure",),
+    ))
+    retirement.register_executor()
+    plan = _prepublication_plan(admission_id)
+    for index in (0, 1):
+        plan = execution_core.record_recovery_step_success(int(plan["id"]), index)
+    step = plan["steps"][2]
+    boundary = retirement.EXECUTOR.revalidate(plan, step)
+    execution_core._require_fresh_boundary(plan, boundary)
+    execution_core._record(
+        plan, "retire_proven_prepublication_failure", 2, "running",
+        boundary=boundary, increment_attempt=True,
+    )
+    if retired_before_restart:
+        retirement.EXECUTOR.execute(plan, step, boundary)
+        with local_conn() as conn:
+            record_recovery_plans(conn, _admission_decisions(conn, 100))
+            conn.commit()
+        assert recovery_plan_by_id(int(plan["id"]))["state"] == "ready"
+
+    outcome = retirement.run_prepublication_retirement_cycle(
+        recovery_plan_by_id(int(plan["id"])),
+    )
+    assert outcome["state"] == ("reconciled" if retired_before_restart else "blocked")
+    assert ebook_admission_by_id(admission_id)["status"] == (
+        "retired_before_publication" if retired_before_restart else "failed"
+    )
+    assert not destination.exists()
+    assert client.scan_attempts == 0
+    if retired_before_restart:
+        assert outcome["execution"]["attemptCount"] == 1
+        assert outcome["execution"]["externalResult"]["reconciledAfterRestart"] is True
+        assert recovery_plan_by_id(int(plan["id"]))["state"] == "completed"
+
+
+def test_interrupted_retirement_refuses_competing_journal(prepared, monkeypatch):
+    acquisition_id, client, staged, destination = prepared
+    admission_id = _failed_prepublication_review(prepared)
+    monkeypatch.setattr(prepublication_review, "_exact_ebook_associations", lambda _: [])
+    monkeypatch.setattr(retirement, "BinderyClient", lambda: client)
+    plan = _prepublication_plan(admission_id)
+    for index in (0, 1):
+        plan = execution_core.record_recovery_step_success(int(plan["id"]), index)
+    boundary = retirement.EXECUTOR.revalidate(plan, plan["steps"][2])
+    retirement.EXECUTOR.execute(plan, plan["steps"][2], boundary)
+    acquisition = ebook_acquisition_by_id(acquisition_id)
+    create_ebook_admission(result_by_id(int(acquisition["result_id"])), staged.name)
+
+    with pytest.raises(execution_core.AutomaticExecutionBlocked):
+        retirement.EXECUTOR.reconcile_uncertain(
+            plan, plan["steps"][2], {"state": "running", "boundary": boundary},
+        )
+    assert ebook_admission_by_id(admission_id)["status"] == "retired_before_publication"
+    assert not destination.exists()
+    assert client.scan_attempts == 0
+
+
 def test_retired_journal_scan_guard_only_exempts_same_published_path(prepared):
     acquisition_id, _, staged, destination = prepared
     old_id = _failed_prepublication_review(prepared)
