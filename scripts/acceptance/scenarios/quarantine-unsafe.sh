@@ -127,7 +127,7 @@ assert_no_other_mutations() {
 }
 
 scenario_run() {
-  local response status source_hash sibling_hash state
+  local response status source_hash sibling_hash state old_hash verdict
   setup_disposable_quarantine
   source_hash=$(bg_sha256 "${SCENARIO_ROOT}/books/${RELATIVE}")
   sibling_hash=$(bg_sha256 "${SCENARIO_ROOT}/books/Other/Unrelated.epub")
@@ -213,5 +213,31 @@ scenario_run() {
   bg_assert_contains "${state}" '"deregisterAttempts":1' "one failed deregistration"
   bg_assert_contains "${state}" '"deregisterSuccesses":0' "no deregistration succeeded"
   bg_assert_contains "${state}" '"scanAttempts":0' "no Bindery scan on outage"
-  bg_note "Exact quarantine, uncertain replay, and Bindery outage rollback passed on disposable bytes."
+
+  bg_header "STALE EVIDENCE: CHANGED SOURCE BYTES BLOCK QUARANTINE"
+  scenario_cleanup
+  setup_disposable_quarantine
+  old_hash=$(bg_sha256 "${SCENARIO_ROOT}/books/${RELATIVE}")
+  sibling_hash=$(bg_sha256 "${SCENARIO_ROOT}/books/Other/Unrelated.epub")
+  observe_plan
+  printf '\nchanged disposable source bytes\n' >> "${SCENARIO_ROOT}/books/${RELATIVE}"
+  source_hash=$(bg_sha256 "${SCENARIO_ROOT}/books/${RELATIVE}")
+  [[ "${source_hash}" != "${old_hash}" ]] || bg_die "source did not change"
+  start_bookguard automatic "quarantine_exact_media"
+  verdict=$(docker exec "${SCENARIO_APP}" python -c \
+    "from app.db import result_by_id; from app.verifier import verify_result; print(verify_result(result_by_id(1), force=True)['verdict'])")
+  bg_assert_eq "UNSAFE_FILE" "${verdict}" "changed bytes remain deterministically unsafe"
+  response="${SCENARIO_ROOT}/stale.json"
+  status=$(post_cycle "${response}")
+  bg_assert_eq "200" "${status}" "stale evidence HTTP"
+  bg_assert_contains "$(cat "${response}")" '"state":"blocked"' "stale plan blocked"
+  bg_assert_contains "$(cat "${response}")" 'BOUNDARY_REVALIDATION_FAILED' "changed evidence refused"
+  bg_assert_hash "${SCENARIO_ROOT}/books/${RELATIVE}" "${source_hash}" "changed source retained"
+  bg_assert_hash "${SCENARIO_ROOT}/books/Other/Unrelated.epub" "${sibling_hash}" "unrelated media after stale plan"
+  [[ ! -e "${SCENARIO_ROOT}/quarantine/101/Conflict Fixture.epub" ]] || bg_die "stale plan moved source"
+  assert_associations 1
+  state=$(tr -d '[:space:]' < "${SCENARIO_ROOT}/bindery-state/state.json")
+  bg_assert_contains "${state}" '"deregisterAttempts":0' "no stale deregistration"
+  bg_assert_contains "${state}" '"scanAttempts":0' "no scan on stale plan"
+  bg_note "Exact quarantine, restart, outage rollback, and stale-evidence refusal passed on disposable bytes."
 }
