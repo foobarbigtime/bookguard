@@ -4,6 +4,7 @@ from collections import Counter
 from typing import Any
 
 from .acquisition_coordinator import acquisition_coordinator_status
+from .attention_execution import stale_execution_items
 from .operator_guidance import explain_blockers, operation_guidance
 from .observe import observe_attention_items
 from .db import (
@@ -267,6 +268,7 @@ def attention_snapshot(limit: int = 200) -> dict[str, Any]:
         + _hardlink_items()
         + _coordinator_items()
         + _blocked_plan_items(limit)
+        + stale_execution_items(limit)
         + observe_attention_items(limit)
     )
     items.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
@@ -282,6 +284,7 @@ def attention_snapshot(limit: int = 200) -> dict[str, Any]:
             "hardlinkCleanups": counts["hardlink_cleanup"],
             "coordinator": counts["coordinator"],
             "recoveryPlans": counts["recovery_plan"],
+            "runningExecutions": counts["automatic_execution"],
             "observe": counts["observe"],
         },
     }

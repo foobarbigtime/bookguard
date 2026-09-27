@@ -56,6 +56,11 @@
       <small>Current automatic recovery plans stopped by a safety check.</small>
     </article>
     <article class="card">
+      <span class="label">Stale E4 receipts</span>
+      <strong>{{ attention.summary.runningExecutions or 0 }}</strong>
+      <small>Running execution receipts older than 15 minutes needing outcome review.</small>
+    </article>
+    <article class="card">
       <span class="label">Observe Mode</span>
       <strong>{{ attention.summary.observe or 0 }}</strong>
       <small>Latest simulated automation decisions that require operator attention.</small>
