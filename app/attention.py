@@ -217,6 +217,47 @@ def _coordinator_items() -> list[dict[str, Any]]:
     ]
 
 
+def _blocked_plan_items(limit: int) -> list[dict[str, Any]]:
+    """Show current E4 refusals without changing or retrying their plans."""
+    with local_conn() as conn:
+        if not _table_exists(conn, "recovery_plans"):
+            return []
+        rows = conn.execute(
+            """SELECT id, subject_kind, title, author, plan_kind,
+                      reason_code, last_error, updated_at
+               FROM recovery_plans WHERE state='blocked'
+               ORDER BY updated_at DESC, id DESC LIMIT ?""",
+            (int(limit),),
+        ).fetchall()
+    items = []
+    for row in rows:
+        reason = str(row["last_error"] or "").strip()
+        plan_kind = str(row["plan_kind"] or "").replace("_", " ").title()
+        items.append({
+            "kind": "recovery_plan",
+            "kindLabel": "Automatic recovery plan",
+            "id": row["id"],
+            "status": "blocked",
+            "title": str(row["title"] or ""),
+            "author": str(row["author"] or ""),
+            "message": reason or f"{plan_kind} was blocked by a safety check.",
+            "guidance": {
+                "label": "Automatic step refused",
+                "why": reason or str(row["reason_code"] or "Safety proof was not recorded."),
+                "nextStep": "Review the plan audit and current evidence before any new Observe cycle.",
+                "recordedError": reason,
+            },
+            "updatedAt": row["updated_at"],
+            "detailHref": f"/history/recovery-plan/{row['id']}",
+            "href": (
+                "/triage#acquisitionPanel"
+                if row["subject_kind"] in {"acquisition", "admission"}
+                else "/triage"
+            ),
+        })
+    return items
+
+
 def attention_snapshot(limit: int = 200) -> dict[str, Any]:
     """Return durable, read-only operator-attention state across guarded workflows."""
     limit = max(1, min(int(limit), 500))
@@ -225,6 +266,7 @@ def attention_snapshot(limit: int = 200) -> dict[str, Any]:
         + _admission_items(limit)
         + _hardlink_items()
         + _coordinator_items()
+        + _blocked_plan_items(limit)
         + observe_attention_items(limit)
     )
     items.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
@@ -239,6 +281,7 @@ def attention_snapshot(limit: int = 200) -> dict[str, Any]:
             "hardlinkCorrections": counts["hardlink_correction"],
             "hardlinkCleanups": counts["hardlink_cleanup"],
             "coordinator": counts["coordinator"],
+            "recoveryPlans": counts["recovery_plan"],
             "observe": counts["observe"],
         },
     }

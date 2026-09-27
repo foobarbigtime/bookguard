@@ -911,7 +911,8 @@ def operation_detail(kind: str, record_id: int) -> dict[str, Any] | None:
         }
         summary = (
             f"Automatic Mode recovery plan: {str(raw.get('plan_kind') or '').replace('_', ' ').title()}. "
-            "This E3 record is planning/audit state only and cannot execute external mutations."
+            "The journal records plan state and steps; execution outcomes are recorded "
+            "separately in the Automatic Mode execution history."
         )
 
     if kind == "acquisition" and raw.get("grab_response_json"):
