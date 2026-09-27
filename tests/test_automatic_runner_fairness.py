@@ -258,3 +258,29 @@ def test_waiting_after_external_attempt_stops_before_later_mutation(monkeypatch)
 
     assert result["plan"]["id"] == 3
     assert result["externalMutationAttempted"] is True
+
+
+def test_core_paused_retry_yields_to_later_outer_finalization(monkeypatch):
+    retry = _plan(3, "RETRY_ACQUISITION_TRANSIENT")
+    ready = _plan(4, "FINALIZE_ACQUISITION")
+    calls = []
+    monkeypatch.setattr(runner, "load_automation_settings", lambda: SimpleNamespace(
+        automation_mode="automatic", automatic_action_allowlist=(),
+    ))
+    monkeypatch.setattr(runner.core, "recovery_plan_snapshot",
+                        lambda limit: {"items": [retry, ready]})
+    monkeypatch.setattr(runner.core, "run_automatic_cycle",
+                        lambda limit: calls.append("core") or {
+                            "state": "paused", "plan": retry,
+                            "externalMutationAttempted": False,
+                        })
+    monkeypatch.setattr(runner, "_run_finalization_cycle",
+                        lambda plan: calls.append("finalize") or {
+                            "state": "executed", "plan": plan,
+                            "externalMutationAttempted": True,
+                        })
+
+    result = runner.run_automatic_cycle()
+
+    assert calls == ["core", "finalize"]
+    assert result["plan"]["id"] == 4
