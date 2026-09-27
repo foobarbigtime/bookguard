@@ -77,6 +77,7 @@ EXPECTED_ROUTES = {
     ("GET", "/api/automatic/acquisitions/{acquisition_id}/alternate-selection"),
     ("POST", "/api/automatic/plans/{plan_id}/alternate-selection"),
     ("GET", "/api/automatic/plans/{plan_id}/quarantine-replacement-preview"),
+    ("GET", "/api/automatic/plans/{plan_id}/quarantine-final-state-preview"),
     ("GET", "/api/automatic/plans/{plan_id}/quarantine-candidate-preview"),
     ("GET", "/api/automatic/results/{result_id}/quarantine-candidate-selection"),
     ("POST", "/api/automatic/plans/{plan_id}/quarantine-candidate-selection"),

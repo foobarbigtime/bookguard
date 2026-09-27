@@ -12,6 +12,15 @@ scenario_description() {
 
 start_bookguard() {
   local mode=$1 allowlist=${2:-}
+  local -a admission_args=()
+  if [[ ${SCENARIO_ENABLE_ADMISSION:-false} == true ]]; then
+    admission_args=(
+      -v "${SCENARIO_ROOT}/books:/admission-books:rw"
+      -e BOOKGUARD_ADMISSION_ENABLED=true
+      -e BOOKGUARD_ADMISSION_ROOT=/admission-books
+      -e BOOKGUARD_ADMISSION_BINDERY_ROOT=/data/media/books
+    )
+  fi
   bg_remove_container "${SCENARIO_APP}"
   docker run -d --name "${SCENARIO_APP}" --network "${SCENARIO_NETWORK}" \
     --user 99:100 --read-only --cap-drop ALL \
@@ -24,6 +33,7 @@ start_bookguard() {
     -v "${SCENARIO_ROOT}/books:/action-books:rw" \
     -v "${SCENARIO_ROOT}/quarantine:/quarantine:rw" \
     -v "${SCENARIO_ROOT}/bindery-state/bindery.db:/bindery/bindery.db:ro" \
+    "${admission_args[@]}" \
     -e CONFIG_DIR=/config \
     -e BOOKGUARD_AUTH_USERNAME="${AUTH_USER}" \
     -e BOOKGUARD_AUTH_PASSWORD="${AUTH_PASSWORD}" \

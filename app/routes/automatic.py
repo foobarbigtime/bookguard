@@ -41,6 +41,7 @@ from ..db import result_by_id
 from ..observe import observe_snapshot, run_observe_cycle
 from ..preimport import PreImportSafetyError, preimport_readiness
 from ..quarantine_replacement import quarantine_replacement_preview
+from ..quarantine_final_state import quarantine_final_state_preview
 from ..quarantine_selection import (
     bind_quarantine_candidate, quarantine_candidate_preview,
     quarantine_selection_by_result,
@@ -229,6 +230,15 @@ def api_quarantine_replacement_preview(plan_id: int):
     """Read-only proof of completed unsafe-media quarantine custody."""
     try:
         return quarantine_replacement_preview(plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/plans/{plan_id}/quarantine-final-state-preview")
+def api_quarantine_final_state_preview(plan_id: int):
+    """Read-only proof that a quarantined replacement has fully finalized."""
+    try:
+        return quarantine_final_state_preview(plan_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

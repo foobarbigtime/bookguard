@@ -12,6 +12,7 @@ from .automatic_quarantine_grab import (
     run_quarantine_grab_cycle,
 )
 from .quarantine_handoff import run_quarantine_verification_cycle
+from .quarantine_final_state import run_quarantine_final_state_cycle
 from .acquisition_progress import (
     register_executor as register_acquisition_progress_executor,
     run_acquisition_progress_cycle,
@@ -505,6 +506,16 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             == "verified"
         ):
             return run_quarantine_verification_cycle(candidate)
+        if (
+            kind == "QUARANTINE_UNSAFE_MEDIA"
+            and int(candidate.get("currentStep") or 0) == 5
+            and "reconcile_final_state" in getattr(
+                configured, "automatic_action_allowlist", ()
+            )
+            and (ebook_replacement_for_quarantine_plan(int(candidate["id"])) or {}).get("status")
+            == "finalized"
+        ):
+            return run_quarantine_final_state_cycle(candidate)
         if core.quarantine_plan_paused(candidate):
             if first_paused is None:
                 first_paused = core.paused_quarantine_result(candidate)
