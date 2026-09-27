@@ -56,6 +56,7 @@ def quarantine_replacement_preview(
     path = Path(raw_path) if raw_path else None
     safe_path = bool(
         path and path.is_absolute() and path.parent == expected_dir
+        and expected_root.resolve() == expected_root
         and not expected_root.is_symlink() and not expected_dir.is_symlink()
         and not path.is_symlink()
     )
@@ -92,6 +93,12 @@ def quarantine_replacement_preview(
         {"code": "CURRENT_DECISION_IDENTITY", "ok": bool(
             current and current.get("signature") == plan.get("signature")
             and current.get("evidenceRevision") == plan.get("evidenceRevision")
+            and result and plan.get("resultId") == result_id
+            and plan.get("bookId") == int(result["book_id"])
+            and plan.get("path") == result.get("stored_path")
+            and current.get("resultId") == result_id
+            and current.get("bookId") == int(result["book_id"])
+            and current.get("path") == result.get("stored_path")
         )},
         {"code": "PROVEN_QUARANTINE_RECEIPT", "ok": bool(
             receipt and receipt.get("state") == "succeeded"
@@ -105,6 +112,8 @@ def quarantine_replacement_preview(
             and outcome.get("fileId") == int(result["file_id"])
             and outcome.get("bookId") == int(result["book_id"])
             and boundary.get("expectedSha256") == sha
+            and boundary.get("fileId") == int(result["file_id"])
+            and boundary.get("bookId") == int(result["book_id"])
             and boundary.get("storedPath") == result.get("stored_path")
             and boundary.get("localPath") == result.get("local_path")
         )},

@@ -14,6 +14,7 @@ def _fixture(monkeypatch, tmp_path):
         "id": 7, "signature": "current", "evidenceRevision": "revision",
         "planKind": "QUARANTINE_UNSAFE_MEDIA", "subjectKind": "result",
         "subjectId": "4", "resultId": 4, "bookId": 101,
+        "path": "/data/media/books/Unsafe.epub",
         "state": "ready", "currentStep": 3,
         "steps": [{"code": "revalidate_unsafe_verdict"},
                   {"code": "capture_exact_source_identity"},
@@ -29,7 +30,7 @@ def _fixture(monkeypatch, tmp_path):
         "state": "succeeded", "planId": 7, "attemptCount": 1,
         "boundary": {
             "expectedSha256": sha, "storedPath": result["stored_path"],
-            "localPath": result["local_path"],
+            "localPath": result["local_path"], "fileId": 9001, "bookId": 101,
         },
         "externalResult": {
             "status": "quarantined", "resultId": 4, "fileId": 9001,
@@ -90,3 +91,14 @@ def test_quarantine_custody_refuses_wrong_receipt_or_symlink(monkeypatch, tmp_pa
     retained.symlink_to(retained.with_suffix(".saved"))
     inspected = preview.quarantine_replacement_preview(7, client=object())
     assert inspected["safeForCandidateReview"] is False
+
+
+def test_quarantine_custody_refuses_changed_plan_identity(monkeypatch, tmp_path):
+    plan, _, _, _ = _fixture(monkeypatch, tmp_path)
+    plan["bookId"] = 202
+
+    inspected = preview.quarantine_replacement_preview(7, client=object())
+
+    assert inspected["safeForCandidateReview"] is False
+    assert next(check for check in inspected["checks"]
+                if check["code"] == "CURRENT_DECISION_IDENTITY")["ok"] is False
