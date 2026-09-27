@@ -410,6 +410,29 @@ def quarantine_plan_paused(plan: dict[str, Any]) -> bool:
     }
 
 
+def retry_plan_paused(plan: dict[str, Any]) -> bool:
+    """A completed grab cannot run its disabled reconciliation step."""
+    if str(plan.get("planKind") or "") != "RETRY_ACQUISITION_TRANSIENT":
+        return False
+    steps = list(plan.get("steps") or [])
+    index = int(plan.get("currentStep") or 0)
+    return (
+        index == 3
+        and index < len(steps)
+        and str(steps[index].get("code") or "") == "reconcile_after_retry"
+    )
+
+
+def paused_retry_result(plan: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "state": "paused",
+        "plan": plan,
+        "externalMutationAttempted": False,
+        "message": "The transient grab retry is complete; reconciliation remains disabled.",
+    }
+
+
 def paused_quarantine_result(plan: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
@@ -596,7 +619,23 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             "message": "No supported E4 recovery plan is ready for automatic work.",
         }
 
-    plan = candidates[0]
+    first_paused_retry = None
+    plan = None
+    for candidate in candidates:
+        if retry_plan_paused(candidate):
+            handoff = _handoff_completed_retry(candidate)
+            if handoff is not None:
+                return handoff
+            if first_paused_retry is None:
+                first_paused_retry = candidate
+            continue
+        plan = candidate
+        break
+    if plan is None:
+        if first_paused_retry is not None:
+            return paused_retry_result(first_paused_retry)
+        # All candidates were filtered before the loop, so this is unreachable.
+        raise RuntimeError("No ready core recovery plan was selected.")
     plan_id = int(plan["id"])
 
     if str(plan.get("planKind") or "") == "QUARANTINE_UNSAFE_MEDIA":

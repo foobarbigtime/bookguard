@@ -32,3 +32,4 @@ jobs:
       - run: sudo scripts/acceptance/run quarantine-unsafe
       - run: sudo scripts/acceptance/run quarantine-scheduling
       - run: sudo scripts/acceptance/run paused-handoff-scheduling
+      - run: sudo scripts/acceptance/run retry-scheduling

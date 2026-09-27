@@ -501,7 +501,7 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         else:
             # The core runner promotes due retries before selecting the earliest
             # executable core plan; waiting plans do not block ready work.
-            return core.run_automatic_cycle(limit)
+            result = core.run_automatic_cycle(limit)
 
         # Only a definite no-mutation handoff can give the slot to another item.
         # An uncertain post-effect result must stop the cycle, even if it waits.

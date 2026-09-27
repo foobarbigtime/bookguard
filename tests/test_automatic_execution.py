@@ -1184,3 +1184,71 @@ def test_known_admission_execute_never_requests_second_scan(monkeypatch):
     assert result["externalMutationPerformed"] is False
     assert result["libraryBytesChanged"] is False
     assert result["stagingRetained"] is True
+
+
+def _completed_retry(plan_id):
+    return {
+        "id": plan_id, "planKind": "RETRY_ACQUISITION_TRANSIENT",
+        "state": "ready", "currentStep": 3,
+        "steps": [
+            {"code": "wait_bounded_backoff"},
+            {"code": "revalidate_acquisition_readiness"},
+            {"code": "retry_grab_once"},
+            {"code": "reconcile_after_retry"},
+        ],
+    }
+
+
+def test_completed_retry_without_proof_yields_to_ready_core_item(monkeypatch):
+    retry_plan = _completed_retry(3)
+    quarantine_plan = {"id": 4, "planKind": "QUARANTINE_UNSAFE_MEDIA",
+                       "state": "ready", "currentStep": 2, "steps": []}
+    calls = []
+    monkeypatch.setattr(execution, "load_automation_settings", lambda: _configured())
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(execution, "recovery_plan_snapshot",
+                        lambda limit: {"items": [retry_plan, quarantine_plan]})
+    monkeypatch.setattr(execution, "_handoff_completed_retry",
+                        lambda plan: calls.append("proof") or None)
+    monkeypatch.setattr(execution, "_run_unsafe_quarantine_cycle",
+                        lambda plan: calls.append("quarantine") or {
+                            "state": "executed", "plan": plan,
+                            "externalMutationAttempted": True,
+                        })
+
+    result = execution.run_automatic_cycle()
+
+    assert calls == ["proof", "quarantine"]
+    assert result["plan"]["id"] == 4
+
+
+def test_completed_retry_proof_hands_off_before_later_mutation(monkeypatch):
+    retry_plan = _completed_retry(3)
+    quarantine_plan = {"id": 4, "planKind": "QUARANTINE_UNSAFE_MEDIA",
+                       "state": "ready", "currentStep": 2, "steps": []}
+    handoff = {"state": "handed_off", "plan": retry_plan,
+               "externalMutationAttempted": False}
+    monkeypatch.setattr(execution, "load_automation_settings", lambda: _configured())
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(execution, "recovery_plan_snapshot",
+                        lambda limit: {"items": [retry_plan, quarantine_plan]})
+    monkeypatch.setattr(execution, "_handoff_completed_retry", lambda plan: handoff)
+    monkeypatch.setattr(execution, "_run_unsafe_quarantine_cycle",
+                        lambda plan: pytest.fail("A proven handoff owns this cycle"))
+
+    assert execution.run_automatic_cycle() is handoff
+
+
+def test_only_completed_retry_reports_paused(monkeypatch):
+    retry_plan = _completed_retry(3)
+    monkeypatch.setattr(execution, "load_automation_settings", lambda: _configured())
+    monkeypatch.setattr(execution, "promote_due_recovery_retries", lambda: [])
+    monkeypatch.setattr(execution, "recovery_plan_snapshot",
+                        lambda limit: {"items": [retry_plan]})
+    monkeypatch.setattr(execution, "_handoff_completed_retry", lambda plan: None)
+
+    result = execution.run_automatic_cycle()
+
+    assert result["state"] == "paused"
+    assert result["plan"]["id"] == 3
+    assert result["externalMutationAttempted"] is False
