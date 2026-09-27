@@ -27,7 +27,9 @@ class QuarantineCommitError(RuntimeError):
         super().__init__(str(cause))
 
 
-def _move_no_replace(source: Path, destination: Path) -> None:
+def _move_no_replace(
+    source: Path, destination: Path, *, expected_sha256: str | None = None
+) -> None:
     """Move with an atomic destination claim, including separate bind mounts."""
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     source_fd = os.open(source.parent, flags)
@@ -43,7 +45,8 @@ def _move_no_replace(source: Path, destination: Path) -> None:
                 if exc.errno != errno.EXDEV:
                     raise
                 _copy_move_across_mounts(
-                    source_fd, source.name, destination_fd, destination.name, destination
+                    source_fd, source.name, destination_fd, destination.name,
+                    destination, expected_sha256=expected_sha256,
                 )
                 return
             # A link claims a regular-file destination atomically when renameat2
@@ -66,12 +69,22 @@ def _move_no_replace(source: Path, destination: Path) -> None:
         os.close(source_fd)
 
 
+def _sha256_fd(fd: int) -> str:
+    os.lseek(fd, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    while chunk := os.read(fd, 1024 * 1024):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _copy_move_across_mounts(
     source_directory_fd: int,
     source_name: str,
     destination_directory_fd: int,
     destination_name: str,
     destination: Path,
+    *,
+    expected_sha256: str | None,
 ) -> None:
     """Copy to a private destination file, publish no-replace, then remove source."""
     source_fd = os.open(source_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_directory_fd)
@@ -83,7 +96,7 @@ def _copy_move_across_mounts(
         if not stat.S_ISREG(before.st_mode):
             raise QuarantineMoveError("Cross-mount quarantine requires a regular file.")
         private_fd = os.open(
-            private_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            private_name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
             0o600, dir_fd=destination_directory_fd,
         )
         digest = hashlib.sha256()
@@ -104,12 +117,18 @@ def _copy_move_across_mounts(
         for info in (after, current):
             if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns) != identity:
                 raise QuarantineMoveError("Source changed during quarantine copy.")
-        os.lseek(source_fd, 0, os.SEEK_SET)
-        check = hashlib.sha256()
-        while chunk := os.read(source_fd, 1024 * 1024):
-            check.update(chunk)
-        if check.digest() != digest.digest() or os.fstat(source_fd).st_mtime_ns != before.st_mtime_ns:
-            raise QuarantineMoveError("Source bytes changed during quarantine copy.")
+        copied_sha256 = digest.hexdigest()
+        if (
+            _sha256_fd(source_fd) != copied_sha256
+            or _sha256_fd(private_fd) != copied_sha256
+            or (expected_sha256 is not None and copied_sha256 != expected_sha256)
+        ):
+            raise QuarantineMoveError("Quarantine copy bytes did not match the verified source.")
+        final_source = os.fstat(source_fd)
+        if (final_source.st_size, final_source.st_mtime_ns, final_source.st_ctime_ns) != (
+            before.st_size, before.st_mtime_ns, before.st_ctime_ns
+        ):
+            raise QuarantineMoveError("Source changed during quarantine copy.")
         if not rename_no_replace(
             destination_directory_fd, private_name,
             destination_directory_fd, destination_name, destination,
@@ -124,6 +143,8 @@ def _copy_move_across_mounts(
         else:
             published = True
         os.fsync(destination_directory_fd)
+        if _sha256_fd(private_fd) != copied_sha256:
+            raise QuarantineMoveError("Published quarantine bytes changed; source retained.")
         current = os.stat(source_name, dir_fd=source_directory_fd, follow_symlinks=False)
         if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns) != identity:
             raise QuarantineMoveError("Source changed after quarantine publication; both copies retained.")
@@ -183,7 +204,7 @@ def rollback_quarantine_move(
             "rollback state is ambiguous."
         )
     if os.path.lexists(destination):
-        _move_no_replace(destination, mutation_source)
+        _move_no_replace(destination, mutation_source, expected_sha256=expected_sha256)
 
     _verify_source_restored(
         observed_source,
@@ -200,7 +221,7 @@ def move_to_quarantine(
 ) -> None:
     """Move one source to quarantine and verify the post-move filesystem state."""
     try:
-        _move_no_replace(mutation_source, destination)
+        _move_no_replace(mutation_source, destination, expected_sha256=expected_sha256)
     except Exception as exc:
         raise QuarantineMoveError(str(exc)) from exc
 

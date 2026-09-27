@@ -199,3 +199,61 @@ def test_cross_mount_copy_publishes_without_overwrite_and_can_rollback(tmp_path,
     rollback_quarantine_move(source, source, destination, expected_sha256=sha256_file(destination))
     assert source.read_bytes() == b"verified bytes"
     assert not destination.exists()
+
+
+def test_cross_mount_bad_copy_keeps_verified_source(tmp_path, monkeypatch):
+    import errno
+    import app.quarantine_fs as quarantine_fs
+
+    original_rename = quarantine_fs.rename_no_replace
+
+    def cross_mount(*args):
+        if args[1] == "Book.epub":
+            raise OSError(errno.EXDEV, "separate bind mounts")
+        return original_rename(*args)
+
+    monkeypatch.setattr(quarantine_fs, "rename_no_replace", cross_mount)
+    source = tmp_path / "Book.epub"
+    source.write_bytes(b"verified bytes")
+    destination = tmp_path / "quarantine" / "Book.epub"
+    destination.parent.mkdir()
+    expected = sha256_file(source)
+    original_write = quarantine_fs.os.write
+
+    def corrupt_copy(fd, data):
+        changed = b"X" + bytes(data)[1:]
+        return original_write(fd, changed)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(quarantine_fs.os, "write", corrupt_copy)
+        with pytest.raises(QuarantineMoveError, match="copy bytes did not match"):
+            move_to_quarantine(source, source, destination, expected_sha256=expected)
+
+    assert source.read_bytes() == b"verified bytes"
+    assert not destination.exists()
+    assert list(destination.parent.iterdir()) == []
+
+
+def test_cross_mount_changed_expected_hash_keeps_source(tmp_path, monkeypatch):
+    import errno
+    import app.quarantine_fs as quarantine_fs
+
+    original_rename = quarantine_fs.rename_no_replace
+
+    def cross_mount(*args):
+        if args[1] == "Book.epub":
+            raise OSError(errno.EXDEV, "separate bind mounts")
+        return original_rename(*args)
+
+    monkeypatch.setattr(quarantine_fs, "rename_no_replace", cross_mount)
+    source = tmp_path / "Book.epub"
+    source.write_bytes(b"verified bytes")
+    destination = tmp_path / "quarantine" / "Book.epub"
+    destination.parent.mkdir()
+
+    with pytest.raises(QuarantineMoveError, match="copy bytes did not match"):
+        move_to_quarantine(source, source, destination, expected_sha256="0" * 64)
+
+    assert source.read_bytes() == b"verified bytes"
+    assert not destination.exists()
+    assert list(destination.parent.iterdir()) == []
