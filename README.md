@@ -241,16 +241,16 @@ deployment-only and fail-closed:
 BOOKGUARD_AUTOMATION_MODE=manual
 ```
 
-Supported values are currently `manual` and `observe`. Any other value is a
-configuration error. `manual` preserves the existing explicitly confirmed
-workflow. `observe` records durable decisions about what a future Automatic
-Mode would do, using existing BookGuard database state, but does not invoke
-Bindery mutation, queue mutation, staging cleanup, quarantine, metadata writes,
-or library publication.
+Supported values are `manual`, `observe`, and `automatic`; any other value is a
+configuration error. `manual` preserves the explicitly confirmed workflow.
+`observe` records durable decisions about recovery work using existing
+BookGuard database state, but does not invoke Bindery mutation, queue mutation,
+staging cleanup, quarantine, metadata writes, or library publication.
 
 While `observe` is active, the supervised acquisition coordinator is disabled
-even if its older mutation gates are enabled, and mutating endpoints under
-`/api/automatic` return a conflict instead of running. Read-only inspection and
+even if its older mutation gates are enabled. Legacy mutation endpoints under
+`/api/automatic` return a conflict instead of running; the explicit observe
+cycle only writes BookGuard's decision journal. Read-only inspection and
 verification endpoints remain available.
 
 Observe decisions are idempotently journaled in `automation_observations`,
@@ -317,11 +317,12 @@ BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS=10
 BOOKGUARD_MAX_STAGED_EBOOK_BYTES=536870912
 ```
 
-Automatic reacquisition fails closed unless every readiness check passes. The
-implemented workflow is deliberately operator-driven: it can start one freshly
-revalidated release, observe its Bindery queue record, and verify exactly one
-ebook arriving in an initially empty staging folder. There is no automatic
-candidate choice, automatic retry, or automatic admission.
+The manual acquisition workflow fails closed unless every readiness check
+passes. It is operator-driven: it can start one freshly revalidated release,
+observe its Bindery queue record, and verify exactly one ebook arriving in an
+initially empty staging folder. Its coordinator does not choose candidates,
+retry a failed grab, or admit a verified ebook. E4 has separately gated
+recovery steps described below.
 
 The optional supervised coordinator removes the need to press Reconcile
 repeatedly. It discovers the single durable active acquisition after startup,
@@ -370,6 +371,31 @@ An operator can explicitly retry staged verification from `review_required`
 after verifier rules are updated. The coordinator does not retry that state on
 its own, and the staged file remains untouched unless it later passes the same
 admission threshold.
+
+### Supervised Automatic Mode (E4)
+
+`BOOKGUARD_AUTOMATION_MODE=automatic` enables the E4 recovery executor, which
+advances one durable work item per confirmed `POST /api/automatic/run` request
+(`{"confirm":"RUN_AUTOMATIC_CYCLE"}`). It attempts at most one external
+mutation per cycle. The default mode is `manual`, and the default
+`BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST` is empty. An action runs only when its
+code is allowlisted, a live executor is registered, and its fresh identity,
+byte, destination, and operation-specific gates pass. A supported action code
+alone does not mean that a live executor exists. Inspect
+`GET /api/automatic/execution-policy` for the mode, allowlist, and registered
+executors; `GET /api/automatic/executions` shows the durable execution journal.
+
+E4 can retry a bounded failed acquisition grab, advance a known Bindery queue
+item to verified staging, and admit separately allowlisted verified bytes. It
+also has guarded publication, scan, registration, and quarantine recovery steps.
+Candidate selection requires an explicit operator choice; the executor does not
+choose a new release on its own. Publication uses no-replace and exact-byte
+checks, and uncertain interrupted external effects are held for reconciliation
+instead of being blindly retried. Existing action gates, including
+`BOOKGUARD_ALLOW_ACTIONS`, `BOOKGUARD_AUTOMATIC_REACQUISITION`, and
+`BOOKGUARD_ADMISSION_ENABLED` where applicable, remain separate prerequisites.
+Set the mode back to `manual` or clear the allowlist to stop new E4 executions;
+the journal remains available for review.
 
 ### Controlled ebook admission
 
