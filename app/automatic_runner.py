@@ -11,6 +11,7 @@ from .automatic_quarantine_grab import (
     register_executor as register_quarantine_grab_executor,
     run_quarantine_grab_cycle,
 )
+from .quarantine_handoff import run_quarantine_verification_cycle
 from .acquisition_progress import (
     register_executor as register_acquisition_progress_executor,
     run_acquisition_progress_cycle,
@@ -25,7 +26,9 @@ from .acquisition_admission_scan import (
 )
 from .acquisition import AcquisitionSafetyError, finalize_ebook_acquisition
 from .config import load_automation_settings
-from .db import ebook_acquisition_by_id, local_conn
+from .db import (
+    ebook_acquisition_by_id, ebook_replacement_for_quarantine_plan, local_conn,
+)
 from .quarantine_selection import quarantine_selection_by_result
 from .finalization import finalization_preview
 from .observe import _acquisition_decisions
@@ -495,6 +498,13 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
                     first_waiting = result
                 continue
             return result
+        if (
+            kind == "QUARANTINE_UNSAFE_MEDIA"
+            and int(candidate.get("currentStep") or 0) == 4
+            and (ebook_replacement_for_quarantine_plan(int(candidate["id"])) or {}).get("status")
+            == "verified"
+        ):
+            return run_quarantine_verification_cycle(candidate)
         if core.quarantine_plan_paused(candidate):
             if first_paused is None:
                 first_paused = core.paused_quarantine_result(candidate)

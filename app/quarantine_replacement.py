@@ -33,6 +33,26 @@ def _prior_acquisition(result_id: int) -> bool:
         ).fetchone() is not None
 
 
+def quarantine_receipt_bytes_match(book_id: int, outcome: dict[str, Any]) -> bool:
+    """Require retained bytes under the exact configured quarantine directory."""
+    expected_root = Path(settings.quarantine_root).absolute()
+    expected_dir = expected_root / str(book_id)
+    raw_path = str(outcome.get("quarantinePath") or "")
+    path = Path(raw_path) if raw_path else None
+    sha = str(outcome.get("sha256") or "")
+    safe_path = bool(
+        path and path.is_absolute() and path.parent == expected_dir
+        and expected_root.resolve() == expected_root
+        and not expected_root.is_symlink() and not expected_dir.is_symlink()
+        and not path.is_symlink()
+    )
+    try:
+        return bool(safe_path and path.is_file() and len(sha) == 64
+                    and sha256_file(path) == sha)
+    except OSError:
+        return False
+
+
 def quarantine_replacement_preview(
     plan_id: int, client: BinderyClient | None = None,
 ) -> dict[str, Any]:
@@ -50,22 +70,10 @@ def quarantine_replacement_preview(
     boundary = dict((receipt or {}).get("boundary") or {})
     current = _current_plan(result_id) if result else None
 
-    expected_root = Path(settings.quarantine_root).absolute()
-    expected_dir = expected_root / str(plan.get("bookId") or "")
-    raw_path = str(outcome.get("quarantinePath") or "")
-    path = Path(raw_path) if raw_path else None
-    safe_path = bool(
-        path and path.is_absolute() and path.parent == expected_dir
-        and expected_root.resolve() == expected_root
-        and not expected_root.is_symlink() and not expected_dir.is_symlink()
-        and not path.is_symlink()
-    )
     sha = str(outcome.get("sha256") or "")
-    try:
-        bytes_match = bool(safe_path and path.is_file() and len(sha) == 64
-                           and sha256_file(path) == sha)
-    except OSError:
-        bytes_match = False
+    bytes_match = quarantine_receipt_bytes_match(
+        int(plan.get("bookId") or 0), outcome
+    )
 
     source = Path(str((result or {}).get("local_path") or "")) if result else None
     source_absent = bool(source and source.is_absolute()
