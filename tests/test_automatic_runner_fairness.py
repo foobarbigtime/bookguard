@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app import automatic_runner as runner
 
 
@@ -186,3 +188,73 @@ def test_only_completed_quarantine_remains_visible_as_paused(monkeypatch):
     assert result["state"] == "paused"
     assert result["plan"]["id"] == 3
     assert result["externalMutationAttempted"] is False
+
+
+@pytest.mark.parametrize(
+    ("kind", "runner_name", "allowlist"),
+    [
+        ("PREPARE_ACQUISITION_ADMISSION", "run_verified_admission_cycle",
+         "admit_verified_acquisition"),
+        ("REVIEW_ADMISSION_PREPUBLICATION", "run_prepublication_retirement_cycle",
+         "retire_proven_prepublication_failure"),
+        ("REQUEST_PUBLISHED_ACQUISITION_SCAN", "run_published_acquisition_scan_cycle",
+         "request_published_acquisition_scan"),
+        ("RECOVER_ADMISSION_PUBLICATION", "run_publication_recovery_cycle", None),
+        ("CORRECT_REGISTRATION_CONFLICT", "run_registration_conflict_cycle", None),
+        ("FINALIZE_ACQUISITION", "_run_finalization_cycle", None),
+    ],
+)
+def test_paused_no_mutation_plan_yields_to_later_ready_item(
+    monkeypatch, kind, runner_name, allowlist,
+):
+    paused = _plan(3, kind)
+    ready = _plan(4, "FINALIZE_ACQUISITION")
+    calls = []
+    monkeypatch.setattr(runner, "load_automation_settings", lambda: SimpleNamespace(
+        automation_mode="automatic",
+        automatic_action_allowlist=(allowlist,) if allowlist else (),
+    ))
+    monkeypatch.setattr(runner.core, "recovery_plan_snapshot",
+                        lambda limit: {"items": [paused, ready]})
+    monkeypatch.setattr(runner, runner_name,
+                        lambda plan: calls.append(plan["id"])
+                        or {"state": "paused", "plan": plan,
+                            "externalMutationAttempted": False})
+    if runner_name != "_run_finalization_cycle":
+        monkeypatch.setattr(runner, "_run_finalization_cycle",
+                            lambda plan: calls.append(plan["id"])
+                            or {"state": "executed", "plan": plan,
+                                "externalMutationAttempted": True})
+    else:
+        ready = _plan(4, "RECONCILE_ACQUISITION")
+        monkeypatch.setattr(runner, "run_acquisition_progress_cycle",
+                            lambda plan: calls.append(plan["id"])
+                            or {"state": "executed", "plan": plan,
+                                "externalMutationAttempted": True})
+
+    result = runner.run_automatic_cycle()
+
+    assert calls == [3, 4]
+    assert result["plan"]["id"] == 4
+
+
+def test_waiting_after_external_attempt_stops_before_later_mutation(monkeypatch):
+    plans = [_plan(3, "PREPARE_ACQUISITION_ADMISSION"),
+             _plan(4, "FINALIZE_ACQUISITION")]
+    monkeypatch.setattr(runner, "load_automation_settings", lambda: SimpleNamespace(
+        automation_mode="automatic",
+        automatic_action_allowlist=("admit_verified_acquisition",),
+    ))
+    monkeypatch.setattr(runner.core, "recovery_plan_snapshot",
+                        lambda limit: {"items": plans})
+    monkeypatch.setattr(runner, "run_verified_admission_cycle",
+                        lambda plan: {"state": "waiting", "plan": plan,
+                                      "externalMutationAttempted": True})
+    monkeypatch.setattr(runner, "_run_finalization_cycle",
+                        lambda plan: (_ for _ in ()).throw(
+                            AssertionError("A second mutation was attempted")))
+
+    result = runner.run_automatic_cycle()
+
+    assert result["plan"]["id"] == 3
+    assert result["externalMutationAttempted"] is True

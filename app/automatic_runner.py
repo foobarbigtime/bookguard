@@ -481,37 +481,40 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
             continue
         if kind == "RECONCILE_ACQUISITION":
             result = run_acquisition_progress_cycle(candidate)
+        elif kind == "PREPARE_ACQUISITION_ADMISSION":
+            result = run_verified_admission_cycle(candidate)
+        elif kind == "REVIEW_ADMISSION_PREPUBLICATION":
+            result = run_prepublication_retirement_cycle(candidate)
+        elif kind == "REQUEST_PUBLISHED_ACQUISITION_SCAN":
+            result = run_published_acquisition_scan_cycle(candidate)
+        elif kind == "SELECT_ALTERNATE_REPLACEMENT":
+            result = run_alternate_grab_cycle(candidate)
+        elif kind == "CORRECT_REGISTRATION_CONFLICT":
+            result = run_registration_conflict_cycle(candidate)
+        elif kind == "RECOVER_ADMISSION_PUBLICATION":
+            if int(candidate.get("currentStep") or 0) == 5:
+                result = run_publication_registration_cycle(candidate)
+            else:
+                result = run_publication_recovery_cycle(candidate)
+        elif kind == "FINALIZE_ACQUISITION":
+            result = _run_finalization_cycle(candidate)
+        else:
+            # The core runner promotes due retries before selecting the earliest
+            # executable core plan; waiting plans do not block ready work.
+            return core.run_automatic_cycle(limit)
+
+        # Only a definite no-mutation handoff can give the slot to another item.
+        # An uncertain post-effect result must stop the cycle, even if it waits.
+        if result.get("externalMutationAttempted") is False:
             if result.get("state") == "waiting":
                 if first_waiting is None:
                     first_waiting = result
                 continue
-            return result
-        if kind == "PREPARE_ACQUISITION_ADMISSION":
-            return run_verified_admission_cycle(candidate)
-        if kind == "REVIEW_ADMISSION_PREPUBLICATION":
-            return run_prepublication_retirement_cycle(candidate)
-        if kind == "REQUEST_PUBLISHED_ACQUISITION_SCAN":
-            return run_published_acquisition_scan_cycle(candidate)
-        if kind == "SELECT_ALTERNATE_REPLACEMENT":
-            result = run_alternate_grab_cycle(candidate)
-            if result.get("state") in {"waiting", "paused"}:
-                if result["state"] == "waiting" and first_waiting is None:
-                    first_waiting = result
-                elif result["state"] == "paused" and first_paused is None:
+            if result.get("state") == "paused":
+                if first_paused is None:
                     first_paused = result
                 continue
-            return result
-        if kind == "CORRECT_REGISTRATION_CONFLICT":
-            return run_registration_conflict_cycle(candidate)
-        if kind == "RECOVER_ADMISSION_PUBLICATION":
-            if int(candidate.get("currentStep") or 0) == 5:
-                return run_publication_registration_cycle(candidate)
-            return run_publication_recovery_cycle(candidate)
-        if kind == "FINALIZE_ACQUISITION":
-            return _run_finalization_cycle(candidate)
-        # The core runner promotes due retries before selecting the earliest
-        # executable core plan; waiting plans do not block ready work.
-        return core.run_automatic_cycle(limit)
+        return result
     if has_retry_wait:
         # A retry may have become due since the outer snapshot. The core
         # runner promotes it before returning a waiting or executed result.
