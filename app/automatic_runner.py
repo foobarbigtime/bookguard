@@ -484,7 +484,9 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         if (
             kind == "QUARANTINE_UNSAFE_MEDIA"
             and int(candidate.get("currentStep") or 0) == 3
-            and "reacquire_expected_media" in configured.automatic_action_allowlist
+            and "reacquire_expected_media" in getattr(
+                configured, "automatic_action_allowlist", ()
+            )
             and quarantine_selection_by_result(int(candidate["subjectId"])) is not None
         ):
             result = run_quarantine_grab_cycle(candidate)
