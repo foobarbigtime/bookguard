@@ -23,6 +23,9 @@ class Handler(BaseHandler):
         if (parse_qs(parsed.query).get("path") or [""])[0] != STORED_PATH:
             self.send_json(409, {"error": "wrong tracked path"})
             return
+        if int(state.get("deregisterStatus", 200)) >= 400:
+            self.send_json(503, {"error": "injected disposable Bindery outage"})
+            return
         with sqlite3.connect(DB) as conn:
             cursor = conn.execute(
                 "DELETE FROM book_files WHERE id=9001 AND book_id=? AND format='ebook' AND path=?",
