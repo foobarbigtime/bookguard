@@ -88,7 +88,8 @@ setup_disposable_quarantine() {
     -v "${SCENARIO_ROOT}/config:/config:rw" \
     -v "${SCENARIO_ROOT}/books:/books:rw" \
     -v "${SCENARIO_ROOT}/bindery-state:/bindery:rw" \
-    -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_unsafe_quarantine_fixture.py:/app/seed_fixture.py:ro" \
+    -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/${SCENARIO_SEED_SCRIPT:-seed_unsafe_quarantine_fixture.py}:/app/seed_fixture.py:ro" \
+    -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_unsafe_quarantine_fixture.py:/app/seed_unsafe_quarantine_fixture.py:ro" \
     -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/seed_registration_conflict_fixture.py:/app/seed_registration_conflict_fixture.py:ro" \
     "${SCENARIO_IMAGE}" python /app/seed_fixture.py
   printf '%s\n' '{"queue":[],"partial":false,"scanAttempts":0,"deregisterAttempts":0,"deregisterSuccesses":0}' \
@@ -100,7 +101,8 @@ setup_disposable_quarantine() {
     --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
     -v "${SCENARIO_ROOT}/bindery-state:/state:rw" \
     -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/fake_bindery_registration_conflict.py:/acceptance/fake_bindery_registration_conflict.py:ro" \
-    -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/fake_bindery_unsafe_quarantine.py:/acceptance/fake.py:ro" \
+    -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/fake_bindery_unsafe_quarantine.py:/acceptance/fake_bindery_unsafe_quarantine.py:ro" \
+    -v "${BG_ACCEPTANCE_REPO_ROOT}/scripts/acceptance/services/${SCENARIO_FAKE_SCRIPT:-fake_bindery_unsafe_quarantine.py}:/acceptance/fake.py:ro" \
     -e FAKE_BINDERY_STATE=/state/state.json \
     -e FAKE_BINDERY_DB=/state/bindery.db \
     -e FAKE_BINDERY_BOOK_ID=101 \

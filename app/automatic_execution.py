@@ -394,6 +394,32 @@ def _run_unsafe_quarantine_cycle(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def quarantine_plan_paused(plan: dict[str, Any]) -> bool:
+    """A completed quarantine cannot run its disabled replacement steps."""
+    if str(plan.get("planKind") or "") != "QUARANTINE_UNSAFE_MEDIA":
+        return False
+    steps = list(plan.get("steps") or [])
+    index = int(plan.get("currentStep") or 0)
+    if index <= 2:
+        return False
+    code = str(steps[index].get("code") or "") if 0 <= index < len(steps) else ""
+    return code not in {
+        "revalidate_unsafe_verdict",
+        "capture_exact_source_identity",
+        "quarantine_exact_media",
+    }
+
+
+def paused_quarantine_result(plan: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "state": "paused",
+        "plan": plan,
+        "externalMutationAttempted": False,
+        "message": "Unsafe-media quarantine is complete; later replacement steps remain disabled.",
+    }
+
+
 def _run_admission_reconcile_cycle(plan: dict[str, Any]) -> dict[str, Any]:
     """Advance one admission-subject registration reconciliation plan."""
     plan_id = int(plan["id"])
@@ -544,17 +570,24 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         and item.get("state") in {"planned", "ready", "retry_wait"}
     ]
     supported.sort(key=lambda item: int(item["id"]))
-    candidates = [item for item in supported if item["state"] != "retry_wait"]
+    candidates = [
+        item for item in supported
+        if item["state"] != "retry_wait" and not quarantine_plan_paused(item)
+    ]
 
     if not candidates:
-        if supported:
+        waiting = next((item for item in supported if item["state"] == "retry_wait"), None)
+        if waiting:
             return {
                 "ok": True,
                 "state": "retry_wait",
-                "plan": supported[0],
+                "plan": waiting,
                 "externalMutationAttempted": False,
                 "message": "The bounded retry interval has not elapsed.",
             }
+        paused = next((item for item in supported if quarantine_plan_paused(item)), None)
+        if paused:
+            return paused_quarantine_result(paused)
         return {
             "ok": True,
             "state": "idle",

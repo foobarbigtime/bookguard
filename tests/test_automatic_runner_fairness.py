@@ -135,3 +135,54 @@ def test_paused_alternate_parent_does_not_starve_linked_child(monkeypatch):
     assert calls == [("parent", 3), ("child", 4)]
     assert result["state"] == "waiting"
     assert result["plan"]["id"] == 4
+
+
+def test_completed_quarantine_does_not_starve_later_finalization(monkeypatch):
+    paused = {
+        **_plan(3, "QUARANTINE_UNSAFE_MEDIA"),
+        "currentStep": 3,
+        "steps": [
+            {"code": "revalidate_unsafe_verdict"},
+            {"code": "capture_exact_source_identity"},
+            {"code": "quarantine_exact_media"},
+            {"code": "reacquire_expected_media"},
+        ],
+    }
+    ready = _plan(4, "FINALIZE_ACQUISITION")
+    calls = []
+    monkeypatch.setattr(runner, "load_automation_settings",
+                        lambda: SimpleNamespace(automation_mode="automatic"))
+    monkeypatch.setattr(runner.core, "recovery_plan_snapshot",
+                        lambda limit: {"items": [paused, ready]})
+    monkeypatch.setattr(runner, "_run_finalization_cycle",
+                        lambda plan: calls.append(plan["id"])
+                        or {"state": "executed", "plan": plan,
+                            "externalMutationAttempted": True})
+    monkeypatch.setattr(runner.core, "run_automatic_cycle",
+                        lambda limit: (_ for _ in ()).throw(
+                            AssertionError("Paused quarantine claimed the live slot")))
+
+    result = runner.run_automatic_cycle()
+
+    assert calls == [4]
+    assert result["plan"]["id"] == 4
+
+
+def test_only_completed_quarantine_remains_visible_as_paused(monkeypatch):
+    paused = {
+        **_plan(3, "QUARANTINE_UNSAFE_MEDIA"),
+        "currentStep": 3,
+        "steps": [{"code": "a"}, {"code": "b"},
+                  {"code": "quarantine_exact_media"},
+                  {"code": "reacquire_expected_media"}],
+    }
+    monkeypatch.setattr(runner, "load_automation_settings",
+                        lambda: SimpleNamespace(automation_mode="automatic"))
+    monkeypatch.setattr(runner.core, "recovery_plan_snapshot",
+                        lambda limit: {"items": [paused]})
+
+    result = runner.run_automatic_cycle()
+
+    assert result["state"] == "paused"
+    assert result["plan"]["id"] == 3
+    assert result["externalMutationAttempted"] is False

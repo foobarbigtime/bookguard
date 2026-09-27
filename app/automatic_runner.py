@@ -475,6 +475,10 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         if candidate.get("state") == "retry_wait":
             has_retry_wait = True
             continue
+        if core.quarantine_plan_paused(candidate):
+            if first_paused is None:
+                first_paused = core.paused_quarantine_result(candidate)
+            continue
         if kind == "RECONCILE_ACQUISITION":
             result = run_acquisition_progress_cycle(candidate)
             if result.get("state") == "waiting":
