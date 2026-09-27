@@ -190,5 +190,28 @@ scenario_run() {
   assert_associations 1
   state=$(tr -d '[:space:]' < "${SCENARIO_ROOT}/bindery-state/state.json")
   bg_assert_contains "${state}" '"deregisterAttempts":0' "no uncertain deregistration"
-  bg_note "Exact disposable quarantine passed; interrupted work was blocked without replay."
+
+  bg_header "BINDERY OUTAGE: RESTORE THE EXACT SOURCE"
+  scenario_cleanup
+  setup_disposable_quarantine
+  source_hash=$(bg_sha256 "${SCENARIO_ROOT}/books/${RELATIVE}")
+  sibling_hash=$(bg_sha256 "${SCENARIO_ROOT}/books/Other/Unrelated.epub")
+  observe_plan
+  docker exec "${SCENARIO_FAKE}" python -c \
+    "import json; from pathlib import Path; p=Path('/state/state.json'); s=json.loads(p.read_text()); s['deregisterStatus']=503; p.write_text(json.dumps(s))"
+  start_bookguard automatic "quarantine_exact_media"
+  response="${SCENARIO_ROOT}/outage.json"
+  status=$(post_cycle "${response}")
+  bg_assert_eq "200" "${status}" "Bindery outage HTTP"
+  bg_assert_contains "$(cat "${response}")" '"state":"blocked"' "outage blocks work item"
+  bg_assert_contains "$(cat "${response}")" 'EXECUTION_FAILED' "failed deregistration reported"
+  bg_assert_hash "${SCENARIO_ROOT}/books/${RELATIVE}" "${source_hash}" "source restored after outage"
+  bg_assert_hash "${SCENARIO_ROOT}/books/Other/Unrelated.epub" "${sibling_hash}" "unrelated media after outage"
+  [[ ! -e "${SCENARIO_ROOT}/quarantine/101/Conflict Fixture.epub" ]] || bg_die "outage left a second copy"
+  assert_associations 1
+  state=$(tr -d '[:space:]' < "${SCENARIO_ROOT}/bindery-state/state.json")
+  bg_assert_contains "${state}" '"deregisterAttempts":1' "one failed deregistration"
+  bg_assert_contains "${state}" '"deregisterSuccesses":0' "no deregistration succeeded"
+  bg_assert_contains "${state}" '"scanAttempts":0' "no Bindery scan on outage"
+  bg_note "Exact quarantine, uncertain replay, and Bindery outage rollback passed on disposable bytes."
 }
