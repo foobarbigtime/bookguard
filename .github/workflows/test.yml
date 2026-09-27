@@ -31,6 +31,7 @@ jobs:
       - run: sudo scripts/acceptance/run publication-scan
       - run: sudo scripts/acceptance/run alternate-grab
       - run: sudo scripts/acceptance/run quarantine-unsafe
+      - run: sudo scripts/acceptance/run quarantine-copy-fault
       - run: sudo scripts/acceptance/run quarantine-scheduling
       - run: sudo scripts/acceptance/run paused-handoff-scheduling
       - run: sudo scripts/acceptance/run retry-scheduling
