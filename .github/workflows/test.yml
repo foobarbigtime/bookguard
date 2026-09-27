@@ -40,3 +40,4 @@ jobs:
       - run: sudo scripts/acceptance/run quarantine-grab
       - run: sudo scripts/acceptance/run quarantine-handoff
       - run: sudo scripts/acceptance/run quarantine-verification
+      - run: sudo scripts/acceptance/run quarantine-final-state
