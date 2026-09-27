@@ -31,3 +31,4 @@ jobs:
       - run: sudo scripts/acceptance/run alternate-grab
       - run: sudo scripts/acceptance/run quarantine-unsafe
       - run: sudo scripts/acceptance/run quarantine-scheduling
+      - run: sudo scripts/acceptance/run paused-handoff-scheduling
