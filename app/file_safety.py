@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
 from pathlib import Path
 
 
@@ -55,3 +57,37 @@ def allocate_unique_destination(
             return candidate
 
     raise RuntimeError("Unable to allocate a unique destination.")
+
+
+class ExactUnlinkError(RuntimeError):
+    pass
+
+
+def unlink_exact_file(root: Path, path: Path, *, device: int, inode: int) -> None:
+    """Unlink one regular file under ``root`` only if it is still the expected inode.
+
+    The walk from ``root`` uses directory handles with symlink following
+    disabled, so neither the parent directories nor the final name can redirect
+    the unlink elsewhere, and the name is re-checked against the expected
+    ``(device, inode)`` immediately before it is removed.
+    """
+    root = Path(root)
+    relative = Path(path).relative_to(root)
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise ExactUnlinkError("Refusing to unlink a path that is not a file under the root.")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    parent_fd = os.open(root, flags)
+    try:
+        for part in relative.parts[:-1]:
+            next_fd = os.open(part, flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        current = os.stat(relative.name, dir_fd=parent_fd, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (device, inode):
+            raise ExactUnlinkError("The file changed identity before unlink.")
+        if not stat.S_ISREG(current.st_mode):
+            raise ExactUnlinkError("Refusing to unlink something that is not a regular file.")
+        os.unlink(relative.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)

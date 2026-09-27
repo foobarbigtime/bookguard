@@ -135,7 +135,7 @@ def test_wrong_content_move_uses_separate_writable_alias(tmp_path, monkeypatch):
         moved.append((Path(src), Path(dst)))
         raise OSError("intentional unit-test stop")
 
-    monkeypatch.setattr(quarantine_fs.shutil, "move", reject_move)
+    monkeypatch.setattr(quarantine_fs, "_move_no_replace", reject_move)
 
     with pytest.raises(
         AutomaticMaintenanceError,

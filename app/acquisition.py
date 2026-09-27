@@ -24,7 +24,7 @@ from .db import (
     result_by_id,
     update_ebook_acquisition,
 )
-from .file_safety import sha256_file
+from .file_safety import ExactUnlinkError, sha256_file, unlink_exact_file
 from .preimport import PreImportSafetyError, preimport_readiness
 from .scan_guard import (
     CurrentScanError,
@@ -1117,15 +1117,17 @@ def finalize_ebook_acquisition(
                 raise AcquisitionSafetyError(
                     "The staged file changed while finalization was running."
                 )
-            staged_path.unlink()
-            directory_fd = os.open(
-                staging_root,
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-            )
             try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+                unlink_exact_file(
+                    Path(staging_root),
+                    Path(staged_path),
+                    device=after.st_dev,
+                    inode=after.st_ino,
+                )
+            except (ExactUnlinkError, OSError) as exc:
+                raise AcquisitionSafetyError(
+                    f"The verified staging copy could not be removed safely: {exc}"
+                ) from exc
 
             update_ebook_acquisition(
                 acquisition_id,

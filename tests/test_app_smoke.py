@@ -96,18 +96,26 @@ def test_app_imports():
     assert main.app.version == "0.5.0"
 
 
+def _api_routes(routes, prefix=""):
+    """Yield (path, route) pairs, descending into routers FastAPI includes lazily."""
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield prefix + route.path, route
+            continue
+        included = getattr(route, "original_router", None)
+        if included is not None:
+            context = getattr(route, "include_context", None)
+            yield from _api_routes(included.routes, prefix + getattr(context, "prefix", ""))
+
+
 def test_route_contract_is_exact():
+    api_routes = list(_api_routes(main.app.routes))
     routes = {
-        (method, route.path)
-        for route in main.app.routes
-        if isinstance(route, APIRoute)
+        (method, path)
+        for path, route in api_routes
         for method in route.methods
     }
-    route_count = sum(
-        len(route.methods)
-        for route in main.app.routes
-        if isinstance(route, APIRoute)
-    )
+    route_count = sum(len(route.methods) for _, route in api_routes)
 
     assert len(routes) == route_count
     assert routes == EXPECTED_ROUTES

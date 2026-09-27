@@ -157,6 +157,18 @@ BOOKGUARD_AUTH_USERNAME=bookguard
 BOOKGUARD_AUTH_PASSWORD=replace-with-a-long-random-password
 ```
 
+Because browsers resend Basic credentials automatically, every state-changing
+request (anything other than `GET`/`HEAD`/`OPTIONS`) is also rejected with
+`403` when the browser marks it cross-site, when its `Origin` does not match the
+request host, or when it has a body that is not `application/json`. Scripts that
+call the API with `curl -H 'Content-Type: application/json'` are unaffected. If
+BookGuard sits behind a reverse proxy that rewrites the `Host` header, list the
+public origin(s) the browser uses:
+
+```env
+BOOKGUARD_TRUSTED_ORIGINS=https://bookguard.example.com
+```
+
 The container refuses to start without a password. The supplied Compose file
 also binds to localhost by default:
 
