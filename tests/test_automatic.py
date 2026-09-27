@@ -131,7 +131,7 @@ def test_wrong_content_move_uses_separate_writable_alias(tmp_path, monkeypatch):
 
     moved = []
 
-    def reject_move(src, dst):
+    def reject_move(src, dst, **kwargs):
         moved.append((Path(src), Path(dst)))
         raise OSError("intentional unit-test stop")
 
