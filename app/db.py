@@ -330,6 +330,24 @@ def init_local_db() -> None:
                 FOREIGN KEY(acquisition_id) REFERENCES ebook_acquisitions(id),
                 FOREIGN KEY(plan_id) REFERENCES recovery_plans(id)
             );
+
+            CREATE TABLE IF NOT EXISTS quarantine_replacement_selections (
+                result_id INTEGER PRIMARY KEY,
+                plan_id INTEGER NOT NULL,
+                plan_signature TEXT NOT NULL,
+                evidence_revision TEXT NOT NULL,
+                quarantine_execution_id INTEGER NOT NULL,
+                quarantine_sha256 TEXT NOT NULL,
+                candidate_guid TEXT NOT NULL,
+                candidate_title TEXT NOT NULL,
+                candidate_protocol TEXT NOT NULL,
+                candidate_indexer TEXT NOT NULL,
+                candidate_fingerprint TEXT NOT NULL,
+                selected_at TEXT NOT NULL,
+                FOREIGN KEY(result_id) REFERENCES scan_results(id),
+                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id),
+                FOREIGN KEY(quarantine_execution_id) REFERENCES automatic_executions(id)
+            );
             """
         )
 
