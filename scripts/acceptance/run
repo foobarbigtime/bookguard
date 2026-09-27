@@ -106,11 +106,19 @@ acceptance_exit() {
   local status=$?
   trap - EXIT
   if declare -F scenario_cleanup >/dev/null; then
-    scenario_cleanup || true
+    if ! scenario_cleanup; then
+      bg_note "Scenario cleanup reported failure." >&2
+      status=1
+    fi
   fi
   if declare -F scenario_requires_docker >/dev/null && scenario_requires_docker; then
-    bg_assert_scenario_resources_removed || status=1
-    bg_cleanup_default_image || status=1
+    if ! docker info --format '{{.ServerVersion}}' >/dev/null 2>&1; then
+      bg_note "Docker is unavailable; disposable resource cleanup cannot be verified." >&2
+      status=1
+    else
+      bg_assert_scenario_resources_removed || status=1
+      bg_cleanup_default_image || status=1
+    fi
   fi
   if [[ ${status} -eq 0 ]] \
       && declare -F scenario_requires_acceptance_root >/dev/null \
