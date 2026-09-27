@@ -249,12 +249,13 @@ def test_runner_delegates_when_older_supported_plan_is_not_finalization(monkeypa
     monkeypatch.setattr(
         core,
         "run_automatic_cycle",
-        lambda limit: {"state": "core", "limit": limit},
+        lambda limit, selected_plan=None: {"state": "core", "limit": limit,
+            "selectedId": selected_plan["id"]},
     )
 
     result = runner.run_automatic_cycle(33)
 
-    assert result == {"state": "core", "limit": 33}
+    assert result == {"state": "core", "limit": 33, "selectedId": 4}
 
 
 def test_finalization_preview_proves_exact_queue_and_bytes(monkeypatch, tmp_path):

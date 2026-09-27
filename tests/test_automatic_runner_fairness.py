@@ -44,12 +44,13 @@ def test_multiple_waiting_handoffs_allow_one_core_item(monkeypatch):
                         lambda plan: calls.append(("wait", plan["id"]))
                         or {"state": "waiting", "externalMutationAttempted": False})
     monkeypatch.setattr(runner.core, "run_automatic_cycle",
-                        lambda limit: calls.append(("core", limit))
+                        lambda limit, selected_plan=None: calls.append(
+                            ("core", limit, selected_plan["id"]))
                         or {"state": "executed", "externalMutationAttempted": True})
 
     result = runner.run_automatic_cycle(limit=10)
 
-    assert calls == [("wait", 3), ("wait", 4), ("core", 10)]
+    assert calls == [("wait", 3), ("wait", 4), ("core", 10, 5)]
     assert result["state"] == "executed"
 
 
@@ -270,7 +271,8 @@ def test_core_paused_retry_yields_to_later_outer_finalization(monkeypatch):
     monkeypatch.setattr(runner.core, "recovery_plan_snapshot",
                         lambda limit: {"items": [retry, ready]})
     monkeypatch.setattr(runner.core, "run_automatic_cycle",
-                        lambda limit: calls.append("core") or {
+                        lambda limit, selected_plan=None: calls.append(
+                            ("core", selected_plan["id"])) or {
                             "state": "paused", "plan": retry,
                             "externalMutationAttempted": False,
                         })
@@ -282,5 +284,5 @@ def test_core_paused_retry_yields_to_later_outer_finalization(monkeypatch):
 
     result = runner.run_automatic_cycle()
 
-    assert calls == ["core", "finalize"]
+    assert calls == [("core", 3), "finalize"]
     assert result["plan"]["id"] == 4

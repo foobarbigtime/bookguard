@@ -529,9 +529,13 @@ def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
         elif kind == "FINALIZE_ACQUISITION":
             result = _run_finalization_cycle(candidate)
         else:
-            # The core runner promotes due retries before selecting the earliest
-            # executable core plan; waiting plans do not block ready work.
-            result = core.run_automatic_cycle(limit)
+            # An earlier waiting retry may have become due since this snapshot.
+            # Otherwise, dispatch this exact plan without a second selection.
+            result = (
+                core.run_automatic_cycle(limit)
+                if has_retry_wait
+                else core.run_automatic_cycle(limit, selected_plan=candidate)
+            )
 
         # Only a definite no-mutation handoff can give the slot to another item.
         # An uncertain post-effect result must stop the cycle, even if it waits.
