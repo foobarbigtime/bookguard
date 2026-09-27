@@ -42,6 +42,7 @@ def test_attention_snapshot_collects_only_intervention_states(monkeypatch):
     )
     monkeypatch.setattr(attention, "observe_attention_items", lambda limit: [])
     monkeypatch.setattr(attention, "_blocked_plan_items", lambda limit: [])
+    monkeypatch.setattr(attention, "stale_execution_items", lambda limit: [])
 
     snapshot = attention.attention_snapshot()
 
@@ -53,6 +54,7 @@ def test_attention_snapshot_collects_only_intervention_states(monkeypatch):
         "hardlinkCleanups": 1,
         "coordinator": 1,
         "recoveryPlans": 0,
+        "runningExecutions": 0,
         "observe": 0,
     }
     statuses = {(item["kind"], item["status"]) for item in snapshot["items"]}
@@ -91,6 +93,7 @@ def test_attention_snapshot_zero_state(monkeypatch):
     monkeypatch.setattr(attention, "acquisition_coordinator_status", lambda: {"state": "idle"})
     monkeypatch.setattr(attention, "observe_attention_items", lambda limit: [])
     monkeypatch.setattr(attention, "_blocked_plan_items", lambda limit: [])
+    monkeypatch.setattr(attention, "stale_execution_items", lambda limit: [])
 
     snapshot = attention.attention_snapshot()
 
@@ -112,6 +115,7 @@ def test_attention_template_renders_item_list():
                 "hardlinkCleanups": 0,
                 "coordinator": 0,
                 "recoveryPlans": 0,
+                "runningExecutions": 0,
                 "observe": 0,
             },
             "generatedAt": "2026-09-20T11:30:00Z",
