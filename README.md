@@ -597,9 +597,23 @@ Verification and security settings include three default-on, read-only checks:
 The ClamAV check is disabled by default. When enabled, BookGuard streams the file bytes to a
 deployment-configured `clamd` endpoint with the INSTREAM protocol; it does not give ClamAV a
 host/library path. A malware detection, scanner error, timeout, missing scanner configuration, or
-file above the configured scan limit fails closed. BookGuard does not send a file to ClamAV after
-an earlier deterministic safety check has already failed, which avoids handing malformed or
-archive-bomb-like input to another parser.
+file above the configured scan limit fails closed: the file cannot be verified or admitted.
+BookGuard does not send a file to ClamAV after an earlier deterministic safety check has already
+failed, which avoids handing malformed or archive-bomb-like input to another parser.
+
+Only a detection is evidence that a file is unsafe. When the scanner cannot finish (a timeout,
+dropped connection, clamd error, or size limit), the library result is recorded as
+`INSUFFICIENT_EVIDENCE` with source `malware-scan-inconclusive`, never as `UNSAFE_FILE`. It is
+not reused from the verification cache, so the next verification scans the file again, and
+Observe proposes re-verification rather than quarantine. `UNSAFE_FILE` results saved by earlier
+releases for scanner failures are recognised and treated the same way.
+
+The scan timeout defaults to 300 seconds (`BOOKGUARD_MALWARE_SCAN_TIMEOUT_SECONDS`, 1–300);
+heavily illustrated EPUBs can take several minutes in clamd. The ClamAV overlay raises clamd's
+100 MiB `StreamMaxLength`/`MaxFileSize` defaults to 512 MiB and `MaxScanSize` to 1024 MiB to
+match `BOOKGUARD_MALWARE_MAX_BYTES`; override them with `BOOKGUARD_CLAMD_STREAM_MAX_LENGTH`,
+`BOOKGUARD_CLAMD_MAX_FILE_SIZE` and `BOOKGUARD_CLAMD_MAX_SCAN_SIZE`. clamd reads them at start,
+so recreate the scanner (`docker compose ... up -d`) after changing them.
 
 For the optional private ClamAV topology, start BookGuard with the malware
 overlay. The scanner has no library mounts and port 3310 is not published to
