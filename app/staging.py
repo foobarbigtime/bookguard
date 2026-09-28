@@ -9,6 +9,7 @@ from .ebook_extraction import extract_ebook_identity
 from .ebook_security import inspect_ebook_security
 from .file_safety import sha256_file
 from .verification_engine import classify_identity
+from .verification_status import malware_scan_inconclusive
 
 
 class StagingSafetyError(RuntimeError):
@@ -128,13 +129,21 @@ def verify_ebook_file(
         "title": expected_title,
         "author": expected_author,
     }
+    # Staged bytes are headed into the library, so they get every check the
+    # library verifier runs, including the deployment-configured malware scan.
     security = inspect_ebook_security(
         path,
         check_file_signatures=settings.verification_file_signatures,
         check_archive_safety=settings.verification_archive_safety,
         check_epub_structure=settings.verification_epub_structure,
         check_pdf_integrity=settings.verification_pdf_integrity,
+        check_malware=settings.verification_malware_scan,
+        clamd_host=settings.verification_clamd_host,
+        clamd_port=settings.verification_clamd_port,
+        malware_timeout_seconds=settings.verification_malware_timeout_seconds,
+        malware_max_bytes=settings.verification_malware_max_bytes,
     )
+    malware_inconclusive = not security["safe"] and malware_scan_inconclusive(security)
     if security["safe"]:
         extracted = extract_ebook_identity(str(path))
         verdict, confidence, evidence = classify_identity(
@@ -147,6 +156,27 @@ def verify_ebook_file(
         )
         evidence["security"] = security
         source = extracted.source
+    elif malware_inconclusive:
+        # The scanner could not finish: never admissible, but not a finding
+        # that the staged file is unsafe.
+        verdict = "INSUFFICIENT_EVIDENCE"
+        confidence = 0
+        source = "malware-scan-inconclusive"
+        malware = (security.get("checks") or {}).get("malwareScan") or {}
+        evidence = {
+            "expected": {"title": expected_title, "author": expected_author},
+            "embedded": {},
+            "content": {},
+            "metadata_matches_expected": False,
+            "security": security,
+            "malwareScanInconclusive": True,
+            "notes": [str(malware.get("message") or security["message"])],
+            "explanation": (
+                "The malware scan could not complete, so the staged file cannot be "
+                "admitted. This is not evidence that it is unsafe; verify it again "
+                "once the scanner is available."
+            ),
+        }
     else:
         verdict = "UNSAFE_FILE"
         confidence = 100
@@ -185,7 +215,9 @@ def verify_ebook_file(
         blockers.append("stagedFileChangedDuringVerification")
     if verdict != "VERIFIED_CORRECT":
         blockers.append(f"verdict:{verdict}")
-    if not security["safe"]:
+    if malware_inconclusive:
+        blockers.append("malwareScanInconclusive")
+    elif not security["safe"]:
         blockers.append("deterministicSecurityChecksFailed")
     if int(confidence) < MIN_ADMISSION_CONFIDENCE:
         blockers.append(f"confidenceBelow:{MIN_ADMISSION_CONFIDENCE}")
