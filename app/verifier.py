@@ -38,6 +38,7 @@ from .repair import (
 )
 from .triage import result_signature, triage_state
 from .tika_client import test_connection
+from .verification_status import malware_scan_inconclusive, verification_is_inconclusive
 from .verification_engine import classify_identity
 
 
@@ -172,7 +173,14 @@ def _verification_for_fingerprint(
             "SELECT * FROM content_verifications WHERE signature=? LIMIT 1",
             (signature,),
         ).fetchone()
-    return _decode_row(row) if row else None
+    if not row:
+        return None
+    item = _decode_row(row)
+    # A scanner outage is not a finding about the file: never reuse it, so the
+    # next verification scans again instead of repeating the outage.
+    if verification_is_inconclusive(item.get("verdict"), item.get("evidence")):
+        return None
+    return item
 
 
 def _ebook_directory_media_mismatch(result: dict) -> dict | None:
@@ -437,6 +445,35 @@ def verify_result(result: dict, force: bool = False) -> dict:
                 "size": snapshot.size,
                 "sourceStable": True,
             }
+            if not security["safe"] and malware_scan_inconclusive(security):
+                assert_snapshot_source_current(snapshot)
+                malware = (security.get("checks") or {}).get("malwareScan") or {}
+                evidence = {
+                    "expected": {
+                        "title": result.get("title", ""),
+                        "author": result.get("author", ""),
+                    },
+                    "embedded": {},
+                    "content": {},
+                    "metadata_matches_expected": False,
+                    "security": security,
+                    "malwareScanInconclusive": True,
+                    "notes": [str(malware.get("message") or security["message"])],
+                    "explanation": (
+                        "The malware scan could not complete, so neither file safety nor "
+                        "book identity was established. This is not evidence that the file "
+                        "is unsafe; it will be scanned again on the next verification."
+                    ),
+                }
+                return _save_verification(
+                    result,
+                    target,
+                    fingerprint,
+                    "INSUFFICIENT_EVIDENCE",
+                    0,
+                    "malware-scan-inconclusive",
+                    evidence,
+                )
             if not security["safe"]:
                 assert_snapshot_source_current(snapshot)
                 evidence = {

@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from .config import load_automation_settings
+from .verification_status import verification_is_inconclusive
 from .db import local_conn, utc_now
 from .recovery_classifier import classify_acquisition_failure, classify_admission_failure
 from .recovery_planner import record_recovery_plans
@@ -69,7 +70,7 @@ def _latest_verifications(conn, result_ids: list[int]) -> dict[int, dict[str, An
     placeholders = ",".join("?" for _ in result_ids)
     rows = conn.execute(
         f"""
-        SELECT id, result_id, verdict, confidence, source, updated_at
+        SELECT id, result_id, verdict, confidence, source, updated_at, evidence_json
         FROM content_verifications
         WHERE result_id IN ({placeholders})
         ORDER BY result_id, updated_at DESC, id DESC
@@ -81,7 +82,17 @@ def _latest_verifications(conn, result_ids: list[int]) -> dict[int, dict[str, An
         result_id = int(row["result_id"])
         if result_id not in latest:
             latest[result_id] = dict(row)
-    return latest
+    current: dict[int, dict[str, Any]] = {}
+    for result_id, item in latest.items():
+        try:
+            evidence = json.loads(item.pop("evidence_json") or "{}")
+        except (TypeError, ValueError):
+            evidence = {}
+        # A scanner outage proves nothing about the file: plan re-verification,
+        # never quarantine.
+        if not verification_is_inconclusive(item.get("verdict"), evidence):
+            current[result_id] = item
+    return current
 
 
 def _result_decisions(conn, limit: int) -> list[dict[str, Any]]:

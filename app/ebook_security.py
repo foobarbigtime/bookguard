@@ -355,12 +355,20 @@ def _malware_scan_check(
         max_bytes=max_bytes,
     )
     if payload.get("error"):
-        return _result("failed", str(payload["error"])[:500], engine="clamd")
+        # The scanner produced no verdict. Still a failure, so nothing unscanned
+        # is admitted, but not evidence that the file is unsafe.
+        return _result(
+            "failed",
+            str(payload["error"])[:500],
+            engine="clamd",
+            inconclusive=True,
+        )
     if payload.get("infected"):
         return _result(
             "failed",
             "ClamAV identified the file as malware.",
             engine="clamd",
+            inconclusive=False,
             signature=str(payload.get("signature") or "unknown")[:500],
             scannedBytes=int(payload.get("size") or 0),
         )
@@ -417,8 +425,10 @@ def inspect_ebook_security(
     checks = {**core_checks, "malwareScan": malware}
     failures = [name for name, check in checks.items() if check["status"] == "failed"]
     safe = not failures
+    inconclusive = failures == ["malwareScan"] and malware.get("inconclusive") is True
     return {
         "safe": safe,
+        "inconclusive": inconclusive,
         "readOnly": True,
         "expectedFormat": suffix.removeprefix(".") or "unknown",
         "checks": checks,
@@ -426,6 +436,8 @@ def inspect_ebook_security(
         "message": (
             "All enabled ebook safety checks passed."
             if safe
+            else "The malware scan could not complete, so file safety is unproven."
+            if inconclusive
             else "One or more enabled ebook safety checks failed."
         ),
     }
