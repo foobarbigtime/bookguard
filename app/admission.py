@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import errno
 import hashlib
 import os
@@ -10,7 +9,7 @@ import stat
 import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from .bindery_client import BinderyClient, BinderyClientError
 from .config import ConfigurationError, load_automation_settings, settings
@@ -24,6 +23,7 @@ from .db import (
     update_ebook_admission,
 )
 from .file_safety import roots_overlap, sha256_file
+from .no_replace import rename_no_replace as _rename_no_replace
 from .staging import (
     MIN_ADMISSION_CONFIDENCE,
     StagingSafetyError,
@@ -48,10 +48,27 @@ class PublishedSnapshotError(RuntimeError):
         )
 
 
+class PublishedBytesMismatch(RuntimeError):
+    """Published library bytes could not be proven identical to the verified snapshot."""
+
+    def __init__(self, publication_method: str, detail: str) -> None:
+        self.publication_method = publication_method
+        super().__init__(
+            f"Snapshot was published using {publication_method}, but the library "
+            f"file could not be proven identical to the verified bytes: {detail} "
+            "The file was left in place for operator review."
+        )
+
+
+class UnsupportedNoReplacePublication(OSError):
+    """Both atomic no-overwrite publication methods were rejected."""
+
+
 _admission_lock = threading.Lock()
 _RECONCILABLE_STATUSES = {
     "verified",
     "published",
+    "scan_request_failed",
     "scan_requested",
     "registration_conflict",
     "registered",
@@ -358,53 +375,6 @@ def _copy_stable_snapshot(
         os.close(source_fd)
 
 
-def _rename_no_replace(
-    source_directory_fd: int,
-    source_name: str,
-    destination_directory_fd: int,
-    destination_name: str,
-    destination: Path,
-) -> bool:
-    """Rename without replacement, or report that the filesystem lacks support."""
-    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
-    if renameat2 is None:
-        return False
-    renameat2.argtypes = [
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    ]
-    renameat2.restype = ctypes.c_int
-    result = renameat2(
-        source_directory_fd,
-        os.fsencode(source_name),
-        destination_directory_fd,
-        os.fsencode(destination_name),
-        1,  # RENAME_NOREPLACE
-    )
-    if result == 0:
-        return True
-
-    error_number = ctypes.get_errno()
-    if error_number == errno.EEXIST:
-        raise FileExistsError(
-            error_number,
-            os.strerror(error_number),
-            destination,
-        )
-    unsupported_errors = {
-        errno.EINVAL,
-        errno.ENOSYS,
-        errno.EOPNOTSUPP,
-        errno.ENOTSUP,
-    }
-    if error_number in unsupported_errors:
-        return False
-    raise OSError(error_number, os.strerror(error_number), destination)
-
-
 def _publish_no_replace(temp_path: Path, destination: Path) -> str:
     """Atomically publish a private snapshot without replacing any path."""
     source_directory_fd = os.open(
@@ -432,13 +402,22 @@ def _publish_no_replace(temp_path: Path, destination: Path) -> str:
         if renamed:
             publication_method = "renameat2"
         else:
-            os.link(
-                temp_path.name,
-                destination.name,
-                src_dir_fd=source_directory_fd,
-                dst_dir_fd=destination_directory_fd,
-                follow_symlinks=False,
-            )
+            try:
+                os.link(
+                    temp_path.name,
+                    destination.name,
+                    src_dir_fd=source_directory_fd,
+                    dst_dir_fd=destination_directory_fd,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                if exc.errno in {
+                    errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP, errno.ENOTSUP
+                }:
+                    raise UnsupportedNoReplacePublication(
+                        exc.errno, exc.strerror, destination
+                    ) from exc
+                raise
             publication_method = "private-snapshot-link"
 
         published = True
@@ -472,16 +451,65 @@ def _cleanup_private_snapshot(temp_path: Path | None) -> None:
             pass
 
 
-def _seal_snapshot(temp_path: Path, expected_hash: str) -> None:
-    """Make the verified snapshot immutable to non-owner users before publish."""
+def _sha256_descriptor(descriptor: int) -> str:
+    digest = hashlib.sha256()
+    offset = 0
+    while chunk := os.pread(descriptor, 1024 * 1024, offset):
+        digest.update(chunk)
+        offset += len(chunk)
+    return digest.hexdigest()
+
+
+def _seal_snapshot(temp_path: Path, expected_hash: str) -> os.stat_result:
+    """Make the verified snapshot immutable to non-owner users before publish.
+
+    Returns the sealed file state so the caller can prove the exact same bytes
+    are still in place immediately before publication.
+    """
     descriptor = os.open(temp_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
         os.fchmod(descriptor, 0o644)
         os.fsync(descriptor)
+        sealed = os.fstat(descriptor)
+        sealed_hash = _sha256_descriptor(descriptor)
+        unchanged = _same_file_state(sealed, os.fstat(descriptor))
     finally:
         os.close(descriptor)
-    if sha256_file(temp_path) != expected_hash:
+    if not stat.S_ISREG(sealed.st_mode) or not unchanged or sealed_hash != expected_hash:
         raise AdmissionSafetyError("The private snapshot changed while it was sealed.")
+    return sealed
+
+
+def _verify_exact_bytes(
+    path: Path,
+    expected_hash: str,
+    *,
+    message: str,
+    sealed: os.stat_result | None = None,
+) -> None:
+    """Re-hash one regular file through an O_NOFOLLOW descriptor.
+
+    With ``sealed``, the file must also be the same inode, size, and
+    modification state that was sealed, so a same-UID rewrite is refused.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise AdmissionSafetyError(message) from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise AdmissionSafetyError(message)
+        if sealed is not None and not _same_file_state(sealed, before):
+            raise AdmissionSafetyError(message)
+        current_hash = _sha256_descriptor(descriptor)
+        after = os.fstat(descriptor)
+    except OSError as exc:
+        raise AdmissionSafetyError(message) from exc
+    finally:
+        os.close(descriptor)
+    if not _same_file_state(before, after) or current_hash != expected_hash:
+        raise AdmissionSafetyError(message)
 
 
 def _identity_unchanged(before: dict[str, Any], after: dict[str, Any]) -> bool:
@@ -502,12 +530,16 @@ def admit_staged_ebook(
     result: dict[str, Any],
     relative_path: str,
     client: BinderyClient | None = None,
+    *,
+    before_publish: Callable[[int], None] | None = None,
+    request_scan: bool = True,
 ) -> dict[str, Any]:
     """Verify, durably record, and atomically publish one staged ebook."""
     if not _admission_lock.acquire(blocking=False):
         raise AdmissionSafetyError("Another admission operation is already running.")
     admission_id: int | None = None
     temp_path: Path | None = None
+    publication_started = False
     try:
         readiness = admission_readiness(client)
         if not readiness["ready"]:
@@ -577,34 +609,60 @@ def admit_staged_ebook(
             staged_sha256=snapshot_hash,
             verification=verification,
         )
-        _seal_snapshot(temp_path, snapshot_hash)
+        # Live authorization checks may take several network round-trips, so they
+        # run before the seal. The seal hash and the exact re-verification below
+        # are then the last checks before the no-replace publication.
+        if before_publish is not None:
+            before_publish(admission_id)
+        sealed = _seal_snapshot(temp_path, snapshot_hash)
+        _verify_exact_bytes(
+            temp_path,
+            snapshot_hash,
+            sealed=sealed,
+            message="The sealed snapshot changed before publication.",
+        )
+        publication_started = True
         publication_method = _publish_no_replace(temp_path, destination)
         temp_path = None
+        try:
+            _verify_exact_bytes(
+                destination,
+                snapshot_hash,
+                message="The published library file does not match the verified bytes.",
+            )
+        except AdmissionSafetyError as exc:
+            raise PublishedBytesMismatch(publication_method, str(exc)) from exc
         update_ebook_admission(
             admission_id,
             "published",
             publication_method=publication_method,
         )
 
-        scan_state = "requested"
+        scan_state = "not_requested"
         scan_warning = ""
-        try:
-            client.scan_library()
-            update_ebook_admission(admission_id, "scan_requested")
-        except BinderyClientError as exc:
-            if "HTTP 409" in str(exc):
-                scan_state = "already_running"
+        if request_scan:
+            scan_state = "requested"
+            try:
+                client.scan_library()
                 update_ebook_admission(admission_id, "scan_requested")
-            else:
-                scan_state = "request_failed"
-                scan_warning = str(exc)
-                update_ebook_admission(
-                    admission_id,
-                    "published",
-                    error=scan_warning,
-                )
+            except BinderyClientError as exc:
+                if "HTTP 409" in str(exc):
+                    scan_state = "already_running"
+                    update_ebook_admission(admission_id, "scan_requested")
+                else:
+                    scan_state = "request_failed"
+                    scan_warning = str(exc)
+                    update_ebook_admission(
+                        admission_id,
+                        "scan_request_failed",
+                        error=scan_warning,
+                    )
 
-        response_status = "published" if scan_state == "request_failed" else "scan_requested"
+        response_status = (
+            "scan_request_failed" if scan_state == "request_failed"
+            else "published" if scan_state == "not_requested"
+            else "scan_requested"
+        )
         return {
             "ok": True,
             "admissionId": admission_id,
@@ -632,14 +690,40 @@ def admit_staged_ebook(
                 error=str(exc),
             )
         raise AdmissionSafetyError(str(exc)) from exc
+    except PublishedBytesMismatch as exc:
+        if admission_id is not None:
+            update_ebook_admission(
+                admission_id,
+                "published",
+                publication_method=exc.publication_method,
+                error=str(exc),
+            )
+        raise AdmissionSafetyError(str(exc)) from exc
+    except UnsupportedNoReplacePublication as exc:
+        if admission_id is not None:
+            update_ebook_admission(
+                admission_id,
+                "failed",
+                failure_stage="no_replace_unsupported",
+                error=str(exc),
+            )
+        raise AdmissionSafetyError(str(exc)) from exc
     except (OSError, StagingSafetyError, BinderyClientError) as exc:
         error = str(exc)
         if admission_id is not None:
-            update_ebook_admission(admission_id, "failed", error=error)
+            update_ebook_admission(
+                admission_id, "failed",
+                failure_stage="before_publication" if not publication_started else None,
+                error=error,
+            )
         raise AdmissionSafetyError(error) from exc
     except AdmissionSafetyError as exc:
         if admission_id is not None:
-            update_ebook_admission(admission_id, "failed", error=str(exc))
+            update_ebook_admission(
+                admission_id, "failed",
+                failure_stage="before_publication" if not publication_started else None,
+                error=str(exc),
+            )
         raise
     finally:
         _cleanup_private_snapshot(temp_path)
@@ -712,9 +796,133 @@ def _verified_staged_source(admission: dict[str, Any]) -> Path:
     return staged_path
 
 
+def admission_reconcile_preview(
+    admission_id: int,
+    client: BinderyClient | None = None,
+    *,
+    allow_published_without_scan: bool = False,
+) -> dict[str, Any]:
+    """Read-only E4 boundary for one known admission registration transition.
+
+    Automatic reconciliation is intentionally narrower than the manual helper:
+    a durable scan_requested admission may request a scan; a failed scan request
+    may only adopt registration already proven. Both staged and published bytes
+    must match the verified SHA-256 and Bindery's ownership views must agree.
+    """
+    configured = _automation_settings()
+    admission = ebook_admission_by_id(int(admission_id))
+    if not admission:
+        raise AdmissionSafetyError("Admission record not found.")
+
+    status = str(admission.get("status") or "").casefold()
+    expected_book_id = int(admission.get("book_id") or 0)
+    stored_path = str(admission.get("stored_path") or "")
+    staged_sha256 = str(admission.get("staged_sha256") or "")
+
+    result = result_by_id(int(admission.get("result_id") or 0))
+    result_matches = bool(
+        result
+        and int(result.get("book_id") or 0) == expected_book_id
+        and os.path.normpath(str(result.get("stored_path") or ""))
+        == os.path.normpath(stored_path)
+        and str(result.get("local_path") or "")
+        == str(admission.get("local_path") or "")
+    )
+
+    published_path = _verified_published_destination(admission, configured)
+    staged_path = _verified_staged_source(admission)
+
+    client = client or BinderyClient()
+    try:
+        book = client.get_book(expected_book_id)
+        exact_associations = _exact_ebook_associations(stored_path)
+    except (BinderyClientError, sqlite3.Error) as exc:
+        raise AdmissionSafetyError(
+            f"Bindery registration ownership could not be verified: {exc}"
+        ) from exc
+
+    api_registered = any(
+        str(item.get("format") or "").casefold() == "ebook"
+        and os.path.normpath(str(item.get("path") or ""))
+        == os.path.normpath(stored_path)
+        for item in (book.get("bookFiles") or [])
+        if isinstance(item, dict)
+    )
+    exact_target = [
+        item
+        for item in exact_associations
+        if int(item.get("book_id") or 0) == expected_book_id
+    ]
+    exact_foreign = [
+        item
+        for item in exact_associations
+        if int(item.get("book_id") or 0) != expected_book_id
+    ]
+
+    if api_registered and len(exact_associations) == 1 and len(exact_target) == 1:
+        registration_state = "registered"
+        ownership_consistent = True
+    elif not api_registered and len(exact_associations) == 0:
+        registration_state = "scan_required"
+        ownership_consistent = True
+    elif exact_foreign:
+        registration_state = "conflict"
+        ownership_consistent = False
+    else:
+        registration_state = "inconsistent"
+        ownership_consistent = False
+
+    checks = {
+        "actionsEnabled": settings.allow_actions,
+        "admissionEnabled": configured.admission_enabled,
+        "verifiedSnapshotPresent": bool(staged_sha256),
+        "resultIdentityUnchanged": result_matches,
+        "publishedBytesCurrent": published_path.is_file(),
+        "stagedBytesCurrent": staged_path.is_file(),
+        "binderyOwnershipConsistent": ownership_consistent,
+    }
+    if allow_published_without_scan:
+        checks["workflowStatePublished"] = status == "published"
+    else:
+        checks["workflowStateScanRequested"] = status in {
+            "scan_requested", "scan_request_failed"
+        }
+    blockers = [name for name, passed in checks.items() if not passed]
+
+    return {
+        "safe": not blockers,
+        "checks": checks,
+        "blockers": blockers,
+        "admissionId": int(admission["id"]),
+        "resultId": int(admission["result_id"]),
+        "bookId": expected_book_id,
+        "status": status,
+        "scanRequestFailureProven": (
+            status == "scan_request_failed"
+            and bool(admission.get("publication_method"))
+            and bool(admission.get("error"))
+        ),
+        "registrationState": registration_state,
+        "storedPath": stored_path,
+        "localPath": str(admission.get("local_path") or ""),
+        "stagedRelativePath": str(admission.get("staged_relative_path") or ""),
+        "stagedSha256": staged_sha256,
+        "publishedPath": str(published_path),
+        "stagedPath": str(staged_path),
+        "exactAssociations": exact_associations,
+        "reason": (
+            "Known admission registration transition is current and safe to reconcile."
+            if not blockers
+            else "Admission reconciliation boundary failed: " + ", ".join(blockers)
+        ),
+    }
+
+
 def reconcile_admission(
     admission_id: int,
     client: BinderyClient | None = None,
+    *,
+    allow_scan: bool = True,
 ) -> dict[str, Any]:
     """Confirm Bindery registered the published bytes; never delete staging."""
     configured = _automation_settings()
@@ -735,6 +943,8 @@ def reconcile_admission(
         raise AdmissionSafetyError("The admission has no verified snapshot to reconcile.")
 
     _verified_published_destination(admission, configured)
+    if not allow_scan:
+        _verified_staged_source(admission)
 
     client = client or BinderyClient()
     try:
@@ -749,8 +959,27 @@ def reconcile_admission(
         if isinstance(item, dict)
     )
     if registered:
+        if not allow_scan:
+            try:
+                associations = _exact_ebook_associations(str(admission["stored_path"]))
+            except sqlite3.Error as exc:
+                raise AdmissionSafetyError(
+                    "Bindery path ownership could not be confirmed."
+                ) from exc
+            if (
+                len(associations) != 1
+                or int(associations[0].get("book_id") or 0)
+                != int(admission["book_id"])
+            ):
+                raise AdmissionSafetyError(
+                    "Bindery's exact registration owner is not independently proven."
+                )
         update_ebook_admission(admission_id, "registered")
     else:
+        if not allow_scan:
+            raise AdmissionSafetyError(
+                "Registration is not independently proven; another scan is refused."
+            )
         expected_book_id = int(admission["book_id"])
         try:
             exact_associations = _exact_ebook_associations(

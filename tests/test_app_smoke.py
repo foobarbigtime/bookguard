@@ -15,6 +15,10 @@ EXPECTED_ROUTES = {
     ("POST", "/api/hardlink-conflicts/history/{correction_id}/cleanup"),
     ("POST", "/api/hardlink-conflicts/history/{correction_id}/reconcile-cleanup"),
     ("GET", "/"),
+    ("GET", "/attention"),
+    ("GET", "/history"),
+    ("GET", "/history/{kind}/{record_id}"),
+    ("GET", "/diagnostics"),
     ("GET", "/triage"),
     ("GET", "/settings"),
     ("GET", "/repairs"),
@@ -23,6 +27,9 @@ EXPECTED_ROUTES = {
     ("POST", "/api/scan/cancel-safe"),
     ("POST", "/api/scan/stop-immediately"),
     ("GET", "/api/status"),
+    ("GET", "/api/diagnostics"),
+    ("GET", "/api/history"),
+    ("GET", "/api/history/{kind}/{record_id}"),
     ("GET", "/api/settings"),
     ("POST", "/api/settings"),
     ("POST", "/api/settings/reset"),
@@ -48,17 +55,32 @@ EXPECTED_ROUTES = {
     ("POST", "/api/verification/{result_id}/run"),
     ("GET", "/api/verification/{result_id}/repair-preview"),
     ("POST", "/api/verification/{result_id}/repair"),
+    ("POST", "/api/automatic/run"),
+    ("GET", "/api/automatic/execution-policy"),
+    ("GET", "/api/automatic/executions"),
+    ("GET", "/api/automatic/observe"),
+    ("POST", "/api/automatic/observe/run"),
     ("GET", "/api/automatic/bindery-status"),
     ("GET", "/api/automatic/preimport-readiness"),
     ("GET", "/api/automatic/staging/files"),
     ("POST", "/api/automatic/books/{book_id}/staged-verification"),
     ("GET", "/api/automatic/admission-readiness"),
     ("GET", "/api/automatic/admissions"),
+    ("GET", "/api/automatic/admissions/{admission_id}/prepublication-preview"),
     ("POST", "/api/automatic/results/{result_id}/admit-staged-ebook"),
     ("POST", "/api/automatic/admissions/{admission_id}/reconcile"),
     ("POST", "/api/automatic/admissions/{admission_id}/correct-registration"),
     ("GET", "/api/automatic/acquisition-readiness"),
     ("GET", "/api/automatic/acquisitions"),
+    ("GET", "/api/automatic/acquisitions/{acquisition_id}/admission-preview"),
+    ("GET", "/api/automatic/acquisitions/{acquisition_id}/alternate-preview"),
+    ("GET", "/api/automatic/acquisitions/{acquisition_id}/alternate-selection"),
+    ("POST", "/api/automatic/plans/{plan_id}/alternate-selection"),
+    ("GET", "/api/automatic/plans/{plan_id}/quarantine-replacement-preview"),
+    ("GET", "/api/automatic/plans/{plan_id}/quarantine-final-state-preview"),
+    ("GET", "/api/automatic/plans/{plan_id}/quarantine-candidate-preview"),
+    ("GET", "/api/automatic/results/{result_id}/quarantine-candidate-selection"),
+    ("POST", "/api/automatic/plans/{plan_id}/quarantine-candidate-selection"),
     ("GET", "/api/automatic/acquisition-coordinator"),
     ("POST", "/api/automatic/results/{result_id}/acquisitions"),
     ("POST", "/api/automatic/acquisitions/{acquisition_id}/reconcile"),
@@ -72,21 +94,29 @@ EXPECTED_ROUTES = {
 
 def test_app_imports():
     assert main.app.title == "BookGuard"
-    assert main.app.version == "0.5.0"
+    assert main.app.version == "0.6.0"
+
+
+def _api_routes(routes, prefix=""):
+    """Yield (path, route) pairs, descending into routers FastAPI includes lazily."""
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield prefix + route.path, route
+            continue
+        included = getattr(route, "original_router", None)
+        if included is not None:
+            context = getattr(route, "include_context", None)
+            yield from _api_routes(included.routes, prefix + getattr(context, "prefix", ""))
 
 
 def test_route_contract_is_exact():
+    api_routes = list(_api_routes(main.app.routes))
     routes = {
-        (method, route.path)
-        for route in main.app.routes
-        if isinstance(route, APIRoute)
+        (method, path)
+        for path, route in api_routes
         for method in route.methods
     }
-    route_count = sum(
-        len(route.methods)
-        for route in main.app.routes
-        if isinstance(route, APIRoute)
-    )
+    route_count = sum(len(route.methods) for _, route in api_routes)
 
     assert len(routes) == route_count
     assert routes == EXPECTED_ROUTES
@@ -95,6 +125,10 @@ def test_route_contract_is_exact():
 def test_templates_parse():
     env = Environment(loader=FileSystemLoader("templates"))
     env.get_template("index.html")
+    env.get_template("attention.html")
+    env.get_template("history.html")
+    env.get_template("history_detail.html")
+    env.get_template("diagnostics.html")
     env.get_template("triage.html")
     env.get_template("settings.html")
     env.get_template("repairs.html")

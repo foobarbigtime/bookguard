@@ -4,6 +4,8 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .. import __version__
 from ..config import Settings, settings
+from ..diagnostics import diagnostics_snapshot
+from ..history import operation_detail, operation_history
 from ..db import (
     clear_persisted_settings,
     latest_counts,
@@ -89,6 +91,25 @@ def api_status():
         "poll_ms": settings.dashboard_poll_ms,
         "repair_mode": settings.metadata_repair_mode,
     }
+
+
+
+@router.get("/api/history")
+def api_history(limit: int = 250):
+    return operation_history(limit)
+
+
+@router.get("/api/history/{kind}/{record_id}")
+def api_history_detail(kind: str, record_id: int):
+    detail = operation_detail(kind, record_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Operation record not found.")
+    return detail
+
+
+@router.get("/api/diagnostics")
+def api_diagnostics():
+    return diagnostics_snapshot()
 
 
 @router.get("/api/settings")

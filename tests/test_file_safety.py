@@ -66,3 +66,47 @@ def test_read_file_prefix_does_not_load_bytes_past_limit(tmp_path):
     prefix = read_file_prefix(path, max_bytes=4096)
 
     assert prefix == b"A" * 4096
+
+
+def test_unlink_exact_file_removes_only_the_expected_inode(tmp_path):
+    import pytest
+
+    from app.file_safety import ExactUnlinkError, unlink_exact_file
+
+    root = tmp_path / "staging"
+    (root / "sub").mkdir(parents=True)
+    target = root / "sub" / "Book.epub"
+    target.write_bytes(b"one")
+    info = target.stat()
+
+    replacement = root / "sub" / "incoming.tmp"
+    replacement.write_bytes(b"replacement")
+    keep_old_inode_alive = root / "old-link"
+    keep_old_inode_alive.hardlink_to(target)
+    replacement.replace(target)  # same name, different inode
+    with pytest.raises(ExactUnlinkError):
+        unlink_exact_file(root, target, device=info.st_dev, inode=info.st_ino)
+    assert target.read_bytes() == b"replacement"
+
+    current = target.stat()
+    unlink_exact_file(root, target, device=current.st_dev, inode=current.st_ino)
+    assert not target.exists()
+
+
+def test_unlink_exact_file_refuses_symlinked_parent(tmp_path):
+    import pytest
+
+    from app.file_safety import unlink_exact_file
+
+    root = tmp_path / "staging"
+    root.mkdir()
+    outside = tmp_path / "library"
+    outside.mkdir()
+    victim = outside / "Book.epub"
+    victim.write_bytes(b"library bytes")
+    (root / "sub").symlink_to(outside)
+    info = victim.stat()
+
+    with pytest.raises(OSError):
+        unlink_exact_file(root, root / "sub" / "Book.epub", device=info.st_dev, inode=info.st_ino)
+    assert victim.read_bytes() == b"library bytes"

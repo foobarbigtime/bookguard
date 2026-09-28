@@ -98,6 +98,24 @@ class SupervisedAcquisitionCoordinator:
             )
             return False
 
+        automation_mode = getattr(configured, "automation_mode", "manual")
+        if automation_mode != "manual":
+            blocker = (
+                "observeModeActive"
+                if automation_mode == "observe"
+                else "automaticModeUsesRecoveryExecutor"
+            )
+            self._replace_status(
+                enabled=False,
+                running=False,
+                state="disabled",
+                action=None,
+                acquisition=None,
+                blockers=[blocker],
+                lastError=None,
+            )
+            return False
+
         if not configured.acquisition_coordinator_enabled:
             self._replace_status(
                 enabled=False,
@@ -167,6 +185,23 @@ class SupervisedAcquisitionCoordinator:
                 blockers=["validConfiguration"],
                 lastRunAt=now,
                 lastError=str(exc),
+            )
+
+        automation_mode = getattr(configured, "automation_mode", "manual")
+        if automation_mode != "manual":
+            blocker = (
+                "observeModeActive"
+                if automation_mode == "observe"
+                else "automaticModeUsesRecoveryExecutor"
+            )
+            return self._replace_status(
+                enabled=False,
+                state="disabled",
+                action=None,
+                acquisition=None,
+                blockers=[blocker],
+                lastRunAt=now,
+                lastError=None,
             )
 
         if not configured.acquisition_coordinator_enabled:

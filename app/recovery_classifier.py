@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import re
+
+
+@dataclass(frozen=True)
+class RecoveryClassification:
+    recoverable: bool
+    reason_code: str
+    plan_kind: str
+    explanation: str
+    retry_same_operation: bool = False
+    max_retries: int = 0
+    backoff_seconds: tuple[int, ...] = ()
+
+
+_HTTP_STATUS_RE = re.compile(r"\bHTTP\s+(\d{3})\b", re.IGNORECASE)
+
+
+def _http_status(error: str) -> int | None:
+    match = _HTTP_STATUS_RE.search(error or "")
+    return int(match.group(1)) if match else None
+
+
+def classify_acquisition_failure(status: str, error: str) -> RecoveryClassification | None:
+    if str(status or "").casefold() != "failed":
+        return None
+
+    text = str(error or "").strip()
+    folded = text.casefold()
+    status_code = _http_status(text)
+
+    if (
+        status_code == 409
+        and "already grabbed" in folded
+        and ("already been imported" in folded or "already imported" in folded)
+    ):
+        return RecoveryClassification(
+            recoverable=True,
+            reason_code="ACQUISITION_RELEASE_ALREADY_IMPORTED",
+            plan_kind="SELECT_ALTERNATE_REPLACEMENT",
+            explanation=(
+                "Bindery rejected the selected release because that exact release was "
+                "already grabbed/imported. Retrying the same candidate would repeat a "
+                "known-bad transition; recovery should re-search and choose a different "
+                "candidate under the normal safety policy."
+            ),
+            retry_same_operation=False,
+            max_retries=0,
+        )
+
+    transient_statuses = {429, 500, 502, 503, 504}
+    transient_markers = (
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection refused",
+        "temporarily unavailable",
+    )
+    if status_code in transient_statuses or any(marker in folded for marker in transient_markers):
+        # A POST timeout or 5xx cannot prove whether Bindery accepted the grab.
+        # Only a named read failure can authorize another request; a generic
+        # transport error has no durable stage and must go to Attention.
+        if (
+            folded.startswith("bindery grab failed:")
+            or re.search(r"\bPOST\s+/queue/grab\b", text, re.IGNORECASE)
+            or not re.search(r"\bBindery GET /[a-z]", text, re.IGNORECASE)
+        ):
+            return None
+        return RecoveryClassification(
+            recoverable=True,
+            reason_code="ACQUISITION_TRANSIENT_BINDERY_FAILURE",
+            plan_kind="RETRY_ACQUISITION_TRANSIENT",
+            explanation=(
+                "The acquisition failed with a transient Bindery/transport condition. "
+                "The same transition may be retried only with bounded backoff after "
+                "fresh readiness and candidate validation."
+            ),
+            retry_same_operation=True,
+            max_retries=3,
+            backoff_seconds=(30, 120, 300),
+        )
+
+    return None
+
+
+def classify_admission_failure(
+    status: str,
+    error: str,
+    publication_method: str | None = None,
+    *,
+    failure_stage: str | None = None,
+    verified_snapshot: bool = False,
+) -> RecoveryClassification | None:
+    if str(status or "").casefold() != "failed":
+        return None
+
+    if (
+        str(failure_stage or "") == "no_replace_unsupported"
+        and verified_snapshot
+        and not str(publication_method or "").strip()
+    ):
+        return RecoveryClassification(
+            recoverable=True,
+            reason_code="ADMISSION_PUBLICATION_PRIMITIVE_UNSUPPORTED",
+            plan_kind="RECOVER_ADMISSION_PUBLICATION",
+            explanation=(
+                "Admission failed before publication completed because the configured "
+                "filesystem rejected a no-replace publication primitive. Recovery must "
+                "revalidate the same staged bytes and destination, then prove a supported "
+                "no-overwrite publication method before retrying."
+            ),
+            retry_same_operation=False,
+            max_retries=0,
+        )
+
+    if (
+        str(failure_stage or "") == "before_publication"
+        and not str(publication_method or "").strip()
+    ):
+        return RecoveryClassification(
+            recoverable=True,
+            reason_code="ADMISSION_FAILED_BEFORE_PUBLICATION",
+            plan_kind="REVIEW_ADMISSION_PREPUBLICATION",
+            explanation=(
+                "The admission failed before its publication call. Review the exact "
+                "journal, staged bytes, destination absence, and Bindery identity "
+                "before designing a guarded retry. No retry is enabled."
+            ),
+            retry_same_operation=False,
+            max_retries=0,
+        )
+
+    # A generic failed admission does not record which Bindery operation (if
+    # any) failed. Even a verified snapshot cannot prove whether publication
+    # already happened, so a timeout alone cannot authorize the same retry.
+    return None

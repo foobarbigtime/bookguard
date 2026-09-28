@@ -184,6 +184,103 @@ def _sample_author(sample: dict) -> str:
     ).strip()
 
 
+def catalogue_member_title_match(expected: str, observed: str) -> bool:
+    """Accept a work title explicitly named inside a catalogue/box-set title."""
+    if title_match(expected, observed):
+        return True
+    expected_normalized = normalize(expected)
+    observed_normalized = normalize(observed)
+    if not expected_normalized or len(observed_normalized) < 4:
+        return False
+    return f" {observed_normalized} " in f" {expected_normalized} "
+
+
+def analyze_audio_identity_set(
+    expected_title: str,
+    expected_author: str,
+    probes: list[dict],
+) -> dict:
+    """Summarize identity agreement across every readable audio file.
+
+    Representative samples are useful for speed, but they must not be allowed to
+    hide a contaminated multi-work directory. This summary is deliberately based
+    on the complete verified probe set.
+    """
+    readable = [probe for probe in probes if not probe.get("probe_error")]
+    mismatch_titles: Counter[str] = Counter()
+    mismatch_title_display: dict[str, str] = {}
+
+    informative_titles = 0
+    informative_authors = 0
+    informative_pairs = 0
+    title_matches = 0
+    author_matches = 0
+    pair_matches = 0
+    title_mismatches = 0
+    foreign_pairs = 0
+
+    for probe in readable:
+        title = _sample_work_title(probe)
+        author = _sample_author(probe)
+        title_supported = bool(
+            title and catalogue_member_title_match(expected_title, title)
+        )
+        author_supported = bool(author and author_match(expected_author, author))
+
+        if title:
+            informative_titles += 1
+            if title_supported:
+                title_matches += 1
+            else:
+                title_mismatches += 1
+                key = normalize(title)
+                if key:
+                    mismatch_titles[key] += 1
+                    mismatch_title_display.setdefault(key, title)
+
+        if author:
+            informative_authors += 1
+            if author_supported:
+                author_matches += 1
+
+        if title and author:
+            informative_pairs += 1
+            if title_supported and author_supported:
+                pair_matches += 1
+            elif not title_supported and not author_supported:
+                foreign_pairs += 1
+
+    distinct_mismatch_titles = len(mismatch_titles)
+    mixed_content = (
+        title_mismatches >= 2
+        and (
+            title_matches > 0
+            or distinct_mismatch_titles >= 2
+        )
+    )
+
+    top_mismatches = [
+        {"title": mismatch_title_display[key], "count": count}
+        for key, count in mismatch_titles.most_common(10)
+    ]
+
+    return {
+        "readableCount": len(readable),
+        "informativeTitleCount": informative_titles,
+        "informativeAuthorCount": informative_authors,
+        "informativePairCount": informative_pairs,
+        "titleMatchCount": title_matches,
+        "authorMatchCount": author_matches,
+        "pairMatchCount": pair_matches,
+        "titleMismatchCount": title_mismatches,
+        "foreignPairCount": foreign_pairs,
+        "distinctMismatchTitleCount": distinct_mismatch_titles,
+        "mixedContent": mixed_content,
+        "hasEmbeddedContradiction": title_mismatches > 0,
+        "topMismatchTitles": top_mismatches,
+    }
+
+
 def _has_consensus(values: list[str]) -> bool:
     normalized = [normalize(value) for value in values if normalize(value)]
     if not normalized:

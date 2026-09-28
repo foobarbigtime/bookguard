@@ -51,6 +51,9 @@
   </div>
   <nav class="topnav">
     <a class="nav-link" href="/">Dashboard</a>
+      <a class="nav-link" href="/attention">Attention</a>
+    <a class="nav-link" href="/history">History</a>
+      <a class="nav-link" href="/diagnostics">Diagnostics</a>
     <a class="nav-link active" href="/triage">Triage</a>
     <a class="nav-link" href="/repairs">Repairs</a>
     <a class="nav-link" href="/settings">Settings</a>
@@ -87,7 +90,7 @@
     Verification is read-only. BookGuard validates file type and structure before separating verified books, repairable metadata errors, wrong content, unsafe files, and cases that still need human review.
   </div>
 
-  <section class="table-card acquisition-panel" aria-live="polite">
+  <section id="hardlinkPanel" class="table-card acquisition-panel" aria-live="polite">
     <div class="section-title row-between">
       <div>
         <h2>Shared-file registration conflicts</h2>
@@ -270,6 +273,7 @@ function verificationClass(verdict) {
   if (verdict === 'VERIFIED_CORRECT') return 'verification-correct';
   if (verdict === 'METADATA_ERROR') return 'verification-metadata';
   if (verdict === 'WRONG_CONTENT') return 'verification-wrong';
+  if (verdict === 'WRONG_MEDIA_TYPE') return 'verification-wrong';
   if (verdict === 'UNSAFE_FILE') return 'verification-wrong';
   return 'verification-unknown';
 }
@@ -314,6 +318,9 @@ function verificationDetailText(v) {
   const expected = e.expected || {};
   const embedded = e.embedded || {};
   const content = e.content || {};
+  const identity = e.identity || {};
+  const technical = e.technical || {};
+  const actualMedia = e.actualMedia || {};
   const ids = (embedded.identifiers || []).join(' | ') || '—';
   const yn = value => value ? 'FOUND' : 'not found';
   const security = e.security || {};
@@ -324,7 +331,32 @@ function verificationDetailText(v) {
   const securityText = securityLines.length
     ? `\n\nDeterministic security\n${securityLines.join('\n')}`
     : '';
-  return `Verdict: ${verificationLabel(v.verdict)}\nConfidence: ${v.confidence}%\nSource: ${v.source || '—'}\n\nExpected\nTitle: ${expected.title || '—'}\nAuthor: ${expected.author || '—'}\n\nEmbedded\nTitle: ${embedded.title || '—'}\nAuthor: ${embedded.author || '—'}\nIDs: ${ids}\n\nInternal content\nExpected title: ${yn(content.expected_title_found)}\nExpected author: ${yn(content.expected_author_found)}\nEmbedded title: ${yn(content.embedded_title_found)}\nEmbedded author: ${yn(content.embedded_author_found)}\nText examined: ${content.text_characters_examined || 0} characters${securityText}\n\n${e.explanation || ''}`;
+
+  const counts = actualMedia.counts || {};
+  const actualKinds = Object.entries(counts)
+    .filter(([, count]) => Number(count) > 0)
+    .map(([kind, count]) => `${kind}: ${count}`)
+    .join(', ');
+  const formats = Array.isArray(e.observedFormats)
+    ? e.observedFormats
+    : (actualMedia.detected || []).map(item => item.detectedFormat).filter(Boolean);
+  const mediaText = Object.keys(actualMedia).length
+    ? `\n\nActual media\nExpected kind: ${expected.mediaKind || '—'}\nDetected kind: ${e.observedMediaKind || actualKinds || '—'}\nFormats: ${[...new Set(formats)].join(', ') || '—'}\nCandidates: ${actualMedia.candidateCount || 0}`
+    : '';
+
+  const technicalText = Object.keys(technical).length
+    ? `\n\nAudiobook technical evidence\nVerdict: ${technical.verdict || '—'}\nReadable files: ${technical.readable_file_count || 0}/${technical.file_count || 0}\nDuration: ${technical.total_duration_seconds ? (Number(technical.total_duration_seconds) / 3600).toFixed(2) + ' h' : '—'}\nChapters: ${technical.chapter_count || 0}\nCodecs: ${(technical.codecs || []).join(', ') || '—'}`
+    : '';
+
+  const identityText = Object.keys(identity).length
+    ? `\n\nAudiobook identity evidence\nDetected title: ${identity.detected_title || '—'}\nDetected author: ${identity.detected_author || '—'}\nClassification: ${identity.classification || '—'}\nReason: ${identity.reasonCode || '—'}\nSamples: ${identity.sampleCount || 0}`
+    : '';
+
+  const ebookText = (embedded.title || embedded.author || Object.keys(content).length)
+    ? `\n\nEmbedded ebook identity\nTitle: ${embedded.title || '—'}\nAuthor: ${embedded.author || '—'}\nIDs: ${ids}\n\nInternal content\nExpected title: ${yn(content.expected_title_found)}\nExpected author: ${yn(content.expected_author_found)}\nEmbedded title: ${yn(content.embedded_title_found)}\nEmbedded author: ${yn(content.embedded_author_found)}\nText examined: ${content.text_characters_examined || 0} characters`
+    : '';
+
+  return `Verdict: ${verificationLabel(v.verdict)}\nConfidence: ${v.confidence}%\nSource: ${v.source || '—'}\n\nExpected\nMedia: ${expected.mediaKind || '—'}\nTitle: ${expected.title || '—'}\nAuthor: ${expected.author || '—'}${mediaText}${technicalText}${identityText}${ebookText}${securityText}\n\n${e.explanation || ''}`;
 }
 
 function showVerification(id) {
@@ -402,7 +434,7 @@ async function pollVerificationJob() {
     const counts = job.counts || {};
     status.textContent = `Complete: ${job.processed || 0} verified`;
     await loadCachedVerifications();
-    alert(`Content verification complete.\n\nVerified correct: ${counts.VERIFIED_CORRECT || 0}\nMetadata errors: ${counts.METADATA_ERROR || 0}\nWrong content: ${counts.WRONG_CONTENT || 0}\nUnsafe files: ${counts.UNSAFE_FILE || 0}\nInsufficient evidence: ${counts.INSUFFICIENT_EVIDENCE || 0}`);
+    alert(`Content verification complete.\n\nVerified correct: ${counts.VERIFIED_CORRECT || 0}\nMetadata errors: ${counts.METADATA_ERROR || 0}\nWrong content: ${counts.WRONG_CONTENT || 0}\nWrong media type: ${counts.WRONG_MEDIA_TYPE || 0}\nUnsafe files: ${counts.UNSAFE_FILE || 0}\nInsufficient evidence: ${counts.INSUFFICIENT_EVIDENCE || 0}`);
   }
 }
 

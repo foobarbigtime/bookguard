@@ -4,12 +4,21 @@ import zipfile
 
 import pytest
 
-from app import acquisition, scan_guard
+from app import (
+    acquisition, alternate_candidate, alternate_selection, automatic_alternate,
+    automatic_runner, scan_guard,
+)
+from app.bindery_client import BinderyClientError
 from app.db import (
+    create_ebook_acquisition,
     ebook_acquisition_by_id,
+    ebook_replacement_for_acquisition,
     init_local_db,
     recent_ebook_acquisitions,
+    update_ebook_acquisition,
 )
+from app.observe import run_observe_cycle
+from app.recovery_planner import record_recovery_step_success, recovery_plan_by_id
 
 
 class FakeClient:
@@ -274,6 +283,39 @@ def test_start_revalidates_and_records_one_explicit_grab(acquisition_setup):
     assert setup["client"].grabs == [(42, "safe-guid")]
 
 
+def test_post_grab_timeout_is_attention_without_same_release_retry(
+    acquisition_setup, monkeypatch,
+):
+    setup = acquisition_setup
+    client = setup["client"]
+
+    def accepted_then_timed_out(book_id, candidate):
+        client.grabs.append((book_id, candidate["guid"]))
+        client.queue = {"items": [{
+            "id": 77, "bookId": book_id, "title": candidate["title"],
+            "protocol": candidate["protocol"], "status": "downloading",
+        }], "partial": False}
+        raise BinderyClientError("Bindery request failed: Read timed out")
+
+    monkeypatch.setattr(client, "grab", accepted_then_timed_out)
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="timed out"):
+        acquisition.start_ebook_acquisition(setup["result"], "safe-guid", client)
+
+    record = recent_ebook_acquisitions()[0]
+    monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+    observed = run_observe_cycle()
+    decision = next(
+        item for item in observed["records"]
+        if item["subjectKind"] == "acquisition" and item["subjectId"] == str(record["id"])
+    )
+    assert decision["decision"] == "attention"
+    assert client.grabs == [(42, "safe-guid")]
+    assert not any(
+        plan["planKind"] == "RETRY_ACQUISITION_TRANSIENT"
+        for plan in observed["plans"]
+    )
+
+
 def test_start_rejects_release_that_fails_identity_gate(acquisition_setup):
     setup = acquisition_setup
     setup["client"].candidate["title"] = "Different Writer - Other Book epub"
@@ -313,6 +355,516 @@ def test_start_rejects_exact_release_already_imported(acquisition_setup):
 
     assert setup["client"].grabs == []
     assert recent_ebook_acquisitions() == []
+
+
+@pytest.mark.parametrize("history", [
+    {"items": [], "partial": True},
+    {"items": [{"eventType": "other"}] * 200},
+    {"items": [None]},
+])
+def test_start_refuses_incomplete_or_invalid_history(acquisition_setup, history):
+    setup = acquisition_setup
+    setup["client"].history = history
+
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="history"):
+        acquisition.start_ebook_acquisition(
+            setup["result"], "safe-guid", setup["client"],
+        )
+
+    assert setup["client"].grabs == []
+    assert recent_ebook_acquisitions() == []
+
+
+def test_alternate_preview_checks_explicit_release_without_grab(
+    acquisition_setup, monkeypatch,
+):
+    setup = acquisition_setup
+    client = setup["client"]
+    failed_id = create_ebook_acquisition(setup["result"], client.candidate)
+    update_ebook_acquisition(
+        failed_id, "failed",
+        error=(
+            "Bindery grab failed: Bindery POST /queue/grab returned HTTP 409: "
+            "already grabbed: this release has already been imported"
+        ),
+    )
+    monkeypatch.setattr(
+        alternate_candidate, "result_by_id", lambda result_id: setup["result"],
+    )
+    original_title = client.candidate["title"]
+    client.candidate = {
+        **client.candidate,
+        "guid": "alternate-guid",
+        "title": "Ann Patchett - Bel Canto revised retail epub",
+    }
+
+    preview = alternate_candidate.alternate_candidate_preview(
+        failed_id, "alternate-guid", client,
+    )
+
+    assert preview["safeForReview"] is True
+    assert preview["liveGrabEnabled"] is False
+    assert preview["rejectedGuid"] == "safe-guid"
+    assert preview["candidate"]["guid"] == "alternate-guid"
+    assert preview["candidate"]["title"] != original_title
+    assert "nzbUrl" not in preview["candidate"]
+    assert client.grabs == []
+    assert ebook_acquisition_by_id(failed_id)["status"] == "failed"
+    assert len(recent_ebook_acquisitions()) == 1
+
+
+@pytest.mark.parametrize("case", [
+    "same_guid", "same_title", "partial_history", "partial_search",
+    "busy_queue", "uncertain_queue", "unsafe_identity",
+])
+def test_alternate_preview_fails_closed(acquisition_setup, monkeypatch, case):
+    setup = acquisition_setup
+    client = setup["client"]
+    failed_id = create_ebook_acquisition(setup["result"], client.candidate)
+    update_ebook_acquisition(
+        failed_id, "failed",
+        error=(
+            "Bindery grab failed: Bindery POST /queue/grab returned HTTP 409: "
+            "already grabbed: this release has already been imported"
+        ),
+        queue_id=77 if case == "uncertain_queue" else None,
+    )
+    monkeypatch.setattr(
+        alternate_candidate, "result_by_id", lambda result_id: setup["result"],
+    )
+    client.candidate = {
+        **client.candidate,
+        "guid": "alternate-guid",
+        "title": (
+            client.candidate["title"] if case == "same_title"
+            else "Ann Patchett - Bel Canto revised retail epub"
+        ),
+    }
+    if case == "partial_history":
+        client.history = {"items": [], "partial": True}
+    if case == "partial_search":
+        client.search_book = lambda book_id: {
+            "results": [client.candidate], "partial": True,
+        }
+    if case == "busy_queue":
+        client.queue = {"items": [{"id": 9, "status": "downloading"}], "partial": False}
+    if case == "unsafe_identity":
+        client.candidate["title"] = "Wrong Writer - Wrong Title"
+
+    guid = "safe-guid" if case == "same_guid" else "alternate-guid"
+    with pytest.raises(acquisition.AcquisitionSafetyError):
+        alternate_candidate.alternate_candidate_preview(failed_id, guid, client)
+
+    assert client.grabs == []
+    assert len(recent_ebook_acquisitions()) == 1
+
+
+def test_alternate_choice_binds_exact_plan_and_payload_without_grab(
+    acquisition_setup, monkeypatch,
+):
+    setup = acquisition_setup
+    client = setup["client"]
+    failed_id = create_ebook_acquisition(setup["result"], client.candidate)
+    update_ebook_acquisition(
+        failed_id, "failed",
+        error=(
+            "Bindery grab failed: Bindery POST /queue/grab returned HTTP 409: "
+            "already grabbed: this release has already been imported"
+        ),
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+    plan = next(
+        item for item in run_observe_cycle()["plans"]
+        if item["planKind"] == "SELECT_ALTERNATE_REPLACEMENT"
+    )
+    monkeypatch.setattr(
+        alternate_candidate, "result_by_id", lambda result_id: setup["result"],
+    )
+    client.candidate = {
+        **client.candidate,
+        "guid": "alternate-guid",
+        "title": "Ann Patchett - Bel Canto revised retail epub",
+    }
+
+    selected = alternate_selection.bind_alternate_candidate(
+        plan["id"], "alternate-guid", client,
+    )
+    again = alternate_selection.bind_alternate_candidate(
+        plan["id"], "alternate-guid", client,
+    )
+
+    assert selected == again
+    assert selected["planSignature"] == plan["signature"]
+    assert selected["evidenceRevision"] == plan["evidenceRevision"]
+    assert selected["currentPlan"] is True
+    assert selected["liveGrabEnabled"] is False
+    assert selected["candidate"]["guid"] == "alternate-guid"
+    assert len(selected["candidateFingerprint"]) == 64
+    assert "nzbUrl" not in str(selected)
+    assert alternate_selection.alternate_selection_by_acquisition(failed_id) == selected
+    assert client.grabs == []
+    assert len(recent_ebook_acquisitions()) == 1
+
+    client.candidate["nzbUrl"] = "https://indexer.invalid/changed.nzb"
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="already has"):
+        alternate_selection.bind_alternate_candidate(plan["id"], "alternate-guid", client)
+    assert alternate_selection.alternate_selection_by_acquisition(failed_id) == selected
+
+    update_ebook_acquisition(failed_id, "failed", error="Unknown new failure")
+    assert alternate_selection.alternate_selection_by_acquisition(failed_id)[
+        "currentPlan"
+    ] is False
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="stale"):
+        alternate_selection.bind_alternate_candidate(plan["id"], "alternate-guid", client)
+    assert client.grabs == []
+
+
+def _selected_alternate_for_live_test(setup, monkeypatch):
+    client = setup["client"]
+    failed_id = create_ebook_acquisition(setup["result"], client.candidate)
+    update_ebook_acquisition(
+        failed_id, "failed",
+        error=(
+            "Bindery grab failed: Bindery POST /queue/grab returned HTTP 409: "
+            "already grabbed: this release has already been imported"
+        ),
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "observe")
+    plan = next(
+        item for item in run_observe_cycle()["plans"]
+        if item["planKind"] == "SELECT_ALTERNATE_REPLACEMENT"
+    )
+    monkeypatch.setattr(
+        alternate_candidate, "result_by_id", lambda result_id: setup["result"],
+    )
+    monkeypatch.setattr(
+        automatic_alternate, "result_by_id", lambda result_id: setup["result"],
+    )
+    client.candidate = {
+        **client.candidate,
+        "guid": "alternate-guid",
+        "title": "Ann Patchett - Bel Canto revised retail epub",
+    }
+    alternate_selection.bind_alternate_candidate(plan["id"], "alternate-guid", client)
+    preview = alternate_candidate.alternate_candidate_preview
+    monkeypatch.setattr(automatic_alternate, "BinderyClient", lambda: client)
+    monkeypatch.setattr(
+        automatic_alternate, "alternate_candidate_preview",
+        lambda acquisition_id, guid, supplied=None: preview(acquisition_id, guid, client),
+    )
+
+    def acknowledged_grab(book_id, candidate):
+        client.grabs.append((book_id, candidate["guid"]))
+        client.queue = {"items": [{
+            "id": 77, "bookId": book_id, "title": candidate["title"],
+            "protocol": candidate["protocol"], "status": "downloading",
+        }], "partial": False}
+        return {"queueItem": {"id": 77}}
+
+    monkeypatch.setattr(client, "grab", acknowledged_grab)
+    monkeypatch.setenv("BOOKGUARD_AUTOMATION_MODE", "automatic")
+    return failed_id, plan, client
+
+
+def test_guarded_alternate_grabs_once_and_retains_admission_gate(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, plan, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "")
+    with pytest.raises(automatic_runner.AutomaticExecutionBlocked) as blocked:
+        automatic_runner.run_automatic_cycle()
+    assert blocked.value.reason_code == "ACTION_NOT_ALLOWLISTED"
+    assert client.grabs == []
+    assert ebook_replacement_for_acquisition(parent_id) is None
+
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+    executed = automatic_runner.run_automatic_cycle()
+    child = ebook_replacement_for_acquisition(parent_id)
+    assert executed["state"] == "executed"
+    assert executed["externalMutationAttempted"] is True
+    assert child["status"] == "queued"
+    assert child["candidate_guid"] == "alternate-guid"
+    assert child["admission_id"] is None
+    assert ebook_acquisition_by_id(parent_id)["status"] == "failed"
+    assert client.grabs == [(42, "alternate-guid")]
+    assert automatic_runner.run_automatic_cycle()["state"] == "paused"
+    assert client.grabs == [(42, "alternate-guid")]
+
+
+def test_alternate_grab_proves_queue_when_response_omits_id(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, _, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+
+    def accepted_without_id(book_id, candidate):
+        client.grabs.append((book_id, candidate["guid"]))
+        client.queue = {"items": [{
+            "id": 77, "bookId": book_id, "title": candidate["title"],
+            "protocol": candidate["protocol"], "status": "downloading",
+        }], "partial": False}
+        return {"accepted": True}
+
+    monkeypatch.setattr(client, "grab", accepted_without_id)
+    outcome = automatic_runner.run_automatic_cycle()
+    child = ebook_replacement_for_acquisition(parent_id)
+
+    assert outcome["state"] == "executed"
+    assert child["status"] == "queued"
+    assert child["queue_id"] == 77
+    assert child["grab_response"]["id"] == 77
+    assert child["admission_id"] is None
+    assert client.grabs == [(42, "alternate-guid")]
+
+
+def test_alternate_grab_blocks_ambiguous_post_grab_queue_without_replay(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, _, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+
+    def accepted_with_ambiguous_queue(book_id, candidate):
+        client.grabs.append((book_id, candidate["guid"]))
+        client.queue = {"items": [{
+            "id": number, "bookId": book_id, "title": candidate["title"],
+            "protocol": candidate["protocol"], "status": "downloading",
+        } for number in (77, 78)], "partial": False}
+        return {"accepted": True}
+
+    monkeypatch.setattr(client, "grab", accepted_with_ambiguous_queue)
+    outcome = automatic_runner.run_automatic_cycle()
+    child = ebook_replacement_for_acquisition(parent_id)
+
+    assert outcome["state"] == "blocked"
+    assert "Exactly one current queue item" in outcome["message"]
+    assert child["status"] == "grab_requested"
+    assert child["queue_id"] is None
+    assert client.grabs == [(42, "alternate-guid")]
+    automatic_runner.run_automatic_cycle()
+    assert client.grabs == [(42, "alternate-guid")]
+
+
+@pytest.mark.parametrize("acknowledgement", [
+    {"queueItem": {"id": 78}},
+    {"id": 77, "queueId": 78},
+    {"queueItem": {"id": 77, "queueId": 78}},
+    {"queueItem": {"id": -1}},
+    {"queueItem": {"id": 77.5}},
+    {"queueItem": {"id": True}},
+])
+def test_alternate_grab_blocks_unproven_acknowledgement_without_replay(
+    acquisition_setup, monkeypatch, acknowledgement,
+):
+    parent_id, _, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+    original_grab = client.grab
+
+    def conflicting_grab(book_id, candidate):
+        original_grab(book_id, candidate)
+        return acknowledgement
+
+    monkeypatch.setattr(client, "grab", conflicting_grab)
+    blocked = automatic_runner.run_automatic_cycle()
+    child = ebook_replacement_for_acquisition(parent_id)
+
+    assert blocked["state"] == "blocked"
+    assert child["status"] == "grab_requested"
+    assert child["queue_id"] is None
+    assert child["admission_id"] is None
+    assert client.grabs == [(42, "alternate-guid")]
+    automatic_runner.run_automatic_cycle()
+    assert client.grabs == [(42, "alternate-guid")]
+
+
+def test_alternate_queue_proof_rejects_conflicting_ids():
+    client = FakeClient()
+    client.queue = {"items": [{
+        "id": 77, "queueId": 78, "bookId": 42,
+        "title": client.candidate["title"], "protocol": "usenet",
+        "status": "downloading",
+    }], "partial": False}
+
+    with pytest.raises(acquisition.AcquisitionSafetyError, match="identity is unproven"):
+        automatic_alternate._prove_queue_after_grab(
+            client, 42, client.candidate["title"], "usenet",
+        )
+
+
+@pytest.mark.parametrize("conflicting_queue_id", [None, 78])
+def test_interrupted_alternate_requires_consistent_queue_proof_without_replay(
+    acquisition_setup, monkeypatch, conflicting_queue_id,
+):
+    parent_id, plan, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+    executor = automatic_alternate._EXECUTOR
+    for index in range(3):
+        record_recovery_step_success(plan["id"], index)
+    ready = recovery_plan_by_id(plan["id"])
+    boundary = executor.revalidate(ready, ready["steps"][3])
+    child_id = create_ebook_acquisition(
+        acquisition_setup["result"], client.candidate,
+        replacement_for_acquisition_id=parent_id,
+    )
+    update_ebook_acquisition(child_id, "grab_requested")
+    client.queue = {
+        "items": [{
+            "id": 77, "bookId": 42, "title": client.candidate["title"],
+            "protocol": "usenet", "status": "downloading",
+            **({"queueId": conflicting_queue_id} if conflicting_queue_id else {}),
+        }],
+        "partial": False,
+    }
+    from app import automatic_execution as core
+    core._record(
+        ready, "request_alternate_grab", 3, "running",
+        boundary=boundary, increment_attempt=True,
+    )
+
+    adopted = automatic_runner.run_automatic_cycle()
+
+    assert client.grabs == []
+    if conflicting_queue_id:
+        assert adopted["state"] == "blocked"
+        assert "identity is unproven" in adopted["message"]
+        assert ebook_replacement_for_acquisition(parent_id)["queue_id"] is None
+    else:
+        assert adopted["state"] == "reconciled"
+        assert ebook_replacement_for_acquisition(parent_id)["queue_id"] == 77
+    assert ebook_replacement_for_acquisition(parent_id)["admission_id"] is None
+
+
+@pytest.mark.parametrize("evidence_change", [
+    "missing", "wrong_book", "changed_bytes", "missing_queue_id", "queue_downloading",
+])
+def test_interrupted_verified_alternate_requires_exact_staged_proof(
+    acquisition_setup, monkeypatch, evidence_change,
+):
+    parent_id, plan, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    executor = automatic_alternate._EXECUTOR
+    boundary = executor.revalidate(plan, {"code": "request_alternate_grab"})
+    child_id = create_ebook_acquisition(
+        acquisition_setup["result"], client.candidate,
+        replacement_for_acquisition_id=parent_id,
+    )
+    staged = acquisition_setup["staging"] / "Bel Canto - Ann Patchett.epub"
+    _write_epub(staged, "Bel Canto", "Ann Patchett")
+    digest = hashlib.sha256(staged.read_bytes()).hexdigest()
+    verification = {
+        "safeToAdmit": True, "stableDuringVerification": True,
+        "verdict": "VERIFIED_CORRECT", "bookId": 42,
+        "relativePath": staged.name, "size": staged.stat().st_size,
+        "sha256": digest, "admissionBlockers": [],
+    }
+    if evidence_change == "missing":
+        verification = None
+    elif evidence_change == "wrong_book":
+        verification["bookId"] = 99
+    update_ebook_acquisition(
+        child_id, "verified",
+        queue_id=None if evidence_change == "missing_queue_id" else 77,
+        staged_relative_path=staged.name, staged_sha256=digest,
+        verification=verification,
+    )
+    if evidence_change == "changed_bytes":
+        staged.write_bytes(staged.read_bytes() + b"changed")
+    client.queue = {"items": [{
+        "id": 77, "bookId": 42, "title": client.candidate["title"],
+        "protocol": "usenet",
+        "status": "downloading" if evidence_change == "queue_downloading"
+        else "importExternal",
+    }], "partial": False}
+
+    with pytest.raises(automatic_alternate.core.AutomaticExecutionBlocked) as exc:
+        executor.reconcile_uncertain(
+            plan, {"code": "request_alternate_grab"}, {"boundary": boundary},
+        )
+
+    assert exc.value.reason_code == "UNCERTAIN_EXTERNAL_OUTCOME"
+    assert client.grabs == []
+    assert ebook_replacement_for_acquisition(parent_id)["admission_id"] is None
+
+
+def test_interrupted_verified_alternate_adopts_exact_safe_snapshot(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, plan, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    executor = automatic_alternate._EXECUTOR
+    boundary = executor.revalidate(plan, {"code": "request_alternate_grab"})
+    child_id = create_ebook_acquisition(
+        acquisition_setup["result"], client.candidate,
+        replacement_for_acquisition_id=parent_id,
+    )
+    staged = acquisition_setup["staging"] / "Bel Canto - Ann Patchett.epub"
+    _write_epub(staged, "Bel Canto", "Ann Patchett")
+    digest = hashlib.sha256(staged.read_bytes()).hexdigest()
+    update_ebook_acquisition(
+        child_id, "verified", queue_id=77,
+        staged_relative_path=staged.name, staged_sha256=digest,
+        verification={
+            "safeToAdmit": True, "stableDuringVerification": True,
+            "verdict": "VERIFIED_CORRECT", "bookId": 42,
+            "relativePath": staged.name, "size": staged.stat().st_size,
+            "sha256": digest, "admissionBlockers": [],
+        },
+    )
+    client.queue = {"items": [{
+        "id": 77, "bookId": 42, "title": client.candidate["title"],
+        "protocol": "usenet", "status": "importExternal",
+    }], "partial": False}
+
+    adopted = executor.reconcile_uncertain(
+        plan, {"code": "request_alternate_grab"}, {"boundary": boundary},
+    )
+
+    assert adopted["status"] == "verified"
+    assert adopted["admissionAttempted"] is False
+    assert client.grabs == []
+
+
+def test_alternate_grab_refuses_queue_arriving_during_final_search(
+    acquisition_setup, monkeypatch,
+):
+    parent_id, _, client = _selected_alternate_for_live_test(
+        acquisition_setup, monkeypatch,
+    )
+    monkeypatch.setenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "request_alternate_grab")
+    original_search = client.search_book
+    searches = 0
+
+    def competing_search(book_id):
+        nonlocal searches
+        searches += 1
+        result = original_search(book_id)
+        if searches == 6:
+            # The last search succeeds, but another actor now owns the queue.
+            client.queue = {"items": [{
+                "id": 91, "bookId": 99, "title": "Unrelated release",
+                "protocol": "usenet", "status": "downloading",
+            }], "partial": False}
+        return result
+
+    monkeypatch.setattr(client, "search_book", competing_search)
+    outcome = automatic_runner.run_automatic_cycle()
+
+    assert searches == 6
+    assert outcome["state"] == "blocked"
+    assert "binderyQueueIdle" in outcome["message"]
+    assert client.grabs == []
+    assert ebook_replacement_for_acquisition(parent_id) is None
 
 
 def test_reconcile_verifies_exactly_one_staged_ebook(acquisition_setup):

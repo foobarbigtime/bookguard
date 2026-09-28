@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import errno
 from pathlib import Path
 import sqlite3
 import zipfile
@@ -9,9 +10,12 @@ import pytest
 
 import app.admission as admission
 import app.ebook_extraction as ebook_extraction
+from app.recovery_classifier import classify_admission_failure
+from app.recovery_planner import _definition
 from app.db import (
     ebook_admission_by_id,
     init_local_db,
+    local_conn,
     recent_ebook_admissions,
     update_ebook_admission,
 )
@@ -262,6 +266,69 @@ def test_wrong_snapshot_is_not_published(admission_setup):
         )
 
     assert not (setup["admission_root"] / setup["relative"]).exists()
+    assert recent_ebook_admissions()[0]["failure_stage"] == "before_publication"
+
+
+def test_prepublication_failure_has_separately_guarded_retirement_plan(admission_setup):
+    setup = admission_setup
+    destination = setup["admission_root"] / setup["relative"]
+
+    def refuse_before_publish(_admission_id):
+        raise admission.AdmissionSafetyError("injected pre-publication stop")
+
+    with pytest.raises(admission.AdmissionSafetyError, match="pre-publication stop"):
+        admission.admit_staged_ebook(
+            setup["result"], setup["staged"].name, FakeClient(),
+            before_publish=refuse_before_publish, request_scan=False,
+        )
+
+    record = recent_ebook_admissions()[0]
+    assert record["status"] == "failed"
+    assert record["failure_stage"] == "before_publication"
+    assert record["publication_method"] is None
+    assert record["staged_sha256"]
+    assert not destination.exists()
+    classification = classify_admission_failure(
+        record["status"], record["error"], record["publication_method"],
+        failure_stage=record["failure_stage"], verified_snapshot=True,
+    )
+    assert classification.plan_kind == "REVIEW_ADMISSION_PREPUBLICATION"
+    assert classification.retry_same_operation is False
+    assert classification.max_retries == 0
+    plan_kind, _, steps = _definition({
+        "decision": "would_recover_admission_failure",
+        "reasonCode": classification.reason_code,
+    }, {})
+    assert plan_kind == classification.plan_kind
+    assert [step["externalMutation"] for step in steps] == [False, False, True]
+    assert steps[-1]["code"] == "retire_proven_prepublication_failure"
+
+
+def test_publication_started_failure_is_not_classified_as_prepublication(
+    admission_setup, monkeypatch,
+):
+    setup = admission_setup
+    destination = setup["admission_root"] / setup["relative"]
+
+    def uncertain_publish(_snapshot, target):
+        target.write_bytes(b"possibly published")
+        raise OSError("injected uncertain post-publication failure")
+
+    monkeypatch.setattr(admission, "_publish_no_replace", uncertain_publish)
+    with pytest.raises(admission.AdmissionSafetyError, match="uncertain"):
+        admission.admit_staged_ebook(
+            setup["result"], setup["staged"].name, FakeClient(),
+            request_scan=False,
+        )
+
+    record = recent_ebook_admissions()[0]
+    assert record["status"] == "failed"
+    assert record["failure_stage"] is None
+    assert destination.read_bytes() == b"possibly published"
+    assert classify_admission_failure(
+        record["status"], record["error"], record["publication_method"],
+        failure_stage=record["failure_stage"], verified_snapshot=True,
+    ) is None
 
 
 def test_existing_destination_is_never_overwritten(admission_setup):
@@ -354,8 +421,100 @@ def test_scan_failure_keeps_verified_library_copy_for_recovery(admission_setup):
     assert response["binderyScan"] == "request_failed"
     assert (setup["admission_root"] / setup["relative"]).is_file()
     record = ebook_admission_by_id(response["admissionId"])
-    assert record["status"] == "published"
+    assert response["status"] == "scan_request_failed"
+    assert record["status"] == "scan_request_failed"
     assert "unavailable" in record["error"]
+
+
+def test_uncertain_scan_adopts_only_independently_proven_owner(
+    admission_setup, monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    client.scan_error = admission.BinderyClientError("Bindery unavailable")
+    response = admission.admit_staged_ebook(
+        setup["result"], setup["staged"].name, client,
+    )
+    scans = client.scan_requests
+    staged_hash = hashlib.sha256(setup["staged"].read_bytes()).hexdigest()
+    published = setup["admission_root"] / setup["relative"]
+
+    with pytest.raises(admission.AdmissionSafetyError, match="another scan is refused"):
+        admission.reconcile_admission(
+            response["admissionId"], client, allow_scan=False,
+        )
+    assert client.scan_requests == scans
+    assert hashlib.sha256(published.read_bytes()).hexdigest() == staged_hash
+
+    client.registered_path = setup["result"]["stored_path"]
+    monkeypatch.setattr(admission, "associations_inside_path",
+                        lambda stored_path: [])
+    with pytest.raises(admission.AdmissionSafetyError, match="independently proven"):
+        admission.reconcile_admission(
+            response["admissionId"], client, allow_scan=False,
+        )
+    assert client.scan_requests == scans
+
+    monkeypatch.setattr(admission, "associations_inside_path",
+                        lambda stored_path: [{
+                            "file_id": 91, "book_id": 42, "format": "ebook",
+                            "stored_path": stored_path,
+                        }])
+    outcome = admission.reconcile_admission(
+        response["admissionId"], client, allow_scan=False,
+    )
+    assert outcome["status"] == "registered"
+    assert client.scan_requests == scans
+    assert hashlib.sha256(published.read_bytes()).hexdigest() == staged_hash
+
+
+def test_scan_failure_has_separate_proof_only_recovery_plan(admission_setup):
+    from app.observe import _admission_decisions
+    from app.recovery_planner import _build_plan
+
+    setup = admission_setup
+    client = FakeClient()
+    client.scan_error = admission.BinderyClientError("Bindery unavailable")
+    response = admission.admit_staged_ebook(
+        setup["result"], setup["staged"].name, client,
+    )
+    with local_conn() as conn:
+        decision = next(item for item in _admission_decisions(conn, 100)
+                        if item["subjectId"] == str(response["admissionId"]))
+        plan = _build_plan(conn, decision)
+
+    assert decision["reasonCode"] == "REGISTRATION_SCAN_OUTCOME_UNKNOWN"
+    assert plan["planKind"] == "RECONCILE_ADMISSION"
+    assert plan["steps"][1]["code"] == "reconcile_known_admission"
+
+
+def test_failed_scan_preview_requires_exact_registration_proof(
+    admission_setup, monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    client.scan_error = admission.BinderyClientError("Bindery unavailable")
+    response = admission.admit_staged_ebook(
+        setup["result"], setup["staged"].name, client,
+    )
+    monkeypatch.setattr(admission, "result_by_id",
+                        lambda _: dict(setup["result"]))
+    monkeypatch.setattr(admission, "associations_inside_path",
+                        lambda _: [])
+    preview = admission.admission_reconcile_preview(response["admissionId"], client)
+    assert preview["safe"] is True
+    assert preview["scanRequestFailureProven"] is True
+    assert preview["registrationState"] == "scan_required"
+
+    client.registered_path = setup["result"]["stored_path"]
+    monkeypatch.setattr(admission, "associations_inside_path",
+                        lambda stored_path: [{
+                            "file_id": 91, "book_id": 42, "format": "ebook",
+                            "stored_path": stored_path,
+                        }])
+    preview = admission.admission_reconcile_preview(response["admissionId"], client)
+    assert preview["safe"] is True
+    assert preview["registrationState"] == "registered"
 
 
 def test_reconcile_confirms_exact_bindery_path(admission_setup):
@@ -789,7 +948,29 @@ def test_atomic_publish_falls_back_to_private_snapshot_link(tmp_path, monkeypatc
     assert not private.exists()
 
 
-def test_existing_admission_table_gains_publication_method(tmp_path, monkeypatch):
+def test_unsupported_no_replace_records_verified_failure_stage(
+    admission_setup, monkeypatch,
+):
+    setup = admission_setup
+    monkeypatch.setattr(admission, "_rename_no_replace", lambda *args: False)
+    monkeypatch.setattr(admission.os, "link", lambda *args, **kwargs: (
+        _ for _ in ()).throw(OSError(errno.EINVAL, "Invalid argument")))
+
+    with pytest.raises(admission.AdmissionSafetyError, match="Invalid argument"):
+        admission.admit_staged_ebook(
+            setup["result"], setup["staged"].name, FakeClient(),
+        )
+
+    records = recent_ebook_admissions()
+    assert len(records) == 1
+    assert records[0]["status"] == "failed"
+    assert records[0]["failure_stage"] == "no_replace_unsupported"
+    assert records[0]["staged_sha256"]
+    assert records[0]["verification"]
+    assert not (setup["admission_root"] / setup["relative"]).exists()
+
+
+def test_existing_admission_table_gains_publication_provenance(tmp_path, monkeypatch):
     monkeypatch.setattr(admission.settings, "config_dir", str(tmp_path))
     database = tmp_path / "bookguard.db"
     with sqlite3.connect(database) as connection:
@@ -821,3 +1002,117 @@ def test_existing_admission_table_gains_publication_method(tmp_path, monkeypatch
             ).fetchall()
         }
     assert "publication_method" in columns
+    assert "failure_stage" in columns
+
+
+
+def test_admission_reconcile_preview_allows_only_consistent_scan_pending_state(
+    admission_setup,
+    monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+
+    monkeypatch.setattr(
+        admission,
+        "result_by_id",
+        lambda result_id: dict(setup["result"]),
+    )
+    monkeypatch.setattr(
+        admission,
+        "associations_inside_path",
+        lambda stored_path: [],
+    )
+
+    preview = admission.admission_reconcile_preview(
+        response["admissionId"],
+        client,
+    )
+
+    assert preview["safe"] is True
+    assert preview["status"] == "scan_requested"
+    assert preview["registrationState"] == "scan_required"
+    assert preview["checks"]["resultIdentityUnchanged"] is True
+    assert preview["checks"]["publishedBytesCurrent"] is True
+    assert preview["checks"]["stagedBytesCurrent"] is True
+    assert preview["checks"]["binderyOwnershipConsistent"] is True
+
+
+def test_admission_reconcile_preview_requires_api_and_database_owner_agreement(
+    admission_setup,
+    monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+    client.registered_path = setup["result"]["stored_path"]
+
+    monkeypatch.setattr(
+        admission,
+        "result_by_id",
+        lambda result_id: dict(setup["result"]),
+    )
+    monkeypatch.setattr(
+        admission,
+        "associations_inside_path",
+        lambda stored_path: [],
+    )
+
+    preview = admission.admission_reconcile_preview(
+        response["admissionId"],
+        client,
+    )
+
+    assert preview["safe"] is False
+    assert preview["registrationState"] == "inconsistent"
+    assert preview["checks"]["binderyOwnershipConsistent"] is False
+
+
+def test_admission_reconcile_preview_accepts_exact_registered_owner(
+    admission_setup,
+    monkeypatch,
+):
+    setup = admission_setup
+    client = FakeClient()
+    response = admission.admit_staged_ebook(
+        setup["result"],
+        setup["staged"].name,
+        client,
+    )
+    client.registered_path = setup["result"]["stored_path"]
+
+    monkeypatch.setattr(
+        admission,
+        "result_by_id",
+        lambda result_id: dict(setup["result"]),
+    )
+    monkeypatch.setattr(
+        admission,
+        "associations_inside_path",
+        lambda stored_path: [{
+            "file_id": 91,
+            "book_id": setup["result"]["book_id"],
+            "format": "ebook",
+            "stored_path": stored_path,
+            "title": setup["result"]["title"],
+            "author": setup["result"]["author"],
+        }],
+    )
+
+    preview = admission.admission_reconcile_preview(
+        response["admissionId"],
+        client,
+    )
+
+    assert preview["safe"] is True
+    assert preview["registrationState"] == "registered"
+    assert preview["checks"]["binderyOwnershipConsistent"] is True

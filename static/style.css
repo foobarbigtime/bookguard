@@ -129,6 +129,26 @@ td { font-size: .86rem; }
 .candidate-meta { display: flex; flex-wrap: wrap; gap: .35rem .8rem; margin-top: .35rem; color: var(--muted); font-size: .76rem; }
 .candidate-reason { margin-top: .35rem; color: var(--muted); font-size: .8rem; }
 
+/* Operator attention dashboard */
+.attention-summary { display:grid; gap:.8rem; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); margin-bottom:1rem; }
+.attention-table { min-width:1050px; }
+.attention-zero { padding:2rem 1rem; text-align:center; }
+.attention-zero strong { display:block; margin-bottom:.35rem; color:#a6e3bc; }
+.attention-table .button-link { display:inline-block; border-color:var(--border); background:#101820; white-space:nowrap; }
+
+/* Readiness diagnostics */
+.diagnostic-gates { display:grid; gap:.8rem; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); margin-bottom:1rem; }
+.diagnostic-gate strong { font-size:1.05rem; }
+.diagnostic-sections { display:grid; gap:1rem; }
+.diagnostic-section { overflow:hidden; }
+.diagnostic-blockers { display:grid; gap:.65rem; padding:0 1rem 1rem; }
+.diagnostic-blocker { border:1px solid rgba(224,93,93,.38); background:rgba(224,93,93,.055); border-radius:.65rem; padding:.8rem .9rem; }
+.diagnostic-blocker strong { display:block; margin-bottom:.3rem; }
+.diagnostic-blocker small { margin-top:.28rem; line-height:1.4; }
+.diagnostic-blocker code { display:inline-block; margin-top:.45rem; font-size:.72rem; color:var(--muted); }
+.diagnostic-ready { padding:0 1rem 1rem; }
+.diagnostic-ready strong { display:block; color:#a6e3bc; margin-bottom:.3rem; }
+
 /* Settings */
 .settings-main { max-width: 1250px; }
 .settings-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; margin-bottom: 1rem; }
@@ -187,3 +207,66 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #4e8bc7
   .reason-chips { padding: .65rem .7rem .75rem; }
   .candidate-card { grid-template-columns: 1fr; }
 }
+
+.diagnostic-environment { margin-bottom:1rem; overflow:hidden; }
+.diagnostic-environment-grid { display:grid; gap:.8rem; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); padding:0 1rem 1rem; }
+.diagnostic-environment-card { border:1px solid var(--border); background:#101820; border-radius:.65rem; padding:.8rem .9rem; }
+.diagnostic-environment-card strong { display:block; margin:.25rem 0; }
+.diagnostic-environment-card small { margin-top:.25rem; line-height:1.4; }
+.diagnostic-environment-card .workflow-state { margin-top:.55rem; }
+.diagnostic-mount-table { min-width:860px; }
+
+
+/* Unified operation history */
+.history-card { overflow:hidden; }
+.history-table { min-width:1180px; }
+.history-meta { text-align:right; }
+.history-meta strong { display:block; font-size:1.2rem; }
+.history-time { white-space:nowrap; }
+.history-table .path { max-width:360px; overflow-wrap:anywhere; }
+.history-table .why-cell { min-width:220px; }
+
+.history-controls { display:flex; align-items:center; flex-wrap:wrap; gap:.5rem .75rem; padding:.75rem 1rem; border-top:1px solid var(--border); border-bottom:1px solid var(--border); background:#101820; }
+.history-controls label { font-size:.78rem; color:var(--muted); }
+.history-controls select { min-width:220px; border:1px solid var(--border); background:var(--panel-2); color:var(--text); border-radius:.5rem; padding:.48rem .6rem; }
+.history-controls small { margin-left:auto; }
+.history-time small { margin-top:.18rem; font-size:.68rem; }
+.history-table td:nth-child(2) { min-width:135px; }
+.history-table td:nth-child(3) { min-width:145px; }
+.history-table td:nth-child(4) { min-width:230px; }
+
+
+/* Read-only operation details */
+.history-detail-link { color:#bad8f6; text-decoration:none; }
+.history-detail-link:hover { text-decoration:underline; }
+.history-detail-main { max-width:1500px; }
+.history-detail-toolbar { margin:0 0 1rem; }
+.history-detail-card { margin-bottom:1rem; }
+.history-detail-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:.8rem; padding:0 1rem 1rem; }
+.history-detail-summary article, .history-detail-field { min-width:0; border:1px solid var(--border); background:#101820; border-radius:.6rem; padding:.75rem .85rem; }
+.history-detail-summary strong { display:block; margin:.25rem 0; }
+.history-detail-summary code { display:block; margin-top:.3rem; overflow-wrap:anywhere; white-space:normal; }
+.history-detail-error { margin:0 1rem 1rem; border:1px solid rgba(224,93,93,.45); background:rgba(224,93,93,.07); border-radius:.65rem; padding:.8rem .9rem; }
+.history-detail-error strong { color:#f18b8b; }
+.history-detail-error p { margin-top:.35rem; overflow-wrap:anywhere; }
+.history-detail-note { margin:0 1rem 1rem; }
+.history-detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:.7rem; padding:0 1rem 1rem; }
+.history-detail-field span { display:block; color:var(--muted); font-size:.72rem; margin-bottom:.3rem; }
+.history-detail-field strong { display:block; font-size:.86rem; overflow-wrap:anywhere; white-space:pre-wrap; }
+.history-detail-evidence { display:grid; gap:1rem; }
+.history-detail-json { margin:0; padding:1rem; max-height:520px; overflow:auto; border-top:1px solid var(--border); background:#0d141c; color:#c9d5e1; font-size:.78rem; line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+.history-detail-summary-note { margin:0 1rem 1rem; border:1px solid rgba(40,103,178,.42); background:rgba(40,103,178,.07); border-radius:.65rem; padding:.8rem .9rem; }
+.history-detail-summary-note strong { display:block; color:#bad8f6; }
+.history-detail-summary-note p { margin-top:.35rem; line-height:1.45; }
+
+
+/* Operator failure guidance */
+.operator-guidance { border:1px solid rgba(214,163,59,.45); background:rgba(214,163,59,.065); border-radius:.65rem; padding:.8rem .9rem; }
+.operator-guidance strong { display:block; color:#edc66e; margin-bottom:.3rem; }
+.operator-guidance small { margin-top:.28rem; line-height:1.45; }
+.operator-guidance.compact { margin-top:.55rem; padding:.55rem .65rem; }
+.history-detail-guidance { margin:0 1rem 1rem; }
+.attention-message { overflow-wrap:anywhere; }
+.attention-actions { min-width:190px; }
+.attention-actions .button-link { display:inline-block; margin:.12rem .2rem .12rem 0; }

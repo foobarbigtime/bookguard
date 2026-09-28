@@ -199,11 +199,96 @@ def init_local_db() -> None:
                 local_path TEXT NOT NULL,
                 status TEXT NOT NULL,
                 publication_method TEXT,
+                failure_stage TEXT,
                 verification_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 error TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS automation_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signature TEXT NOT NULL UNIQUE,
+                policy_version TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                subject_kind TEXT NOT NULL,
+                subject_id TEXT NOT NULL,
+                result_id INTEGER,
+                book_id INTEGER,
+                title TEXT NOT NULL DEFAULT '',
+                author TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                reason_code TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                observed_count INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS recovery_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signature TEXT NOT NULL UNIQUE,
+                planner_version TEXT NOT NULL,
+                subject_kind TEXT NOT NULL,
+                subject_id TEXT NOT NULL,
+                result_id INTEGER,
+                book_id INTEGER,
+                title TEXT NOT NULL DEFAULT '',
+                author TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                plan_kind TEXT NOT NULL,
+                reason_code TEXT NOT NULL,
+                state TEXT NOT NULL,
+                evidence_revision TEXT NOT NULL,
+                preconditions_json TEXT NOT NULL,
+                steps_json TEXT NOT NULL,
+                current_step INTEGER NOT NULL DEFAULT 0,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                next_retry_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                final_outcome TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS recovery_plan_transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                event TEXT NOT NULL,
+                from_state TEXT NOT NULL,
+                to_state TEXT NOT NULL,
+                from_step INTEGER NOT NULL,
+                to_step INTEGER NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS automatic_executions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                plan_signature TEXT NOT NULL,
+                action_code TEXT NOT NULL,
+                step_index INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                evidence_revision TEXT NOT NULL,
+                boundary_json TEXT NOT NULL DEFAULT '{}',
+                external_result_json TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id),
+                UNIQUE(plan_signature, action_code, step_index)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_automatic_executions_plan
+                ON automatic_executions(plan_id, step_index, id);
 
             CREATE TABLE IF NOT EXISTS ebook_acquisitions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,6 +299,8 @@ def init_local_db() -> None:
                 candidate_title TEXT NOT NULL,
                 candidate_indexer TEXT,
                 candidate_protocol TEXT,
+                replacement_for_acquisition_id INTEGER,
+                replacement_for_quarantine_plan_id INTEGER,
                 status TEXT NOT NULL,
                 queue_id INTEGER,
                 queue_status TEXT,
@@ -228,6 +315,39 @@ def init_local_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 error TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS alternate_candidate_selections (
+                acquisition_id INTEGER PRIMARY KEY,
+                plan_id INTEGER NOT NULL,
+                plan_signature TEXT NOT NULL,
+                evidence_revision TEXT NOT NULL,
+                candidate_guid TEXT NOT NULL,
+                candidate_title TEXT NOT NULL,
+                candidate_protocol TEXT NOT NULL,
+                candidate_indexer TEXT NOT NULL,
+                candidate_fingerprint TEXT NOT NULL,
+                selected_at TEXT NOT NULL,
+                FOREIGN KEY(acquisition_id) REFERENCES ebook_acquisitions(id),
+                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS quarantine_replacement_selections (
+                result_id INTEGER PRIMARY KEY,
+                plan_id INTEGER NOT NULL,
+                plan_signature TEXT NOT NULL,
+                evidence_revision TEXT NOT NULL,
+                quarantine_execution_id INTEGER NOT NULL,
+                quarantine_sha256 TEXT NOT NULL,
+                candidate_guid TEXT NOT NULL,
+                candidate_title TEXT NOT NULL,
+                candidate_protocol TEXT NOT NULL,
+                candidate_indexer TEXT NOT NULL,
+                candidate_fingerprint TEXT NOT NULL,
+                selected_at TEXT NOT NULL,
+                FOREIGN KEY(result_id) REFERENCES scan_results(id),
+                FOREIGN KEY(plan_id) REFERENCES recovery_plans(id),
+                FOREIGN KEY(quarantine_execution_id) REFERENCES automatic_executions(id)
             );
             """
         )
@@ -247,6 +367,44 @@ def init_local_db() -> None:
         if "publication_method" not in admission_columns:
             conn.execute(
                 "ALTER TABLE ebook_admissions ADD COLUMN publication_method TEXT"
+            )
+        if "failure_stage" not in admission_columns:
+            conn.execute(
+                "ALTER TABLE ebook_admissions ADD COLUMN failure_stage TEXT"
+            )
+
+        acquisition_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(ebook_acquisitions)").fetchall()
+        }
+        if "replacement_for_acquisition_id" not in acquisition_columns:
+            conn.execute(
+                "ALTER TABLE ebook_acquisitions "
+                "ADD COLUMN replacement_for_acquisition_id INTEGER"
+            )
+        if "replacement_for_quarantine_plan_id" not in acquisition_columns:
+            conn.execute(
+                "ALTER TABLE ebook_acquisitions "
+                "ADD COLUMN replacement_for_quarantine_plan_id INTEGER"
+            )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ebook_replacement_parent "
+            "ON ebook_acquisitions(replacement_for_acquisition_id) "
+            "WHERE replacement_for_acquisition_id IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_replacement_plan "
+            "ON ebook_acquisitions(replacement_for_quarantine_plan_id) "
+            "WHERE replacement_for_quarantine_plan_id IS NOT NULL"
+        )
+
+        recovery_plan_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(recovery_plans)").fetchall()
+        }
+        if "final_outcome" not in recovery_plan_columns:
+            conn.execute(
+                "ALTER TABLE recovery_plans ADD COLUMN final_outcome TEXT"
             )
 
         conn.executescript(
@@ -269,6 +427,24 @@ def init_local_db() -> None:
                 ON ebook_admissions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_admissions_result
                 ON ebook_admissions(result_id);
+            CREATE INDEX IF NOT EXISTS idx_automation_observations_seen
+                ON automation_observations(last_seen_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_automation_observations_subject
+                ON automation_observations(subject_kind, subject_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_automation_observations_decision
+                ON automation_observations(decision, last_seen_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plans_updated
+                ON recovery_plans(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plans_subject
+                ON recovery_plans(subject_kind, subject_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plans_state
+                ON recovery_plans(state, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plans_result
+                ON recovery_plans(result_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plan_transitions_plan
+                ON recovery_plan_transitions(plan_id, id);
+            CREATE INDEX IF NOT EXISTS idx_recovery_plan_transitions_created
+                ON recovery_plan_transitions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_created
                 ON ebook_acquisitions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ebook_acquisitions_result
@@ -528,6 +704,7 @@ def update_ebook_admission(
     *,
     staged_sha256: str | None = None,
     publication_method: str | None = None,
+    failure_stage: str | None = None,
     verification: dict | None = None,
     error: str | None = None,
 ) -> None:
@@ -537,6 +714,7 @@ def update_ebook_admission(
             UPDATE ebook_admissions
             SET status=?, staged_sha256=COALESCE(?, staged_sha256),
                 publication_method=COALESCE(?, publication_method),
+                failure_stage=COALESCE(?, failure_stage),
                 verification_json=COALESCE(?, verification_json),
                 updated_at=?, error=?
             WHERE id=?
@@ -545,6 +723,7 @@ def update_ebook_admission(
                 status,
                 staged_sha256,
                 publication_method,
+                failure_stage,
                 json.dumps(verification, ensure_ascii=False) if verification is not None else None,
                 utc_now(),
                 error,
@@ -597,6 +776,9 @@ def _decode_ebook_acquisition(row) -> dict:
 def create_ebook_acquisition(
     result: dict,
     candidate: dict,
+    *,
+    replacement_for_acquisition_id: int | None = None,
+    replacement_for_quarantine_plan_id: int | None = None,
 ) -> int:
     now = utc_now()
     with local_conn() as conn:
@@ -604,9 +786,10 @@ def create_ebook_acquisition(
             """
             INSERT INTO ebook_acquisitions(
                 result_id, scan_id, book_id, candidate_guid, candidate_title,
-                candidate_indexer, candidate_protocol, status, created_at,
-                updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'preparing', ?, ?)
+                candidate_indexer, candidate_protocol,
+                replacement_for_acquisition_id,
+                replacement_for_quarantine_plan_id, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', ?, ?)
             """,
             (
                 result["id"],
@@ -616,12 +799,34 @@ def create_ebook_acquisition(
                 str(candidate.get("title") or ""),
                 str(candidate.get("indexerName") or candidate.get("indexer") or ""),
                 str(candidate.get("protocol") or ""),
+                replacement_for_acquisition_id,
+                replacement_for_quarantine_plan_id,
                 now,
                 now,
             ),
         )
         conn.commit()
         return int(cursor.lastrowid)
+
+
+def ebook_replacement_for_acquisition(acquisition_id: int) -> dict | None:
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM ebook_acquisitions "
+            "WHERE replacement_for_acquisition_id=? LIMIT 1",
+            (int(acquisition_id),),
+        ).fetchone()
+    return _decode_ebook_acquisition(row) if row else None
+
+
+def ebook_replacement_for_quarantine_plan(plan_id: int) -> dict | None:
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM ebook_acquisitions "
+            "WHERE replacement_for_quarantine_plan_id=? LIMIT 1",
+            (int(plan_id),),
+        ).fetchone()
+    return _decode_ebook_acquisition(row) if row else None
 
 
 def update_ebook_acquisition(
@@ -679,6 +884,36 @@ def update_ebook_acquisition(
                 error,
                 acquisition_id,
             ),
+        )
+        conn.commit()
+
+
+def note_ebook_acquisition_admission_blocked(acquisition_id: int, error: str) -> None:
+    """Record a refusal only while another worker has not admitted this item."""
+    with local_conn() as conn:
+        conn.execute(
+            """UPDATE ebook_acquisitions SET error=?, updated_at=?
+               WHERE id=? AND status='verified' AND admission_id IS NULL""",
+            (str(error), utc_now(), int(acquisition_id)),
+        )
+        conn.commit()
+
+
+def reset_ebook_acquisition_for_retry(acquisition_id: int) -> None:
+    """Clear attempt-specific queue state before retrying the same durable acquisition."""
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ebook_acquisitions
+            SET status='grab_requested',
+                queue_id=NULL,
+                queue_status=NULL,
+                grab_response_json=NULL,
+                updated_at=?,
+                error=NULL
+            WHERE id=?
+            """,
+            (utc_now(), int(acquisition_id)),
         )
         conn.commit()
 

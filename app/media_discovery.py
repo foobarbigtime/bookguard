@@ -7,7 +7,11 @@ from typing import TypeVar
 
 
 AUDIO_EXTENSIONS = frozenset(
-    {".mp3", ".flac", ".m4a", ".m4b", ".aac", ".ogg", ".opus", ".wav", ".mp4"}
+    {
+        ".mp3", ".flac", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".opus",
+        ".wav", ".mp4", ".wma", ".aif", ".aiff", ".ape", ".mka", ".ac3",
+        ".amr", ".au", ".caf", ".aa", ".aax",
+    }
 )
 EBOOK_EXTENSIONS = frozenset(
     {".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".rtf", ".txt", ".cbr", ".lit"}

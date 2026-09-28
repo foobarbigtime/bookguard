@@ -18,4 +18,26 @@ jobs:
       - run: pip install -r requirements.txt pytest httpx ruff==0.12.11
       - run: ruff check .
       - run: PYTHONPATH=. pytest -q
+      - run: bash -n scripts/acceptance/run scripts/acceptance/lib/common.sh scripts/acceptance/scenarios/*.sh
+      - run: bash scripts/acceptance/run selftest
+      - run: bash scripts/acceptance/run cleanup-selftest
       - run: ./scripts/smoke-test.sh
+      - run: sudo scripts/acceptance/run acquisition-progress
+      - run: sudo scripts/acceptance/run acquisition-admission
+      - run: sudo scripts/acceptance/run prepublication-retirement
+      - run: sudo scripts/acceptance/run acquisition-scan
+      - run: sudo scripts/acceptance/run acquisition-restart
+      - run: sudo scripts/acceptance/run publication-recovery
+      - run: sudo scripts/acceptance/run publication-scan
+      - run: sudo scripts/acceptance/run alternate-grab
+      - run: sudo scripts/acceptance/run quarantine-unsafe
+      - run: sudo scripts/acceptance/run quarantine-copy-fault
+      - run: sudo scripts/acceptance/run quarantine-scheduling
+      - run: sudo scripts/acceptance/run paused-handoff-scheduling
+      - run: sudo scripts/acceptance/run retry-scheduling
+      - run: sudo scripts/acceptance/run quarantine-replacement-proof
+      - run: sudo scripts/acceptance/run quarantine-candidate-selection
+      - run: sudo scripts/acceptance/run quarantine-grab
+      - run: sudo scripts/acceptance/run quarantine-handoff
+      - run: sudo scripts/acceptance/run quarantine-verification
+      - run: sudo scripts/acceptance/run quarantine-final-state

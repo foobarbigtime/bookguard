@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard Attention</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div><h1>BookGuard</h1><p>Operator attention and recovery visibility</p></div>
+    <span class="version">v{{ version }}</span>
+  </div>
+  <nav class="topnav">
+    <a class="nav-link" href="/">Dashboard</a>
+    <a class="nav-link active" href="/attention">Attention</a>
+    <a class="nav-link" href="/history">History</a>
+      <a class="nav-link" href="/diagnostics">Diagnostics</a>
+    <a class="nav-link" href="/triage">Triage</a>
+    <a class="nav-link" href="/repairs">Repairs</a>
+    <a class="nav-link" href="/settings">Settings</a>
+  </nav>
+</header>
+
+<main>
+  <div class="notice info">
+    <strong>Read-only recovery view.</strong>
+    This page never resumes, corrects, deletes, admits, or finalizes anything. Use the existing guarded workflow for any recovery action.
+  </div>
+
+  <section class="attention-summary">
+    <article class="card">
+      <span class="label">Needs attention</span>
+      <strong>{{ attention.total }}</strong>
+      <small>Durable workflow states that need operator review.</small>
+    </article>
+    <article class="card">
+      <span class="label">Acquisitions</span>
+      <strong>{{ attention.summary.acquisitions }}</strong>
+      <small>Replacement workflows needing review or finalization recovery.</small>
+    </article>
+    <article class="card">
+      <span class="label">Admissions</span>
+      <strong>{{ attention.summary.admissions }}</strong>
+      <small>Registration conflicts, interrupted correction, or failed admission.</small>
+    </article>
+    <article class="card">
+      <span class="label">Shared-file journals</span>
+      <strong>{{ attention.summary.hardlinkCorrections + attention.summary.hardlinkCleanups }}</strong>
+      <small>Unresolved hard-link correction or staging-link cleanup records.</small>
+    </article>
+    <article class="card">
+      <span class="label">Blocked E4 plans</span>
+      <strong>{{ attention.summary.recoveryPlans or 0 }}</strong>
+      <small>Current automatic recovery plans stopped by a safety check.</small>
+    </article>
+    <article class="card">
+      <span class="label">Stale E4 receipts</span>
+      <strong>{{ attention.summary.runningExecutions or 0 }}</strong>
+      <small>Running execution receipts older than 15 minutes needing outcome review.</small>
+    </article>
+    <article class="card">
+      <span class="label">Observe Mode</span>
+      <strong>{{ attention.summary.observe or 0 }}</strong>
+      <small>Latest simulated automation decisions that require operator attention.</small>
+    </article>
+  </section>
+
+  <section class="table-card">
+    <div class="section-title row-between">
+      <div>
+        <h2>Attention queue</h2>
+        <p>Newest durable attention state first. Refresh this page after completing a guarded recovery step.</p>
+      </div>
+      <small>Snapshot {{ attention.generatedAt }}</small>
+    </div>
+
+    {% if attention['items'] %}
+    <div class="table-wrap">
+      <table class="attention-table">
+        <thead>
+          <tr><th>Type</th><th>State</th><th>Book</th><th>Why</th><th>Updated</th><th>Workflow</th></tr>
+        </thead>
+        <tbody>
+        {% for item in attention['items'] %}
+          <tr>
+            <td><strong>{{ item.kindLabel }}</strong>{% if item.id %}<small>#{{ item.id }}</small>{% endif %}</td>
+            <td><span class="workflow-state workflow-state-review">{{ item.status|replace('_',' ') }}</span></td>
+            <td class="book-cell">
+              {% if item.title %}
+                <strong>{{ item.title }}</strong>
+                <small>{{ item.author or 'Unknown author' }}</small>
+              {% else %}
+                <span class="muted">System workflow</span>
+              {% endif %}
+            </td>
+            <td class="why-cell">
+              <div class="attention-message">{{ item.message }}</div>
+              {% if item.guidance %}
+                <div class="operator-guidance compact">
+                  <strong>{{ item.guidance.label }}</strong>
+                  <small><b>Why BookGuard stopped:</b> {{ item.guidance.why }}</small>
+                  <small><b>Next step:</b> {{ item.guidance.nextStep }}</small>
+                </div>
+              {% endif %}
+            </td>
+            <td class="history-time" title="{{ item.updatedAt or '' }}">
+              {{ item.updatedAt[:19]|replace('T', ' ') if item.updatedAt else '—' }}
+              {% if item.updatedAt %}<small>UTC</small>{% endif %}
+            </td>
+            <td class="attention-actions">
+              {% if item.detailHref %}
+                <a class="button-link" href="{{ item.detailHref }}">Audit detail</a>
+              {% endif %}
+              <a class="button-link" href="{{ item.href }}">Open guarded workflow</a>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="attention-zero">
+        <strong>No recovery attention is currently recorded.</strong>
+        <small>BookGuard has no durable acquisition, admission, coordinator, or shared-file journal state requiring intervention.</small>
+      </div>
+    {% endif %}
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard {{ detail.kindLabel }} #{{ detail.id }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div><h1>BookGuard</h1><p>Read-only operation detail</p></div>
+    <span class="version">v{{ version }}</span>
+  </div>
+  <nav class="topnav">
+    <a class="nav-link" href="/">Dashboard</a>
+    <a class="nav-link" href="/attention">Attention</a>
+    <a class="nav-link active" href="/history">History</a>
+    <a class="nav-link" href="/diagnostics">Diagnostics</a>
+    <a class="nav-link" href="/triage">Triage</a>
+    <a class="nav-link" href="/repairs">Repairs</a>
+    <a class="nav-link" href="/settings">Settings</a>
+  </nav>
+</header>
+
+<main class="history-detail-main">
+  <div class="notice info">
+    <strong>Read-only audit detail.</strong>
+    This page displays an existing durable BookGuard record. It cannot retry, resume, correct, delete, quarantine, admit, repair, or otherwise change BookGuard state.
+  </div>
+
+  <div class="history-detail-toolbar">
+    <a class="button-link" href="{{ detail.historyHref }}">← Back to operation history</a>
+  </div>
+
+  <section class="table-card history-detail-card">
+    <div class="section-title">
+      <h2>{{ detail.kindLabel }} #{{ detail.id }}</h2>
+      <p>Durable state captured by BookGuard.</p>
+    </div>
+
+    {% set status_class =
+      'ready' if detail.status in ['applied', 'registered', 'finalized', 'verified_correct', 'complete', 'completed', 'keep', 'no_action', 'ready']
+      else 'error' if detail.status in ['failed', 'wrong_content', 'wrong_media_type', 'unsafe_file', 'registration_conflict', 'blocked']
+      else 'review' if detail.status in ['insufficient_evidence', 'review_required', 'cleanup_required', 'registration_correcting', 'attention', 'retry_wait', 'superseded']
+      else 'idle'
+    %}
+    <div class="history-detail-summary">
+      <article>
+        <span class="label">Operation</span>
+        <strong>{{ detail.kindLabel }}</strong>
+        <small>Record #{{ detail.id }}</small>
+      </article>
+      <article>
+        <span class="label">Status</span>
+        <span class="workflow-state workflow-state-{{ status_class }}">{{ detail.status|replace('_',' ') }}</span>
+      </article>
+      <article>
+        <span class="label">Book</span>
+        {% if detail.title %}
+          <strong>{{ detail.title }}</strong>
+          <small>{{ detail.author or 'Unknown author' }}</small>
+        {% else %}
+          <strong>—</strong>
+          <small>No book context stored on this operation.</small>
+        {% endif %}
+      </article>
+      <article>
+        <span class="label">Path</span>
+        <code>{{ detail.path or '—' }}</code>
+      </article>
+    </div>
+
+    {% if detail.summary %}
+      <div class="history-detail-summary-note">
+        <strong>What happened</strong>
+        <p>{{ detail.summary }}</p>
+      </div>
+    {% endif %}
+
+    {% if detail.error %}
+      <div class="history-detail-error">
+        <strong>Recorded error</strong>
+        <p>{{ detail.error }}</p>
+      </div>
+    {% endif %}
+
+    {% if detail.guidance %}
+      <div class="operator-guidance history-detail-guidance">
+        <strong>{{ detail.guidance.label }}</strong>
+        <small><b>Why BookGuard stopped:</b> {{ detail.guidance.why }}</small>
+        <small><b>Next step:</b> {{ detail.guidance.nextStep }}</small>
+      </div>
+    {% endif %}
+
+    {% if detail.notes %}
+      {% for note in detail.notes %}
+        <div class="notice warning history-detail-note">{{ note }}</div>
+      {% endfor %}
+    {% endif %}
+  </section>
+
+  {% if detail.recoverySummary %}
+  {% set rs = detail.recoverySummary %}
+  <section class="table-card history-detail-card">
+    <div class="section-title">
+      <h2>Recovery plan</h2>
+      <p>Durable E3 planning state. This view cannot execute any recovery action.</p>
+    </div>
+
+    <div class="history-detail-summary">
+      <article>
+        <span class="label">Plan</span>
+        <strong>{{ rs.planKind|replace('_',' ')|title }}</strong>
+        <small>{{ rs.reasonCode|replace('_',' ')|title }}</small>
+      </article>
+      <article>
+        <span class="label">Subject</span>
+        <strong>{{ rs.subjectKind|replace('_',' ')|title }} #{{ rs.subjectId }}</strong>
+        <small>Current step {{ rs.currentStep }} of {{ rs.steps|length }}</small>
+      </article>
+      <article>
+        <span class="label">Retry state</span>
+        <strong>
+          {% if rs.retrySameOperation %}
+            {{ rs.retryCount }}/{{ rs.maxRetries }} retries used
+          {% else %}
+            Same operation will not be retried
+          {% endif %}
+        </strong>
+        <small>
+          {% if rs.nextRetryAt %}
+            Next retry {{ rs.nextRetryAt[:19]|replace('T',' ') }} UTC
+          {% elif rs.backoffSeconds %}
+            Backoff {{ rs.backoffSeconds|join(' / ') }} seconds
+          {% else %}
+            No retry timer scheduled
+          {% endif %}
+        </small>
+      </article>
+      <article>
+        <span class="label">Execution</span>
+        <strong>Disabled in E3</strong>
+        <small>No Bindery, filesystem, queue, admission, or quarantine mutation can be executed from this plan.</small>
+      </article>
+    </div>
+
+    <div class="history-detail-summary-note">
+      <strong>Mutation-boundary checks</strong>
+      <p>
+        {% for check in rs.requiredChecks %}
+          {{ check|replace('_',' ')|title }}{% if not loop.last %} · {% endif %}
+        {% endfor %}
+      </p>
+    </div>
+
+    <div class="history-detail-plan">
+      <strong>Planned steps</strong>
+      <ol>
+        {% for step in rs.steps %}
+          <li>
+            <b>{{ step.code|replace('_',' ')|title }}</b>
+            — {{ step.description }}
+            <small>
+              {% if step.externalMutation %}Future external mutation{% else %}Read-only validation{% endif %}
+              {% if step.stopIfUnproven %} · fail closed if not proven{% endif %}
+            </small>
+          </li>
+        {% endfor %}
+      </ol>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if detail.verificationSummary %}
+  {% set vs = detail.verificationSummary %}
+  <section class="table-card history-detail-card">
+    <div class="section-title">
+      <h2>Media evidence summary</h2>
+      <p>The important verification evidence, summarized from the durable record.</p>
+    </div>
+
+    <div class="history-detail-summary">
+      <article>
+        <span class="label">Expected by Bindery</span>
+        <strong>{{ vs.expectedKind|replace('_',' ')|title or 'Unknown media' }}</strong>
+        <small>{{ vs.expectedTitle or 'Unknown title' }}{% if vs.expectedAuthor %} · {{ vs.expectedAuthor }}{% endif %}</small>
+      </article>
+      <article>
+        <span class="label">Actually detected</span>
+        <strong>{{ vs.detectedKind|replace('_',' ')|title or 'Not established' }}</strong>
+        <small>
+          {% if vs.detectedFormats %}{{ vs.detectedFormats|join(', ') }}{% else %}No deterministic format recorded{% endif %}
+          {% if vs.candidateCount %} · {{ vs.candidateCount }} candidate file{{ '' if vs.candidateCount == 1 else 's' }}{% endif %}
+        </small>
+      </article>
+      <article>
+        <span class="label">{{ 'Whole-set identity' if vs.mixedContent else 'Detected identity' }}</span>
+        {% if vs.mixedContent %}
+          <strong>Mixed audiobook set</strong>
+          <small>
+            {{ vs.wholeSetTitleMatchCount }} expected-title ·
+            {{ vs.wholeSetTitleMismatchCount }} conflicting ·
+            {{ vs.wholeSetReadableCount }} readable
+          </small>
+          {% if vs.topMismatchTitles %}
+            <small>
+              Conflicts:
+              {% for item in vs.topMismatchTitles[:3] %}
+                {{ item.title }}{% if item.count > 1 %} ({{ item.count }}){% endif %}{% if not loop.last %} · {% endif %}
+              {% endfor %}
+            </small>
+          {% endif %}
+        {% elif vs.filenameStrong and not vs.detectedTitle %}
+          <strong>Filename identity verified</strong>
+          <small>
+            {{ vs.filenamePairMatchCount }}/{{ vs.filenameFileCount }}
+            filename{{ '' if vs.filenameFileCount == 1 else 's' }} support
+            {{ vs.expectedTitle }}{% if vs.expectedAuthor %} · {{ vs.expectedAuthor }}{% endif %}
+          </small>
+        {% else %}
+          <strong>{{ vs.detectedTitle or 'Not established' }}</strong>
+          <small>{{ vs.detectedAuthor or 'No independent author identity established' }}</small>
+        {% endif %}
+      </article>
+      <article>
+        <span class="label">Technical integrity</span>
+        <strong>{{ vs.technicalVerdict|replace('_',' ')|title or 'Not applicable' }}</strong>
+        <small>
+          {% if vs.fileCount %}{{ vs.readableFileCount }}/{{ vs.fileCount }} readable{% endif %}
+          {% if vs.durationSeconds %} · {{ (vs.durationSeconds / 3600)|round(2) }} h{% endif %}
+          {% if vs.chapterCount %} · {{ vs.chapterCount }} chapters{% endif %}
+          {% if vs.codecs %} · {{ vs.codecs|join(', ') }}{% endif %}
+        </small>
+      </article>
+    </div>
+
+    {% if vs.explanation %}
+      <div class="history-detail-summary-note">
+        <strong>Why BookGuard reached this verdict</strong>
+        <p>{{ vs.explanation }}</p>
+      </div>
+    {% endif %}
+
+    <div class="operator-guidance history-detail-guidance">
+      <strong>{{ vs.planLabel }}</strong>
+      <small><b>Planned Automatic Mode behavior:</b> {{ vs.planText }}</small>
+      <small>This page is read-only; no repair or mutation is performed here.</small>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="table-card history-detail-card">
+    <div class="section-title">
+      <h2>Stored fields</h2>
+      <p>Values are read directly from the durable operation record.</p>
+    </div>
+    {% if detail['fields'] %}
+      <div class="history-detail-grid">
+      {% for field in detail['fields'] %}
+        <div class="history-detail-field">
+          <span>{{ field.label }}</span>
+          {% if field.name.endswith('_at') and field.value|string|length >= 19 %}
+            <strong title="{{ field.value }}">{{ (field.value|string)[:19]|replace('T', ' ') }} UTC</strong>
+          {% else %}
+            <strong>{{ field.value }}</strong>
+          {% endif %}
+        </div>
+      {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty">No additional stored fields are available for this record.</div>
+    {% endif %}
+  </section>
+
+  {% if detail.evidence %}
+  <section class="history-detail-evidence">
+    {% for block in detail.evidence %}
+      <article class="table-card history-detail-card">
+        <div class="section-title">
+          <h2>{{ block.label }}</h2>
+          <p>Stored evidence captured with this operation.</p>
+        </div>
+        {% if block.parseError %}
+          <div class="notice warning history-detail-note">{{ block.parseError }}</div>
+        {% endif %}
+        <pre class="history-detail-json">{{ block.pretty }}</pre>
+      </article>
+    {% endfor %}
+  </section>
+  {% endif %}
+</main>
+</body>
+</html>

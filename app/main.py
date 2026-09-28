@@ -12,6 +12,7 @@ from .acquisition_coordinator import (
 )
 from .auth import BasicAuthMiddleware
 from .config import settings
+from .request_origin import SameOriginMiddleware
 from .db import init_local_db, load_persisted_settings
 from .routes.automatic import router as automatic_router
 from .routes.hardlink_conflicts import router as hardlink_router
@@ -42,6 +43,8 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="BookGuard", version=__version__, lifespan=lifespan)
 app.add_middleware(BasicAuthMiddleware)
+# Added last so it runs first: reject cross-site writes before anything else.
+app.add_middleware(SameOriginMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(pages_router)
 app.include_router(system_router)

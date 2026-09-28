@@ -20,6 +20,34 @@ DEFAULT_AUTHOR_ALIASES = [
 ]
 
 REPAIR_MODES = {"off", "preview", "safe"}
+AUTOMATION_MODES = {"manual", "observe", "automatic"}
+AUTOMATIC_ACTION_CODES = frozenset({
+    "resolve_proven_associations",
+    "quarantine_proven_foreign_media",
+    "reacquire_missing_expected_media",
+    "reconcile_final_state",
+    "quarantine_proven_wrong_media",
+    "reacquire_expected_media",
+    "admit_and_reconcile",
+    "correct_or_quarantine",
+    "verify_and_reconcile",
+    "quarantine_exact_media",
+    "apply_metadata_repair",
+    "resume_known_transition",
+    "reconcile_known_admission",
+    "correct_exact_registration_owner",
+    "finish_guarded_cleanup",
+    "request_alternate_grab",
+    "reconcile_download_and_staging",
+    "retry_grab_once",
+    "reconcile_after_retry",
+    "admit_verified_acquisition",
+    "request_published_acquisition_scan",
+    "prove_supported_no_replace_method",
+    "retry_guarded_publication",
+    "retire_proven_prepublication_failure",
+    "scan_and_reconcile_registration",
+})
 DEFAULT_MAX_STAGED_EBOOK_BYTES = 512 * 1024 * 1024
 DEFAULT_ACQUISITION_COORDINATOR_INTERVAL_SECONDS = 10
 DEFAULT_MALWARE_SCAN_TIMEOUT_SECONDS = 60
@@ -108,6 +136,8 @@ class AutomationSettings:
     the current environment without mixing them into persisted UI settings.
     """
 
+    automation_mode: str
+    automatic_action_allowlist: tuple[str, ...]
     staging_root: str
     bindery_drop_folder: str
     automatic_reacquisition: bool
@@ -122,6 +152,26 @@ class AutomationSettings:
 
 
 def load_automation_settings() -> AutomationSettings:
+    automation_mode = os.getenv("BOOKGUARD_AUTOMATION_MODE", "manual").strip().lower()
+    if automation_mode not in AUTOMATION_MODES:
+        raise ConfigurationError(
+            "BOOKGUARD_AUTOMATION_MODE must be one of: manual, observe, automatic."
+        )
+
+    raw_allowlist = os.getenv("BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST", "")
+    requested_actions = {
+        item.strip()
+        for item in raw_allowlist.replace("\n", ",").split(",")
+        if item.strip()
+    }
+    unknown_actions = sorted(requested_actions - AUTOMATIC_ACTION_CODES)
+    if unknown_actions:
+        raise ConfigurationError(
+            "BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST contains unsupported action code(s): "
+            + ", ".join(unknown_actions)
+        )
+    automatic_action_allowlist = tuple(sorted(requested_actions))
+
     raw_limit = os.getenv("BOOKGUARD_MAX_STAGED_EBOOK_BYTES", "").strip()
     if not raw_limit:
         raw_limit = str(DEFAULT_MAX_STAGED_EBOOK_BYTES)
@@ -137,6 +187,8 @@ def load_automation_settings() -> AutomationSettings:
         )
 
     return AutomationSettings(
+        automation_mode=automation_mode,
+        automatic_action_allowlist=automatic_action_allowlist,
         staging_root=os.getenv("BOOKGUARD_STAGING_ROOT", "/staging").strip() or "/staging",
         bindery_drop_folder=os.getenv("BOOKGUARD_BINDERY_DROP_FOLDER", "").strip(),
         automatic_reacquisition=_bool("BOOKGUARD_AUTOMATIC_REACQUISITION", False),

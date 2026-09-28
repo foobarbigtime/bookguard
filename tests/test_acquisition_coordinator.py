@@ -4,8 +4,9 @@ from types import SimpleNamespace
 from app import acquisition_coordinator as coordinator_module
 
 
-def _configured(*, enabled=True, automatic=True):
+def _configured(*, enabled=True, automatic=True, mode="manual"):
     return SimpleNamespace(
+        automation_mode=mode,
         acquisition_coordinator_enabled=enabled,
         acquisition_coordinator_interval_seconds=10,
         automatic_reacquisition=automatic,
@@ -38,6 +39,25 @@ def test_disabled_coordinator_does_not_read_active_state(monkeypatch):
 
     assert status["state"] == "disabled"
     assert status["blockers"] == ["coordinatorEnabled"]
+
+
+def test_automatic_mode_disables_legacy_coordinator_each_cycle(monkeypatch):
+    worker = coordinator_module.SupervisedAcquisitionCoordinator()
+    monkeypatch.setattr(
+        coordinator_module,
+        "load_automation_settings",
+        lambda: _configured(mode="automatic"),
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "active_ebook_acquisitions",
+        lambda: (_ for _ in ()).throw(AssertionError("active state was read")),
+    )
+
+    status = worker.run_once(object())
+
+    assert status["state"] == "disabled"
+    assert status["blockers"] == ["automaticModeUsesRecoveryExecutor"]
 
 
 def test_coordinator_requires_both_mutation_gates(monkeypatch):
@@ -336,3 +356,28 @@ def test_enabled_coordinator_starts_and_stops_one_background_thread(monkeypatch)
     worker.stop()
 
     assert worker.status()["running"] is False
+
+
+
+def test_observe_mode_disables_coordinator_before_active_state(monkeypatch):
+    worker = coordinator_module.SupervisedAcquisitionCoordinator()
+    configured = _configured()
+    configured.automation_mode = "observe"
+    monkeypatch.setattr(
+        coordinator_module,
+        "load_automation_settings",
+        lambda: configured,
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "active_ebook_acquisitions",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("Observe Mode must not inspect or advance active acquisitions")
+        ),
+    )
+
+    status = worker.run_once(object())
+
+    assert status["enabled"] is False
+    assert status["state"] == "disabled"
+    assert status["blockers"] == ["observeModeActive"]

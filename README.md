@@ -62,7 +62,48 @@ It answers two related questions:
 
 BookGuard is designed around **audit first, repair second, destructive actions last**.
 
-## What v0.4 does
+## What v0.6 adds
+
+v0.6 adds staged, fail-closed automation on top of the v0.5 workflows. The
+default remains `BOOKGUARD_AUTOMATION_MODE=manual` with an empty
+`BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST`, so upgrading changes no behavior until
+an operator opts in.
+
+- **Observe Mode** records durable decisions about recovery work without any
+  Bindery, queue, staging, quarantine, metadata, or library mutation.
+- **Unified media evidence** extends content verification to audiobooks and
+  detects ebook/audio cross-assignment from the actual bytes and containers.
+- **Recovery classification and durable recovery plans** describe each
+  proposed step, including which steps would perform an external mutation.
+- **Supervised Automatic Mode (E4)** advances one work item per explicitly
+  confirmed cycle and attempts at most one external mutation per cycle. An
+  action runs only when it is allowlisted, has a registered executor, and passes
+  fresh identity, byte, destination, and operation-specific checks. Cycles are
+  serialized, and an interrupted external effect is held for read-only
+  reconciliation rather than replayed.
+- **E4 executors** cover bounded transient grab retry, known-queue staging
+  progression, verified-acquisition admission, guarded publication recovery
+  and scan requests, retirement of proven pre-publication failures,
+  registration-conflict correction, and guarded finalization. Alternate and
+  post-quarantine replacement grabs require an explicit operator choice of
+  release; E4 never selects a candidate on its own.
+- **Unsafe-media quarantine** moves proven unsafe ebooks into quarantine,
+  verifies cross-mount copies before removing a source, proves custody before
+  any replacement grab, and proves the replacement's final state before
+  closing the plan.
+- **Admission publishes only proven bytes.** Live authorization checks run
+  before the private snapshot is sealed; the sealed snapshot is re-verified
+  through a no-follow descriptor immediately before publication; and the
+  published library file is re-hashed before success is recorded. A mismatch
+  blocks the plan for operator review and leaves the file in place.
+- **Attention** collects items that need an operator, including E4 execution
+  receipts left running after an interruption, with read-only guidance.
+
+See [Observe Mode](#observe-mode-v06-foundation) and
+[Supervised Automatic Mode (E4)](#supervised-automatic-mode-e4) for
+configuration and endpoints.
+
+## Core capabilities (since v0.4)
 
 - Reads Bindery's `book_files`, books, and authors from the Bindery SQLite database in **read-only mode**.
 - Audits audiobook associations with `ffprobe` and representative sampling across audiobook folders.
@@ -84,9 +125,9 @@ BookGuard is designed around **audit first, repair second, destructive actions l
 
 BookGuard **never automatically deletes media**.
 
-## What v0.5 is adding
+## What v0.5 added
 
-The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequence of independently guarded slices:
+v0.5 built automatic maintenance as a sequence of independently guarded slices:
 
 - Read-only Bindery status, replacement search, and candidate evaluation.
 - Immediate re-verification before a WRONG_CONTENT mutation.
@@ -157,6 +198,18 @@ BOOKGUARD_AUTH_USERNAME=bookguard
 BOOKGUARD_AUTH_PASSWORD=replace-with-a-long-random-password
 ```
 
+Because browsers resend Basic credentials automatically, every state-changing
+request (anything other than `GET`/`HEAD`/`OPTIONS`) is also rejected with
+`403` when the browser marks it cross-site, when its `Origin` does not match the
+request host, or when it has a body that is not `application/json`. Scripts that
+call the API with `curl -H 'Content-Type: application/json'` are unaffected. If
+BookGuard sits behind a reverse proxy that rewrites the `Host` header, list the
+public origin(s) the browser uses:
+
+```env
+BOOKGUARD_TRUSTED_ORIGINS=https://bookguard.example.com
+```
+
 The container refuses to start without a password. The supplied Compose file
 also binds to localhost by default:
 
@@ -220,9 +273,83 @@ bash scripts/build-with-provenance.sh
 docker compose -f compose.yaml -f compose.actions.yaml up -d --no-build
 ```
 
+### Observe Mode (v0.6 foundation)
+
+Observe Mode is the first stage of BookGuard's safe automation work. It is
+deployment-only and fail-closed:
+
+```env
+BOOKGUARD_AUTOMATION_MODE=manual
+```
+
+Supported values are `manual`, `observe`, and `automatic`; any other value is a
+configuration error. `manual` preserves the explicitly confirmed workflow.
+`observe` records durable decisions about recovery work using existing
+BookGuard database state, but does not invoke Bindery mutation, queue mutation,
+staging cleanup, quarantine, metadata writes, or library publication.
+
+While `observe` is active, the supervised acquisition coordinator is disabled
+even if its older mutation gates are enabled. Legacy mutation endpoints under
+`/api/automatic` return a conflict instead of running; the explicit observe
+cycle only writes BookGuard's decision journal. Read-only inspection and
+verification endpoints remain available.
+
+Observe decisions are idempotently journaled in `automation_observations`,
+appear in unified History, and the latest decision for a subject appears in
+Attention when the decision is `attention`. Missing durable ebook verification
+is recorded as `would_verify_result` rather than Attention because verification
+is a read-only prerequisite that a future Automatic Mode can perform safely.
+Observe Mode itself still does not open the library file. A later safe/terminal
+state records a resolving `no_action` decision so stale Observe Mode attention
+does not remain active.
+
+```text
+GET  /api/automatic/observe
+POST /api/automatic/observe/run
+```
+
+The run endpoint requires the exact confirmation token
+`RUN_OBSERVE_MODE`. Running it may write only BookGuard's own durable decision
+journal; the source scan, verification, acquisition, admission, repair, cleanup,
+Bindery, queue, staging, quarantine, and library state are not changed by the
+Observe decision engine.
+
+#### Unified media evidence (v0.6 E2)
+
+The v0.6 evidence engine extends content verification to audiobooks and detects
+media-kind mismatches from the actual bytes/containers rather than trusting the
+Bindery format or filename. Common audiobook containers discovered by BookGuard
+are probed with ffprobe, including MP3, M4A/M4B, FLAC, AAC, Ogg/Opus, WAV, MP4,
+WMA, AIFF, APE, MKA, AC3, AMR, AU, CAF, AA, and AAX.
+
+Audiobook evidence combines:
+
+- deterministic container/codec readability and duration checks;
+- track/file count, chapter count, sample-rate/channel/codec consistency;
+- filename disc/track continuity checks;
+- embedded title/album, author/artist/album-artist, narrator/performer,
+  language, track, and disc tags;
+- cross-file identity consensus;
+- actual-media detection for ebook/audio cross-assignment;
+- durable media-set fingerprints for idempotent verification.
+
+The same `content_verifications` journal now accepts audiobook evidence.
+A proven readable audiobook that matches the expected title/author becomes
+`VERIFIED_CORRECT`; strong consistent different identity becomes
+`WRONG_CONTENT`; unreadable/corrupt expected audio becomes `UNSAFE_FILE`;
+and deterministic ebook/audio cross-assignment becomes `WRONG_MEDIA_TYPE`.
+Weak or contradictory identity evidence remains `INSUFFICIENT_EVIDENCE`.
+
+Observe Mode treats missing audiobook evidence as `would_verify_audiobook`
+instead of Attention. Proven wrong content, wrong media kind, unsafe media, and
+safe metadata repairs are also represented as proposed future automatic work,
+while true insufficient evidence remains Attention. These E2 decisions still
+perform no library or Bindery mutation.
+
 ### Automatic reacquisition
 
 ```env
+BOOKGUARD_AUTOMATION_MODE=manual
 BOOKGUARD_STAGING_ROOT=/staging
 BOOKGUARD_BINDERY_DROP_FOLDER=/data/bookguard-staging
 BOOKGUARD_AUTOMATIC_REACQUISITION=false
@@ -231,11 +358,12 @@ BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS=10
 BOOKGUARD_MAX_STAGED_EBOOK_BYTES=536870912
 ```
 
-Automatic reacquisition fails closed unless every readiness check passes. The
-implemented workflow is deliberately operator-driven: it can start one freshly
-revalidated release, observe its Bindery queue record, and verify exactly one
-ebook arriving in an initially empty staging folder. There is no automatic
-candidate choice, automatic retry, or automatic admission.
+The manual acquisition workflow fails closed unless every readiness check
+passes. It is operator-driven: it can start one freshly revalidated release,
+observe its Bindery queue record, and verify exactly one ebook arriving in an
+initially empty staging folder. Its coordinator does not choose candidates,
+retry a failed grab, or admit a verified ebook. E4 has separately gated
+recovery steps described below.
 
 The optional supervised coordinator removes the need to press Reconcile
 repeatedly. It discovers the single durable active acquisition after startup,
@@ -284,6 +412,31 @@ An operator can explicitly retry staged verification from `review_required`
 after verifier rules are updated. The coordinator does not retry that state on
 its own, and the staged file remains untouched unless it later passes the same
 admission threshold.
+
+### Supervised Automatic Mode (E4)
+
+`BOOKGUARD_AUTOMATION_MODE=automatic` enables the E4 recovery executor, which
+advances one durable work item per confirmed `POST /api/automatic/run` request
+(`{"confirm":"RUN_AUTOMATIC_CYCLE"}`). It attempts at most one external
+mutation per cycle. The default mode is `manual`, and the default
+`BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST` is empty. An action runs only when its
+code is allowlisted, a live executor is registered, and its fresh identity,
+byte, destination, and operation-specific gates pass. A supported action code
+alone does not mean that a live executor exists. Inspect
+`GET /api/automatic/execution-policy` for the mode, allowlist, and registered
+executors; `GET /api/automatic/executions` shows the durable execution journal.
+
+E4 can retry a bounded failed acquisition grab, advance a known Bindery queue
+item to verified staging, and admit separately allowlisted verified bytes. It
+also has guarded publication, scan, registration, and quarantine recovery steps.
+Candidate selection requires an explicit operator choice; the executor does not
+choose a new release on its own. Publication uses no-replace and exact-byte
+checks, and uncertain interrupted external effects are held for reconciliation
+instead of being blindly retried. Existing action gates, including
+`BOOKGUARD_ALLOW_ACTIONS`, `BOOKGUARD_AUTOMATIC_REACQUISITION`, and
+`BOOKGUARD_ADMISSION_ENABLED` where applicable, remain separate prerequisites.
+Set the mode back to `manual` or clear the allowlist to stop new E4 executions;
+the journal remains available for review.
 
 ### Controlled ebook admission
 
@@ -489,16 +642,71 @@ Metadata repair settings include:
 
 Repair history and Undo are available at `/repairs`.
 
+
+## Backup and validation
+
+BookGuard's persistent application state lives in `/config/bookguard.db`. The
+backup helper creates a transactionally consistent SQLite copy while the normal
+BookGuard container may remain running. It does not copy media files, Bindery's
+database, credentials, verification snapshots, staging, or quarantine content.
+
+Create a backup on the Unraid host:
+
+```bash
+bash scripts/bookguard-backup.sh create
+```
+
+The default destination is:
+
+```text
+/mnt/cache/appdata/bookguard-backups
+```
+
+Or supply a different dedicated backup root:
+
+```bash
+bash scripts/bookguard-backup.sh create /mnt/user/backups/bookguard
+```
+
+Each backup is a directory containing `bookguard.db` plus a manifest with the
+BookGuard version, database SHA-256, byte count, SQLite integrity result, and
+table inventory. Creation uses the exact image and non-root UID:GID of the
+existing BookGuard container, mounts production `/config` read-only, disables
+networking, and gives the one-shot container write access only to the backup
+destination.
+
+Validate a backup without modifying it:
+
+```bash
+bash scripts/bookguard-backup.sh validate \
+  /mnt/cache/appdata/bookguard-backups/bookguard-YYYYMMDDTHHMMSSZ
+```
+
+Validation mounts the backup read-only and checks the manifest, SHA-256, byte
+count, SQLite integrity, and required BookGuard tables. Validation never
+overwrites or restores production state.
+
+To prove that a validated backup can be opened by the current BookGuard code
+without touching production, run:
+
+```bash
+bash scripts/bookguard-backup.sh restore-validate \
+  /mnt/cache/appdata/bookguard-backups/bookguard-YYYYMMDDTHHMMSSZ
+```
+
+Restore validation mounts the backup read-only, copies its database into a
+disposable 512 MiB container tmpfs, and runs BookGuard's current startup
+database initialization against that copy. The one-shot container has no
+network, the image root remains read-only, and no production config or media
+path is writable. The disposable restore copy disappears when the command
+exits.
+
 ## Updating
 
-Before deploying this security update, add the required access credentials to
-the existing `.env`. BookGuard's writable `/config` mount should point at a
-dedicated host directory rather than the Git checkout. Existing installations
-that still have `bookguard.db` in the repository root should stop BookGuard,
-copy `bookguard.db*` into the dedicated config directory, and preserve the old
-copy until the migrated container has started successfully.
-
-To retain direct LAN access, also set the bind address to the Unraid server's LAN IP:
+Before deploying an update, keep BookGuard's writable `/config` mount in its
+dedicated host directory rather than the Git checkout, and keep the required
+credentials in the existing `.env`. To retain direct LAN access, set the bind
+address and non-root runtime identity explicitly:
 
 ```env
 BOOKGUARD_AUTH_USERNAME=bookguard
@@ -509,11 +717,54 @@ BOOKGUARD_GID=100
 BOOKGUARD_CONFIG_HOST_PATH=/mnt/cache/appdata/bookguard-config
 ```
 
+Use the guarded upgrade helper instead of combining an ad-hoc pull, build, and
+Compose deployment.
+
+A non-deploying preflight may be run on a synchronized feature or integration
+branch:
+
 ```bash
-cd /mnt/cache/appdata/bookguard
-git pull
-bash scripts/build-with-provenance.sh
-docker compose up -d --no-build
+bash scripts/safer-upgrade.sh preflight
+```
+
+Preflight refuses a dirty, detached, ahead, or behind checkout, runs the full
+isolated smoke suite, builds with exact Git provenance, and verifies the
+candidate image labels. It does not recreate the running production container.
+
+The production upgrade command is intentionally restricted to `main` and
+requires an exact confirmation token:
+
+```bash
+bash scripts/safer-upgrade.sh upgrade --confirm DEPLOY_BOOKGUARD_UPGRADE
+```
+
+Before deployment, the helper repeats preflight, creates a transactionally
+consistent BookGuard database backup with the candidate image, validates that
+backup read-only, proves restore compatibility in disposable tmpfs, rechecks
+the source revision, and tags the currently running image for rollback. It then
+deploys only `compose.yaml` plus `compose.clamav.yaml` with `--no-build`.
+
+Post-deployment acceptance fails closed unless all of these succeed:
+
+- the running container uses the exact candidate image
+- OCI version/revision/source provenance matches the checked-out source
+- Docker health and the `/health` version are correct
+- BookGuard remains non-root with a read-only root filesystem, bounded no-exec
+  `/tmp`, dropped capabilities, no-new-privileges, read-only media/Bindery
+  mounts, and no writable action/admission aliases
+- ClamAV remains private, has no published port or media/config mounts, and
+  retains only its signature database volume
+- the live clean/EICAR ClamAV acceptance test passes and BookGuard still fails
+  closed on malware detection
+
+If a post-deployment check fails, the helper does **not** automatically restore
+the database or roll back the image. It preserves and prints both the rollback
+image tag and validated backup so recovery remains an explicit operator action.
+
+A deployed v0.6+ instance can be rechecked without redeploying:
+
+```bash
+bash scripts/safer-upgrade.sh verify
 ```
 
 ## Isolated smoke test
@@ -594,9 +845,31 @@ app/staging.py              Read-only staged-byte verification
 app/admission.py            Atomic direct-admission transaction and recovery
 app/acquisition.py          One-at-a-time Bindery queue-to-staging workflow
 app/acquisition_coordinator.py Restart-safe supervised workflow advancement
+app/acquisition_progress.py Supervised known-queue staging progression
+app/observe.py              Non-mutating automation decision journal and policy
 app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery
 app/file_safety.py          Shared filesystem hashing/safety helpers
+app/no_replace.py           Atomic no-replace rename for publication and quarantine
+app/media_evidence.py       Unified ebook/audiobook media evidence (E2)
+app/audiobook_verification.py Audiobook identity and readability verification
+app/recovery_classifier.py  Failure classification into recovery kinds
+app/recovery_planner.py     Durable recovery plans and step definitions
+app/automatic_execution.py  E4 execution journal, allowlist, and one-step executor
+app/automatic_contracts.py  Shared E4 execution policy types
+app/automatic_runner.py     Serialized E4 cycle dispatch and guarded finalization
+app/acquisition_admission_*.py Verified-acquisition admission preflight, execution, and scan
+app/admission_prepublication_review.py Proof for admissions that failed before publication
+app/prepublication_retirement.py Retirement of one proven pre-publication failure
+app/publication_*.py        Publication proof, recovery, and registration scan
+app/registration_correction.py E4 registration-conflict correction executor
+app/automatic_alternate.py  Operator-selected alternate grab executor
+app/alternate_*.py          Alternate candidate review and durable operator selection
+app/automatic_quarantine*.py Unsafe-media quarantine and post-quarantine grab
+app/quarantine_*.py         Quarantine filesystem moves, selection, handoff, and final-state proof
+app/attention.py            Attention queue assembly
+app/attention_execution.py  Attention entries for interrupted E4 receipts
+app/operator_guidance.py    Read-only operator guidance for Attention items
 tools/smoke_test.py         Isolated workflow and Compose safety harness
 tools/clamav_acceptance.py  Live ClamAV clean/EICAR acceptance test
 scripts/smoke-test.sh       One-command containerized smoke-test runner

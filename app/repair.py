@@ -220,6 +220,31 @@ def _write_audio_fields(path: str, values: dict) -> None:
     media.save()
 
 
+HARD_LINK_REASON = (
+    "Refusing to repair metadata on a hard-linked file: rewriting it would either "
+    "split the link (EPUB) or change the bytes of every linked copy, such as a "
+    "seeding download (audio)."
+)
+
+
+def _hard_linked_paths(paths: list[str]) -> list[str]:
+    """Return paths that share their inode with another directory entry."""
+    shared: list[str] = []
+    for path in paths:
+        try:
+            if os.lstat(path).st_nlink > 1:
+                shared.append(path)
+        except FileNotFoundError:
+            continue
+    return shared
+
+
+def _require_unlinked(paths: list[str]) -> None:
+    shared = _hard_linked_paths(paths)
+    if shared:
+        raise RepairError(f"{HARD_LINK_REASON} Linked: {', '.join(shared[:5])}")
+
+
 def _audio_preview(result: dict) -> dict:
     paths = discover_audio_files(result["local_path"])
     if not paths:
@@ -232,6 +257,18 @@ def _audio_preview(result: dict) -> dict:
             "kind": "AUDIO_TAGS",
             "reason": "The audiobook contains audio formats BookGuard does not safely write yet.",
             "unsupported_files": unsupported,
+            "before": {},
+            "after": {},
+        }
+
+    linked = _hard_linked_paths(paths)
+    if linked:
+        return {
+            "eligible": False,
+            "safe": False,
+            "kind": "AUDIO_TAGS",
+            "reason": HARD_LINK_REASON,
+            "hard_linked_files": linked,
             "before": {},
             "after": {},
         }
@@ -346,6 +383,16 @@ def _epub_preview(result: dict) -> dict:
             "before": {},
             "after": {},
         }
+    if _hard_linked_paths([target]):
+        return {
+            "eligible": False,
+            "safe": False,
+            "kind": "EPUB_METADATA",
+            "reason": HARD_LINK_REASON,
+            "hard_linked_files": [target],
+            "before": {},
+            "after": {},
+        }
     current = ebook_metadata(target)
     before = {
         "path": target,
@@ -385,11 +432,13 @@ def apply_repair_changes(preview: dict) -> None:
     kind = preview["kind"]
     if kind == "EPUB_METADATA":
         after = preview["after"]
+        _require_unlinked([after["path"]])
         _rewrite_epub_metadata(after["path"], after["title"], after["author"])
         return
     if kind == "AUDIO_TAGS":
         written: list[dict] = []
         before_lookup = {item["path"]: item["tags"] for item in preview["before"]["files"]}
+        _require_unlinked([item["path"] for item in preview["after"]["files"]])
         try:
             for item in preview["after"]["files"]:
                 _write_audio_fields(item["path"], item["tags"])

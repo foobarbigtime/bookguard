@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sqlite3
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from .admission import AdmissionSafetyError, admit_staged_ebook
 from .bindery_client import (
@@ -18,10 +19,12 @@ from .db import (
     ebook_admission_by_id,
     ebook_acquisition_by_id,
     recent_ebook_acquisitions,
+    note_ebook_acquisition_admission_blocked,
+    reset_ebook_acquisition_for_retry,
     result_by_id,
     update_ebook_acquisition,
 )
-from .file_safety import sha256_file
+from .file_safety import ExactUnlinkError, sha256_file, unlink_exact_file
 from .preimport import PreImportSafetyError, preimport_readiness
 from .scan_guard import (
     CurrentScanError,
@@ -42,7 +45,12 @@ class AcquisitionSafetyError(RuntimeError):
     pass
 
 
+class AcquisitionPostPublicationUncertain(AcquisitionSafetyError):
+    """Publication returned, but its acquisition link could not be read durably."""
+
+
 _acquisition_lock = threading.Lock()
+_HISTORY_PROOF_LIMIT = 200
 _HISTORICAL_QUEUE_STATUSES = {
     "cancelled",
     "failed",
@@ -100,7 +108,9 @@ def _queue_payload(
         raise AcquisitionSafetyError(str(exc)) from exc
 
     if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)], False
+        if not all(isinstance(item, dict) for item in payload):
+            raise AcquisitionSafetyError("Bindery queue contained an unrecognized record.")
+        return payload, False
     if not isinstance(payload, dict):
         raise AcquisitionSafetyError("Bindery returned an invalid queue response.")
 
@@ -273,8 +283,12 @@ def _search_candidate(
     except BinderyClientError as exc:
         raise AcquisitionSafetyError(str(exc)) from exc
     results = payload.get("results") if isinstance(payload, dict) else None
-    if not isinstance(results, list):
+    if not isinstance(results, list) or not all(isinstance(item, dict) for item in results):
         raise AcquisitionSafetyError("Bindery search returned an invalid result list.")
+    if payload.get("partial") not in (None, False):
+        raise AcquisitionSafetyError(
+            "Bindery search is incomplete; candidate identity cannot be proven."
+        )
 
     matches = [
         item
@@ -310,12 +324,17 @@ def _reject_previously_imported_candidate(
 ) -> None:
     """Reject an exact release title already paired as grabbed and imported."""
     try:
-        payload = client.list_history(book_id, limit=200)
+        payload = client.list_history(book_id, limit=_HISTORY_PROOF_LIMIT)
     except BinderyClientError as exc:
         raise AcquisitionSafetyError(str(exc)) from exc
     items = payload.get("items") if isinstance(payload, dict) else None
-    if not isinstance(items, list):
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
         raise AcquisitionSafetyError("Bindery history returned an invalid item list.")
+    if payload.get("partial") not in (None, False) or len(items) >= _HISTORY_PROOF_LIMIT:
+        raise AcquisitionSafetyError(
+            "Bindery history is incomplete; the release's import provenance "
+            "cannot be proven safe."
+        )
 
     title = str(candidate.get("title") or "").strip().casefold()
     matching_events = {
@@ -434,6 +453,115 @@ def start_ebook_acquisition(
     }
 
 
+def retry_failed_ebook_acquisition(
+    acquisition_id: int,
+    client: BinderyClient | None = None,
+) -> dict[str, Any]:
+    """Retry the exact candidate for one durably failed transient acquisition.
+
+    This is intentionally narrower than starting a new acquisition. The existing
+    acquisition row, result identity, candidate GUID/title/protocol, queue/staging
+    readiness, and Bindery search result are all freshly revalidated before the
+    same guarded grab is attempted again.
+    """
+    client = client or BinderyClient()
+
+    with _acquisition_lock:
+        acquisition = ebook_acquisition_by_id(int(acquisition_id))
+        if not acquisition:
+            raise AcquisitionSafetyError("Acquisition record not found.")
+        if str(acquisition.get("status") or "").casefold() != "failed":
+            raise AcquisitionSafetyError(
+                "Only a durably failed acquisition may be retried automatically."
+            )
+
+        from .recovery_classifier import classify_acquisition_failure
+
+        recovery = classify_acquisition_failure(
+            str(acquisition.get("status") or ""),
+            str(acquisition.get("error") or ""),
+        )
+        if (
+            recovery is None
+            or not recovery.recoverable
+            or not recovery.retry_same_operation
+            or recovery.reason_code != "ACQUISITION_TRANSIENT_BINDERY_FAILURE"
+        ):
+            raise AcquisitionSafetyError(
+                "The current acquisition failure no longer authorizes same-operation retry."
+            )
+
+        configured = _automation_settings()
+        if not configured.automatic_reacquisition:
+            raise AcquisitionSafetyError("Automatic reacquisition is disabled.")
+        if not settings.allow_actions:
+            raise AcquisitionSafetyError("Automatic actions are disabled.")
+
+        result = result_by_id(int(acquisition["result_id"]))
+        if not result:
+            raise AcquisitionSafetyError("The acquisition's scan result no longer exists.")
+
+        readiness = acquisition_readiness(client)
+        if not readiness["ready"]:
+            raise AcquisitionSafetyError(
+                "Acquisition readiness failed: " + ", ".join(readiness["blockers"])
+            )
+
+        _, expected_title, expected_author = _result_and_book(result, client)
+        candidate = _search_candidate(
+            client,
+            int(acquisition["book_id"]),
+            str(acquisition.get("candidate_guid") or ""),
+            expected_title,
+            expected_author,
+        )
+
+        if str(candidate.get("title") or "").strip() != str(
+            acquisition.get("candidate_title") or ""
+        ).strip():
+            raise AcquisitionSafetyError(
+                "The candidate title for the stored GUID changed; retry is blocked."
+            )
+        stored_protocol = str(acquisition.get("candidate_protocol") or "").strip().casefold()
+        current_protocol = str(candidate.get("protocol") or "").strip().casefold()
+        if stored_protocol and current_protocol != stored_protocol:
+            raise AcquisitionSafetyError(
+                "The candidate protocol for the stored GUID changed; retry is blocked."
+            )
+
+        final_readiness = acquisition_readiness(client)
+        if not final_readiness["ready"]:
+            raise AcquisitionSafetyError(
+                "Acquisition readiness changed during retry validation: "
+                + ", ".join(final_readiness["blockers"])
+            )
+
+        reset_ebook_acquisition_for_retry(int(acquisition_id))
+        try:
+            response = client.grab(int(acquisition["book_id"]), candidate)
+        except Exception as exc:
+            update_ebook_acquisition(
+                int(acquisition_id),
+                "failed",
+                error=f"Bindery grab failed: {exc}",
+            )
+            raise AcquisitionSafetyError(f"Bindery grab failed: {exc}") from exc
+
+        queue_id = _response_queue_id(response)
+        update_ebook_acquisition(
+            int(acquisition_id),
+            "queued",
+            queue_id=queue_id,
+            grab_response=_safe_grab_response(response),
+        )
+
+    return {
+        "ok": True,
+        "acquisition": ebook_acquisition_by_id(int(acquisition_id)),
+        "message": "The same validated candidate was retried on the existing acquisition.",
+    }
+
+
 def _matching_queue_items(
     acquisition: dict[str, Any],
     items: list[dict[str, Any]],
@@ -469,6 +597,10 @@ def _mark_review_required(
 def reconcile_ebook_acquisition(
     acquisition_id: int,
     client: BinderyClient | None = None,
+    *,
+    expected_queue_id: int | str | None = None,
+    expected_staged_fingerprint: tuple[str, int, int] | None = None,
+    expected_status: str | None = None,
 ) -> dict[str, Any]:
     """Correlate one queue record with exactly one independently verified file."""
     client = client or BinderyClient()
@@ -476,6 +608,12 @@ def reconcile_ebook_acquisition(
         acquisition = ebook_acquisition_by_id(acquisition_id)
         if not acquisition:
             raise AcquisitionSafetyError("Acquisition record not found.")
+        if expected_status is not None and acquisition.get("status") != expected_status:
+            raise AcquisitionSafetyError("The durable acquisition status changed.")
+        if expected_queue_id is not None and (
+            str(acquisition.get("queue_id") or "") != str(expected_queue_id)
+        ):
+            raise AcquisitionSafetyError("The durable queue identity changed.")
         status = str(acquisition.get("status") or "")
         if status not in _RECONCILABLE_STATUSES:
             raise AcquisitionSafetyError(
@@ -515,6 +653,13 @@ def reconcile_ebook_acquisition(
                 "Staging inventory was truncated; file attribution is ambiguous.",
             )
             return {"ok": False, "acquisition": record}
+        if expected_staged_fingerprint is not None:
+            actual = [
+                (str(item["relativePath"]), int(item["size"]), int(item["modifiedNs"]))
+                for item in inventory["items"]
+            ]
+            if actual != [expected_staged_fingerprint]:
+                raise AcquisitionSafetyError("The staged file fingerprint changed.")
 
         result = result_by_id(int(acquisition["result_id"]))
         if not result:
@@ -526,6 +671,29 @@ def reconcile_ebook_acquisition(
             raise AcquisitionSafetyError(
                 "Bindery returned a partial queue response; reconciliation stopped."
             )
+        if expected_queue_id is not None:
+            exact = [
+                item for item in queue_items
+                if str(item.get("id") or "") == str(expected_queue_id)
+            ]
+            if len(exact) != 1 or (
+                str(exact[0].get("bookId") or "")
+                != str(acquisition["book_id"])
+            ) or (
+                str(exact[0].get("title") or "").strip().casefold()
+                != str(acquisition.get("candidate_title") or "").strip().casefold()
+            ) or (
+                str(exact[0].get("protocol") or "").strip().casefold()
+                != str(acquisition.get("candidate_protocol") or "").strip().casefold()
+            ) or _queue_status(exact[0]) not in _AWAITING_STAGING_QUEUE_STATUSES:
+                raise AcquisitionSafetyError("The exact queue handoff is no longer proven.")
+            competing = [
+                item for item in _active_or_unknown_queue_items(queue_items)
+                if str(item.get("bookId") or "") == str(acquisition["book_id"])
+                and str(item.get("id") or "") != str(expected_queue_id)
+            ]
+            if competing:
+                raise AcquisitionSafetyError("Another active queue item shares this book.")
         matches = _matching_queue_items(acquisition, queue_items)
         if len(matches) > 1:
             record = _mark_review_required(
@@ -701,6 +869,9 @@ def reconcile_ebook_acquisition(
 def admit_ebook_acquisition(
     acquisition_id: int,
     client: BinderyClient | None = None,
+    *,
+    before_publish: Callable[[int], None] | None = None,
+    request_scan: bool = True,
 ) -> dict[str, Any]:
     """Hand one verified acquisition to the existing guarded admission transaction."""
     client = client or BinderyClient()
@@ -732,23 +903,33 @@ def admit_ebook_acquisition(
         if not result:
             raise AcquisitionSafetyError("The acquisition's scan result no longer exists.")
         try:
-            admitted = admit_staged_ebook(result, relative_path, client)
+            if before_publish is None and request_scan:
+                admitted = admit_staged_ebook(result, relative_path, client)
+            else:
+                admitted = admit_staged_ebook(
+                    result, relative_path, client, before_publish=before_publish,
+                    request_scan=request_scan,
+                )
         except AdmissionSafetyError as exc:
-            update_ebook_acquisition(
-                acquisition_id,
-                "verified",
-                error=f"Admission blocked: {exc}",
+            note_ebook_acquisition_admission_blocked(
+                acquisition_id, f"Admission blocked: {exc}",
             )
             raise AcquisitionSafetyError(str(exc)) from exc
 
-        update_ebook_acquisition(
-            acquisition_id,
-            "admitted",
-            admission_id=int(admitted["admissionId"]),
-        )
+        try:
+            update_ebook_acquisition(
+                acquisition_id,
+                "admitted",
+                admission_id=int(admitted["admissionId"]),
+            )
+            linked = ebook_acquisition_by_id(acquisition_id)
+        except sqlite3.Error as exc:
+            raise AcquisitionPostPublicationUncertain(
+                "Publication returned, but the acquisition link could not be confirmed."
+            ) from exc
         return {
             "ok": True,
-            "acquisition": ebook_acquisition_by_id(acquisition_id),
+            "acquisition": linked,
             "admission": admitted,
             "message": (
                 "The verified acquisition was submitted to guarded admission. "
@@ -936,15 +1117,17 @@ def finalize_ebook_acquisition(
                 raise AcquisitionSafetyError(
                     "The staged file changed while finalization was running."
                 )
-            staged_path.unlink()
-            directory_fd = os.open(
-                staging_root,
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-            )
             try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+                unlink_exact_file(
+                    Path(staging_root),
+                    Path(staged_path),
+                    device=after.st_dev,
+                    inode=after.st_ino,
+                )
+            except (ExactUnlinkError, OSError) as exc:
+                raise AcquisitionSafetyError(
+                    f"The verified staging copy could not be removed safely: {exc}"
+                ) from exc
 
             update_ebook_acquisition(
                 acquisition_id,

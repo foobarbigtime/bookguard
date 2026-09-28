@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+SCENARIOS_DIR="${REPO_ROOT}/scripts/acceptance/scenarios"
+export BG_ACCEPTANCE_REPO_ROOT="${REPO_ROOT}"
+
+# shellcheck source=lib/common.sh
+source "${REPO_ROOT}/scripts/acceptance/lib/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/acceptance/run --list
+  scripts/acceptance/run --describe <scenario>
+  scripts/acceptance/run <scenario> [scenario arguments...]
+
+Useful environment variables:
+  BOOKGUARD_ACCEPTANCE_ROOT          Disposable host root. Defaults to <repo>/.acceptance.
+  BOOKGUARD_ACCEPTANCE_EXPECTED_SHA  Refuse to run unless HEAD exactly matches this SHA.
+  BOOKGUARD_ACCEPTANCE_IMAGE         Optional preselected image tag for a scenario.
+  BOOKGUARD_PRODUCTION_ROOT          Protected production root. Defaults to /mnt/cache/appdata/bookguard.
+EOF
+}
+
+list_scenarios() {
+  local file name description
+  shopt -s nullglob
+  for file in "${SCENARIOS_DIR}"/*.sh; do
+    name=$(basename -- "${file}" .sh)
+    description=$(
+      BG_ACCEPTANCE_SCENARIO="${name}" bash -c '
+        set -euo pipefail
+        source "$1"
+        if declare -F scenario_description >/dev/null; then
+          scenario_description
+        else
+          printf "%s\n" "(no description)"
+        fi
+      ' _ "${file}"
+    )
+    printf '%-24s %s\n' "${name}" "${description}"
+  done
+}
+
+describe_scenario() {
+  local scenario=$1
+  local file="${SCENARIOS_DIR}/${scenario}.sh"
+  [[ -f "${file}" ]] || bg_die "Unknown acceptance scenario: ${scenario}"
+  # shellcheck disable=SC1090
+  source "${file}"
+  declare -F scenario_description >/dev/null || bg_die "Scenario ${scenario} has no scenario_description function."
+  scenario_description
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 2
+fi
+
+case "$1" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  --list)
+    list_scenarios
+    exit 0
+    ;;
+  --describe)
+    [[ $# -eq 2 ]] || bg_die "--describe requires exactly one scenario name."
+    describe_scenario "$2"
+    exit 0
+    ;;
+esac
+
+SCENARIO=$1
+shift
+[[ "${SCENARIO}" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || bg_die "Unsafe scenario name: ${SCENARIO}"
+SCENARIO_FILE="${SCENARIOS_DIR}/${SCENARIO}.sh"
+[[ -f "${SCENARIO_FILE}" ]] || bg_die "Unknown acceptance scenario: ${SCENARIO}. Run --list to see available scenarios."
+export BG_ACCEPTANCE_SCENARIO="${SCENARIO}"
+
+# shellcheck disable=SC1090
+source "${SCENARIO_FILE}"
+declare -F scenario_description >/dev/null || bg_die "Scenario ${SCENARIO} has no scenario_description function."
+declare -F scenario_run >/dev/null || bg_die "Scenario ${SCENARIO} has no scenario_run function."
+
+bg_header "BOOKGUARD ACCEPTANCE: ${SCENARIO}"
+printf 'Repository: %s\n' "${REPO_ROOT}"
+printf 'HEAD:       %s\n' "$(bg_repo_head)"
+printf 'Scenario:   %s\n' "$(scenario_description)"
+
+bg_assert_expected_head
+
+if declare -F scenario_requires_docker >/dev/null && scenario_requires_docker; then
+  bg_require_cmd docker
+fi
+
+if declare -F scenario_requires_acceptance_root >/dev/null && scenario_requires_acceptance_root; then
+  bg_prepare_acceptance_root >/dev/null
+  printf 'Root:       %s\n' "$(bg_acceptance_root)"
+fi
+
+acceptance_exit() {
+  local status=$?
+  trap - EXIT
+  if declare -F scenario_cleanup >/dev/null; then
+    if ! scenario_cleanup; then
+      bg_note "Scenario cleanup reported failure." >&2
+      status=1
+    fi
+  fi
+  if declare -F scenario_requires_docker >/dev/null && scenario_requires_docker; then
+    if ! docker info --format '{{.ServerVersion}}' >/dev/null 2>&1; then
+      bg_note "Docker is unavailable; disposable resource cleanup cannot be verified." >&2
+      status=1
+    else
+      bg_assert_scenario_resources_removed || status=1
+      bg_cleanup_default_image || status=1
+    fi
+  fi
+  if [[ ${status} -eq 0 ]] \
+      && declare -F scenario_requires_acceptance_root >/dev/null \
+      && scenario_requires_acceptance_root; then
+    bg_cleanup_scenario_root "${SCENARIO}" || status=1
+  fi
+  if [[ ${status} -eq 0 ]]; then
+    printf '\nPASS: %s\n' "${SCENARIO}"
+  else
+    printf '\nFAIL: %s (exit %s)\n' "${SCENARIO}" "${status}" >&2
+  fi
+  exit "${status}"
+}
+
+trap acceptance_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+scenario_run "$@"

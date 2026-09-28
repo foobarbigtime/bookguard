@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..acquisition import (
@@ -12,7 +12,14 @@ from ..acquisition import (
     reconcile_ebook_acquisition,
     start_ebook_acquisition,
 )
+from ..acquisition_admission_preflight import acquisition_admission_preview
+from ..admission_prepublication_review import prepublication_failure_preview
 from ..acquisition_coordinator import acquisition_coordinator_status
+from ..alternate_candidate import alternate_candidate_preview
+from ..alternate_selection import (
+    alternate_selection_by_acquisition,
+    bind_alternate_candidate,
+)
 from ..admission import (
     AdmissionSafetyError,
     admission_history,
@@ -22,14 +29,49 @@ from ..admission import (
     reconcile_admission,
 )
 from ..automatic import AutomaticMaintenanceError, remediate_wrong_content, wrong_content_preview
+from ..automatic_runner import (
+    AutomaticExecutionBlocked,
+    automatic_execution_history,
+    execution_policy_snapshot,
+    run_automatic_cycle,
+)
 from ..bindery_client import BinderyClient, BinderyClientError, evaluate_replacement_candidate
+from ..config import ConfigurationError, load_automation_settings
 from ..db import result_by_id
+from ..observe import observe_snapshot, run_observe_cycle
 from ..preimport import PreImportSafetyError, preimport_readiness
+from ..quarantine_replacement import quarantine_replacement_preview
+from ..quarantine_final_state import quarantine_final_state_preview
+from ..quarantine_selection import (
+    bind_quarantine_candidate, quarantine_candidate_preview,
+    quarantine_selection_by_result,
+)
 from ..staging import StagingSafetyError, list_staged_ebooks, verify_staged_ebook
 from .models import ConfirmationRequest, require_confirmation
 
 
 router = APIRouter(prefix="/api/automatic", tags=["automatic maintenance"])
+
+
+def _require_mutation_mode() -> None:
+    """Keep legacy confirmed mutation endpoints manual-only.
+
+    Observe remains non-mutating. E4 Automatic Mode may mutate only through the
+    dedicated recovery executor, never by falling through these manual routes.
+    """
+    try:
+        configured = load_automation_settings()
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if configured.automation_mode != "manual":
+        label = "Observe Mode" if configured.automation_mode == "observe" else "Automatic Mode"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{label} is active. Legacy automatic-maintenance mutation endpoints "
+                "are manual-only; live E4 work must use the supervised recovery executor."
+            ),
+        )
 
 
 class StagedVerificationRequest(BaseModel):
@@ -43,6 +85,56 @@ class StagedAdmissionRequest(StagedVerificationRequest):
 class EbookAcquisitionRequest(BaseModel):
     candidateGuid: str = Field(min_length=1, max_length=4096)
     confirm: str = Field(min_length=1, max_length=64)
+
+
+@router.get("/observe")
+def api_automatic_observe(limit: int = 100):
+    """Return durable Observe Mode decisions without running a new cycle."""
+    try:
+        return observe_snapshot(limit)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/observe/run")
+def api_automatic_observe_run(payload: ConfirmationRequest):
+    """Record what Automatic Mode would do without invoking mutation workflows."""
+    require_confirmation(payload, "RUN_OBSERVE_MODE")
+    try:
+        result = run_observe_cycle()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if not result.get("enabled"):
+        raise HTTPException(status_code=409, detail=str(result.get("message") or "Observe Mode is disabled."))
+    return result
+
+
+@router.post("/run")
+def api_automatic_run(payload: ConfirmationRequest):
+    """Advance one supervised E4 work item and at most one external mutation."""
+    require_confirmation(payload, "RUN_AUTOMATIC_CYCLE")
+    try:
+        return run_automatic_cycle()
+    except AutomaticExecutionBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reasonCode": exc.reason_code, "message": str(exc)},
+        )
+
+
+@router.get("/execution-policy")
+def api_automatic_execution_policy():
+    """Read-only E4 mode, allowlist, and executor registration status."""
+    try:
+        return execution_policy_snapshot()
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/executions")
+def api_automatic_executions(limit: int = 100):
+    """Return the durable E4 execution journal without starting any work."""
+    return automatic_execution_history(limit)
 
 
 @router.get("/bindery-status")
@@ -112,6 +204,84 @@ def api_automatic_acquisitions(limit: int = 100):
     return acquisition_history(limit)
 
 
+@router.get("/acquisitions/{acquisition_id}/alternate-preview")
+def api_automatic_alternate_preview(
+    acquisition_id: int,
+    candidate_guid: str = Query(min_length=1, max_length=4096),
+):
+    """Review one explicit alternate without requesting a Bindery grab."""
+    try:
+        return alternate_candidate_preview(acquisition_id, candidate_guid)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/acquisitions/{acquisition_id}/alternate-selection")
+def api_automatic_alternate_selection(acquisition_id: int):
+    """Inspect an operator choice and whether its recovery plan is still current."""
+    selected = alternate_selection_by_acquisition(acquisition_id)
+    if selected is None:
+        raise HTTPException(status_code=404, detail="No alternate candidate is selected.")
+    return selected
+
+
+@router.get("/plans/{plan_id}/quarantine-replacement-preview")
+def api_quarantine_replacement_preview(plan_id: int):
+    """Read-only proof of completed unsafe-media quarantine custody."""
+    try:
+        return quarantine_replacement_preview(plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/plans/{plan_id}/quarantine-final-state-preview")
+def api_quarantine_final_state_preview(plan_id: int):
+    """Read-only proof that a quarantined replacement has fully finalized."""
+    try:
+        return quarantine_final_state_preview(plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/plans/{plan_id}/quarantine-candidate-preview")
+def api_quarantine_candidate_preview(
+    plan_id: int, candidate_guid: str = Query(min_length=1, max_length=4096),
+):
+    """Review one release without choosing or grabbing it."""
+    try:
+        return quarantine_candidate_preview(plan_id, candidate_guid)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/results/{result_id}/quarantine-candidate-selection")
+def api_quarantine_candidate_selection(result_id: int):
+    selected = quarantine_selection_by_result(result_id)
+    if selected is None:
+        raise HTTPException(status_code=404, detail="No quarantine candidate is selected.")
+    return selected
+
+
+@router.post("/plans/{plan_id}/quarantine-candidate-selection")
+def api_bind_quarantine_candidate(plan_id: int, payload: EbookAcquisitionRequest):
+    """Save an explicit immutable choice; no external mutation is authorized."""
+    require_confirmation(payload, "SELECT_QUARANTINE_REPLACEMENT_CANDIDATE")
+    try:
+        return bind_quarantine_candidate(plan_id, payload.candidateGuid)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/plans/{plan_id}/alternate-selection")
+def api_automatic_bind_alternate(plan_id: int, payload: EbookAcquisitionRequest):
+    """Persist one explicit choice without requesting a Bindery grab."""
+    require_confirmation(payload, "SELECT_ALTERNATE_CANDIDATE")
+    try:
+        return bind_alternate_candidate(plan_id, payload.candidateGuid)
+    except AcquisitionSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/acquisition-coordinator")
 def api_automatic_acquisition_coordinator():
     """Return the read-only supervised coordinator lifecycle status."""
@@ -124,6 +294,7 @@ def api_automatic_start_acquisition(
     payload: EbookAcquisitionRequest,
 ):
     """Freshly revalidate and grab one explicitly selected ebook release."""
+    _require_mutation_mode()
     require_confirmation(payload, "START_EBOOK_ACQUISITION")
     item = _automatic_result(result_id)
     try:
@@ -138,11 +309,24 @@ def api_automatic_reconcile_acquisition(
     payload: ConfirmationRequest,
 ):
     """Observe Bindery and verify an unambiguous staged ebook."""
+    _require_mutation_mode()
     require_confirmation(payload, "RECONCILE_EBOOK_ACQUISITION")
     try:
         return reconcile_ebook_acquisition(acquisition_id)
     except AcquisitionSafetyError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/acquisitions/{acquisition_id}/admission-preview")
+def api_automatic_acquisition_admission_preview(acquisition_id: int):
+    """Read-only current admission boundary; never publish or scan."""
+    return acquisition_admission_preview(acquisition_id)
+
+
+@router.get("/admissions/{admission_id}/prepublication-preview")
+def api_automatic_prepublication_failure_preview(admission_id: int):
+    """Read-only review of an exact failure before ebook publication began."""
+    return prepublication_failure_preview(admission_id)
 
 
 @router.post("/acquisitions/{acquisition_id}/admit")
@@ -151,6 +335,7 @@ def api_automatic_admit_acquisition(
     payload: ConfirmationRequest,
 ):
     """Submit one verified acquisition to guarded direct admission."""
+    _require_mutation_mode()
     require_confirmation(payload, "ADMIT_EBOOK_ACQUISITION")
     try:
         return admit_ebook_acquisition(acquisition_id)
@@ -164,6 +349,7 @@ def api_automatic_finalize_acquisition(
     payload: ConfirmationRequest,
 ):
     """Finalize a registered admission without deleting download-client data."""
+    _require_mutation_mode()
     require_confirmation(payload, "FINALIZE_EBOOK_ACQUISITION")
     try:
         return finalize_ebook_acquisition(acquisition_id)
@@ -180,6 +366,7 @@ def api_automatic_admissions(limit: int = 100):
 @router.post("/results/{result_id}/admit-staged-ebook")
 def api_automatic_admit_staged_ebook(result_id: int, payload: StagedAdmissionRequest):
     """Verify and atomically publish one staged ebook to its former path."""
+    _require_mutation_mode()
     require_confirmation(payload, "ADMIT_STAGED_EBOOK")
     item = _automatic_result(result_id)
     try:
@@ -194,6 +381,7 @@ def api_automatic_reconcile_admission(
     payload: ConfirmationRequest,
 ):
     """Confirm registration, stop on a wrong owner, or request another scan."""
+    _require_mutation_mode()
     require_confirmation(payload, "RECONCILE_ADMISSION")
     try:
         return reconcile_admission(admission_id)
@@ -207,6 +395,7 @@ def api_automatic_correct_registration(
     payload: ConfirmationRequest,
 ):
     """Explicitly correct one proven exact-path Bindery ownership conflict."""
+    _require_mutation_mode()
     require_confirmation(payload, "CORRECT_BINDERY_REGISTRATION")
     try:
         return correct_registration_conflict(admission_id)
@@ -290,6 +479,7 @@ async def api_automatic_remediate_wrong_content(result_id: int, request: Request
     grab can be enabled, so downloaded bytes can be verified before admission to
     the managed library.
     """
+    _require_mutation_mode()
     item = _automatic_result(result_id)
     try:
         payload = await request.json()

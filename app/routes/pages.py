@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import __version__
+from ..attention import attention_snapshot
 from ..config import settings
+from ..diagnostics import diagnostics_snapshot
+from ..history import operation_detail, operation_history
 from ..db import (
     latest_counts,
     latest_reason_counts,
@@ -62,6 +65,58 @@ def dashboard(
             "poll_ms": settings.dashboard_poll_ms,
             "missing_cleanup": missing_cleanup,
             "cleanup_history": recent_cleanup_actions(50) if classification == "MISSING" else [],
+            "version": __version__,
+        },
+    )
+
+
+@router.get("/attention", response_class=HTMLResponse)
+def attention_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="attention.html",
+        context={
+            "attention": attention_snapshot(),
+            "version": __version__,
+        },
+    )
+
+
+
+@router.get("/history", response_class=HTMLResponse)
+def history_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="history.html",
+        context={
+            "history": operation_history(),
+            "version": __version__,
+        },
+    )
+
+
+@router.get("/history/{kind}/{record_id}", response_class=HTMLResponse)
+def history_detail_page(request: Request, kind: str, record_id: int):
+    detail = operation_detail(kind, record_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Operation record not found.")
+    return templates.TemplateResponse(
+        request=request,
+        name="history_detail.html",
+        context={
+            "detail": detail,
+            "version": __version__,
+        },
+    )
+
+
+@router.get("/diagnostics", response_class=HTMLResponse)
+def diagnostics_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="diagnostics.html",
+        context={
+            "diagnostics": diagnostics_snapshot(),
             "version": __version__,
         },
     )

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard Diagnostics</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div><h1>BookGuard</h1><p>Readiness diagnostics and safety gates</p></div>
+    <span class="version">v{{ version }}</span>
+  </div>
+  <nav class="topnav">
+    <a class="nav-link" href="/">Dashboard</a>
+    <a class="nav-link" href="/attention">Attention</a>
+    <a class="nav-link" href="/history">History</a>
+    <a class="nav-link active" href="/diagnostics">Diagnostics</a>
+    <a class="nav-link" href="/triage">Triage</a>
+    <a class="nav-link" href="/repairs">Repairs</a>
+    <a class="nav-link" href="/settings">Settings</a>
+  </nav>
+</header>
+
+<main>
+  <div class="notice info">
+    <strong>Read-only diagnostics.</strong>
+    This page explains current safety gates. It does not change BookGuard, Bindery, files, queue state, or settings, and it never displays saved credentials.
+  </div>
+
+  {% if diagnostics.deploymentError %}
+  <div class="notice warning">
+    <strong>Deployment configuration error:</strong> {{ diagnostics.deploymentError }}
+  </div>
+  {% endif %}
+
+  <section class="diagnostic-gates">
+    <article class="card diagnostic-gate">
+      <span class="label">Automation mode</span>
+      <strong>{{ diagnostics.automationMode|upper }}</strong>
+      <small>{{ "Records proposed decisions only; no external mutations." if diagnostics.automationMode == "observe" else "Fail-closed manual behavior." }}</small>
+    </article>
+    {% for gate in diagnostics.gateCards %}
+    <article class="card diagnostic-gate">
+      <span class="label">{{ gate.label }}</span>
+      <strong>{{ "ON" if gate.enabled else "OFF" }}</strong>
+    </article>
+    {% endfor %}
+  </section>
+
+  <section class="table-card diagnostic-environment">
+    <div class="section-title">
+      <h2>Deployment environment</h2>
+      <p>Read-only runtime, provenance, malware-scanner, and mount checks. Media contents are not inspected.</p>
+    </div>
+
+    <div class="diagnostic-environment-grid">
+      <div class="diagnostic-environment-card">
+        <span class="label">Runtime</span>
+        <strong>UID {{ diagnostics.deployment.runtime.uid }} : GID {{ diagnostics.deployment.runtime.gid }}</strong>
+        <small>Python {{ diagnostics.deployment.runtime.pythonVersion }} · {{ "non-root" if diagnostics.deployment.runtime.nonRoot else "root" }}</small>
+      </div>
+      <div class="diagnostic-environment-card">
+        <span class="label">Build provenance</span>
+        <strong>{{ diagnostics.deployment.build.imageVersion }}</strong>
+        <small>
+          Revision
+          {% if diagnostics.deployment.build.revision == "unknown" %}
+            unknown
+          {% else %}
+            <code>{{ diagnostics.deployment.build.revision[:12] }}</code>
+          {% endif %}
+        </small>
+        <span class="workflow-state {{ 'workflow-state-ready' if diagnostics.deployment.build.provenanceComplete else 'workflow-state-review' }}">
+          {{ "stamped" if diagnostics.deployment.build.provenanceComplete else "not stamped" }}
+        </span>
+      </div>
+      <div class="diagnostic-environment-card">
+        <span class="label">ClamAV</span>
+        <strong>{{ diagnostics.deployment.malware.status|replace('_',' ') }}</strong>
+        <small>{{ diagnostics.deployment.malware.message }}</small>
+        {% if diagnostics.deployment.malware.version %}
+        <small>{{ diagnostics.deployment.malware.version }}</small>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="diagnostic-mount-table">
+        <thead>
+          <tr><th>Purpose</th><th>Path</th><th>Expected</th><th>Observed</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+        {% for mount in diagnostics.deployment.mounts %}
+          <tr>
+            <td><strong>{{ mount.label }}</strong></td>
+            <td class="path">{{ mount.path or "—" }}</td>
+            <td>{{ mount.expectedMode }}</td>
+            <td>{{ mount.observedMode }}</td>
+            <td>
+              <span class="workflow-state {{ 'workflow-state-ready' if mount.expectationMet else 'workflow-state-review' }}">
+                {{ "matches" if mount.expectationMet else "review" }}
+              </span>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="diagnostic-sections">
+    {% for section in diagnostics.sections %}
+    <article class="table-card diagnostic-section">
+      <div class="section-title row-between">
+        <div>
+          <h2>{{ section.label }}</h2>
+          <p>{{ section.message or "Current read-only safety state." }}</p>
+        </div>
+        <span class="workflow-state {{ 'workflow-state-ready' if section.ready else 'workflow-state-review' }}">
+          {{ section.state|replace('_',' ') }}
+        </span>
+      </div>
+
+      {% if section.explanations %}
+      <div class="diagnostic-blockers">
+        {% for blocker in section.explanations %}
+        <div class="diagnostic-blocker">
+          <strong>{{ blocker.label }}</strong>
+          <small><b>Why:</b> {{ blocker.why }}</small>
+          <small><b>What to change:</b> {{ blocker.fix }}</small>
+          <code>{{ blocker.key }}</code>
+        </div>
+        {% endfor %}
+      </div>
+      {% elif section.state == 'error' %}
+      <div class="diagnostic-blockers">
+        <div class="diagnostic-blocker">
+          <strong>Readiness check could not complete</strong>
+          <small>{{ section.message }}</small>
+        </div>
+      </div>
+      {% else %}
+      <div class="diagnostic-ready">
+        <strong>No readiness blockers reported.</strong>
+        <small>This does not authorize a mutation by itself; the guarded operation will re-check its safety conditions at the mutation boundary.</small>
+      </div>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </section>
+</main>
+</body>
+</html>
