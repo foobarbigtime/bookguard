@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from . import automatic_execution as core
@@ -429,8 +430,28 @@ def _run_finalization_cycle(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_automatic_cycle_lock = threading.Lock()
+
+
 def run_automatic_cycle(limit: int = 100) -> dict[str, Any]:
-    """Advance one ready E4 item while leaving incomplete handoffs waiting."""
+    """Advance one ready E4 item while leaving incomplete handoffs waiting.
+
+    Cycles are serialized in-process: routes run in a threadpool, and an
+    overlapping cycle could otherwise reconcile another cycle's in-flight
+    execution as if it had been interrupted.
+    """
+    if not _automatic_cycle_lock.acquire(blocking=False):
+        raise AutomaticExecutionBlocked(
+            "AUTOMATIC_CYCLE_RUNNING",
+            "Another automatic cycle is already running.",
+        )
+    try:
+        return _run_automatic_cycle_locked(limit)
+    finally:
+        _automatic_cycle_lock.release()
+
+
+def _run_automatic_cycle_locked(limit: int) -> dict[str, Any]:
     configured = load_automation_settings()
     if configured.automation_mode != "automatic":
         raise AutomaticExecutionBlocked(

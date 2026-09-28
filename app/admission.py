@@ -48,6 +48,18 @@ class PublishedSnapshotError(RuntimeError):
         )
 
 
+class PublishedBytesMismatch(RuntimeError):
+    """Published library bytes could not be proven identical to the verified snapshot."""
+
+    def __init__(self, publication_method: str, detail: str) -> None:
+        self.publication_method = publication_method
+        super().__init__(
+            f"Snapshot was published using {publication_method}, but the library "
+            f"file could not be proven identical to the verified bytes: {detail} "
+            "The file was left in place for operator review."
+        )
+
+
 class UnsupportedNoReplacePublication(OSError):
     """Both atomic no-overwrite publication methods were rejected."""
 
@@ -439,16 +451,65 @@ def _cleanup_private_snapshot(temp_path: Path | None) -> None:
             pass
 
 
-def _seal_snapshot(temp_path: Path, expected_hash: str) -> None:
-    """Make the verified snapshot immutable to non-owner users before publish."""
+def _sha256_descriptor(descriptor: int) -> str:
+    digest = hashlib.sha256()
+    offset = 0
+    while chunk := os.pread(descriptor, 1024 * 1024, offset):
+        digest.update(chunk)
+        offset += len(chunk)
+    return digest.hexdigest()
+
+
+def _seal_snapshot(temp_path: Path, expected_hash: str) -> os.stat_result:
+    """Make the verified snapshot immutable to non-owner users before publish.
+
+    Returns the sealed file state so the caller can prove the exact same bytes
+    are still in place immediately before publication.
+    """
     descriptor = os.open(temp_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
         os.fchmod(descriptor, 0o644)
         os.fsync(descriptor)
+        sealed = os.fstat(descriptor)
+        sealed_hash = _sha256_descriptor(descriptor)
+        unchanged = _same_file_state(sealed, os.fstat(descriptor))
     finally:
         os.close(descriptor)
-    if sha256_file(temp_path) != expected_hash:
+    if not stat.S_ISREG(sealed.st_mode) or not unchanged or sealed_hash != expected_hash:
         raise AdmissionSafetyError("The private snapshot changed while it was sealed.")
+    return sealed
+
+
+def _verify_exact_bytes(
+    path: Path,
+    expected_hash: str,
+    *,
+    message: str,
+    sealed: os.stat_result | None = None,
+) -> None:
+    """Re-hash one regular file through an O_NOFOLLOW descriptor.
+
+    With ``sealed``, the file must also be the same inode, size, and
+    modification state that was sealed, so a same-UID rewrite is refused.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise AdmissionSafetyError(message) from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise AdmissionSafetyError(message)
+        if sealed is not None and not _same_file_state(sealed, before):
+            raise AdmissionSafetyError(message)
+        current_hash = _sha256_descriptor(descriptor)
+        after = os.fstat(descriptor)
+    except OSError as exc:
+        raise AdmissionSafetyError(message) from exc
+    finally:
+        os.close(descriptor)
+    if not _same_file_state(before, after) or current_hash != expected_hash:
+        raise AdmissionSafetyError(message)
 
 
 def _identity_unchanged(before: dict[str, Any], after: dict[str, Any]) -> bool:
@@ -548,12 +609,29 @@ def admit_staged_ebook(
             staged_sha256=snapshot_hash,
             verification=verification,
         )
-        _seal_snapshot(temp_path, snapshot_hash)
+        # Live authorization checks may take several network round-trips, so they
+        # run before the seal. The seal hash and the exact re-verification below
+        # are then the last checks before the no-replace publication.
         if before_publish is not None:
             before_publish(admission_id)
+        sealed = _seal_snapshot(temp_path, snapshot_hash)
+        _verify_exact_bytes(
+            temp_path,
+            snapshot_hash,
+            sealed=sealed,
+            message="The sealed snapshot changed before publication.",
+        )
         publication_started = True
         publication_method = _publish_no_replace(temp_path, destination)
         temp_path = None
+        try:
+            _verify_exact_bytes(
+                destination,
+                snapshot_hash,
+                message="The published library file does not match the verified bytes.",
+            )
+        except AdmissionSafetyError as exc:
+            raise PublishedBytesMismatch(publication_method, str(exc)) from exc
         update_ebook_admission(
             admission_id,
             "published",
@@ -604,6 +682,15 @@ def admit_staged_ebook(
             ),
         }
     except PublishedSnapshotError as exc:
+        if admission_id is not None:
+            update_ebook_admission(
+                admission_id,
+                "published",
+                publication_method=exc.publication_method,
+                error=str(exc),
+            )
+        raise AdmissionSafetyError(str(exc)) from exc
+    except PublishedBytesMismatch as exc:
         if admission_id is not None:
             update_ebook_admission(
                 admission_id,
