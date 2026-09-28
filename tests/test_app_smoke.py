@@ -94,7 +94,7 @@ EXPECTED_ROUTES = {
 
 def test_app_imports():
     assert main.app.title == "BookGuard"
-    assert main.app.version == "0.5.0"
+    assert main.app.version == "0.6.0"
 
 
 def _api_routes(routes, prefix=""):

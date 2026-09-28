@@ -62,7 +62,48 @@ It answers two related questions:
 
 BookGuard is designed around **audit first, repair second, destructive actions last**.
 
-## What v0.4 does
+## What v0.6 adds
+
+v0.6 adds staged, fail-closed automation on top of the v0.5 workflows. The
+default remains `BOOKGUARD_AUTOMATION_MODE=manual` with an empty
+`BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST`, so upgrading changes no behavior until
+an operator opts in.
+
+- **Observe Mode** records durable decisions about recovery work without any
+  Bindery, queue, staging, quarantine, metadata, or library mutation.
+- **Unified media evidence** extends content verification to audiobooks and
+  detects ebook/audio cross-assignment from the actual bytes and containers.
+- **Recovery classification and durable recovery plans** describe each
+  proposed step, including which steps would perform an external mutation.
+- **Supervised Automatic Mode (E4)** advances one work item per explicitly
+  confirmed cycle and attempts at most one external mutation per cycle. An
+  action runs only when it is allowlisted, has a registered executor, and passes
+  fresh identity, byte, destination, and operation-specific checks. Cycles are
+  serialized, and an interrupted external effect is held for read-only
+  reconciliation rather than replayed.
+- **E4 executors** cover bounded transient grab retry, known-queue staging
+  progression, verified-acquisition admission, guarded publication recovery
+  and scan requests, retirement of proven pre-publication failures,
+  registration-conflict correction, and guarded finalization. Alternate and
+  post-quarantine replacement grabs require an explicit operator choice of
+  release; E4 never selects a candidate on its own.
+- **Unsafe-media quarantine** moves proven unsafe ebooks into quarantine,
+  verifies cross-mount copies before removing a source, proves custody before
+  any replacement grab, and proves the replacement's final state before
+  closing the plan.
+- **Admission publishes only proven bytes.** Live authorization checks run
+  before the private snapshot is sealed; the sealed snapshot is re-verified
+  through a no-follow descriptor immediately before publication; and the
+  published library file is re-hashed before success is recorded. A mismatch
+  blocks the plan for operator review and leaves the file in place.
+- **Attention** collects items that need an operator, including E4 execution
+  receipts left running after an interruption, with read-only guidance.
+
+See [Observe Mode](#observe-mode-v06-foundation) and
+[Supervised Automatic Mode (E4)](#supervised-automatic-mode-e4) for
+configuration and endpoints.
+
+## Core capabilities (since v0.4)
 
 - Reads Bindery's `book_files`, books, and authors from the Bindery SQLite database in **read-only mode**.
 - Audits audiobook associations with `ffprobe` and representative sampling across audiobook folders.
@@ -84,9 +125,9 @@ BookGuard is designed around **audit first, repair second, destructive actions l
 
 BookGuard **never automatically deletes media**.
 
-## What v0.5 is adding
+## What v0.5 added
 
-The `v0.5.0-automatic-maintenance` branch builds automatic maintenance as a sequence of independently guarded slices:
+v0.5 built automatic maintenance as a sequence of independently guarded slices:
 
 - Read-only Bindery status, replacement search, and candidate evaluation.
 - Immediate re-verification before a WRONG_CONTENT mutation.
@@ -809,6 +850,26 @@ app/observe.py              Non-mutating automation decision journal and policy
 app/automatic.py            Guarded automatic-maintenance workflow
 app/bindery_client.py       Bindery API and API-key discovery
 app/file_safety.py          Shared filesystem hashing/safety helpers
+app/no_replace.py           Atomic no-replace rename for publication and quarantine
+app/media_evidence.py       Unified ebook/audiobook media evidence (E2)
+app/audiobook_verification.py Audiobook identity and readability verification
+app/recovery_classifier.py  Failure classification into recovery kinds
+app/recovery_planner.py     Durable recovery plans and step definitions
+app/automatic_execution.py  E4 execution journal, allowlist, and one-step executor
+app/automatic_contracts.py  Shared E4 execution policy types
+app/automatic_runner.py     Serialized E4 cycle dispatch and guarded finalization
+app/acquisition_admission_*.py Verified-acquisition admission preflight, execution, and scan
+app/admission_prepublication_review.py Proof for admissions that failed before publication
+app/prepublication_retirement.py Retirement of one proven pre-publication failure
+app/publication_*.py        Publication proof, recovery, and registration scan
+app/registration_correction.py E4 registration-conflict correction executor
+app/automatic_alternate.py  Operator-selected alternate grab executor
+app/alternate_*.py          Alternate candidate review and durable operator selection
+app/automatic_quarantine*.py Unsafe-media quarantine and post-quarantine grab
+app/quarantine_*.py         Quarantine filesystem moves, selection, handoff, and final-state proof
+app/attention.py            Attention queue assembly
+app/attention_execution.py  Attention entries for interrupted E4 receipts
+app/operator_guidance.py    Read-only operator guidance for Attention items
 tools/smoke_test.py         Isolated workflow and Compose safety harness
 tools/clamav_acceptance.py  Live ClamAV clean/EICAR acceptance test
 scripts/smoke-test.sh       One-command containerized smoke-test runner

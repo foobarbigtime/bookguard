@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-ARG BOOKGUARD_VERSION=0.5.0
+ARG BOOKGUARD_VERSION=0.6.0
 ARG BOOKGUARD_VCS_REF=unknown
 
 LABEL org.opencontainers.image.title="BookGuard" \
