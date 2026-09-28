@@ -12,6 +12,14 @@ services:
     image: ${BOOKGUARD_CLAMAV_IMAGE:-clamav/clamav:1.5.4}
     container_name: bookguard-clamav
     restart: unless-stopped
+    environment:
+      # clamd defaults to 100 MiB and drops larger streams mid-upload (seen as
+      # "Broken pipe"). Match BookGuard's BOOKGUARD_MALWARE_MAX_BYTES (512 MiB).
+      # The image writes CLAMD_CONF_* into clamd.conf at start; for these
+      # single-value options clamd keeps the first occurrence.
+      CLAMD_CONF_StreamMaxLength: ${BOOKGUARD_CLAMD_STREAM_MAX_LENGTH:-512M}
+      CLAMD_CONF_MaxFileSize: ${BOOKGUARD_CLAMD_MAX_FILE_SIZE:-512M}
+      CLAMD_CONF_MaxScanSize: ${BOOKGUARD_CLAMD_MAX_SCAN_SIZE:-1024M}
     security_opt:
       - no-new-privileges:true
     # Deliberately no host-published ports and no media mounts. BookGuard
