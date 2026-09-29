@@ -36,13 +36,14 @@ from .repair import (
     require_current_scan_result,
     verify_repair_changes,
 )
+from .series_titles import bindery_series_names
 from .triage import result_signature, triage_state
 from .tika_client import test_connection
 from .verification_status import malware_scan_inconclusive, verification_is_inconclusive
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "19"
+VERIFIER_VERSION = "20"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -503,7 +504,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
 
             extracted = extract_ebook_identity(str(snapshot.path))
             verdict, confidence, evidence = classify_identity(
-                result,
+                {**result, "series": bindery_series_names(result.get("book_id"))},
                 extracted.metadata,
                 extracted.text,
                 extracted.identifiers,
