@@ -742,7 +742,7 @@ def start_verification_job(classification: str = "REVIEW", reason_code: str | No
         try:
             for index, row in enumerate(rows, start=1):
                 with _job_lock:
-                    _job_state["current"] = f"{row['author']} \u2014 {row['title']}"
+                    _job_state["current"] = f"{row['author']} — {row['title']}"
                 verification = verify_result(row)
                 verdict = str(verification.get("verdict") or "INSUFFICIENT_EVIDENCE")
                 counts[verdict] = counts.get(verdict, 0) + 1
