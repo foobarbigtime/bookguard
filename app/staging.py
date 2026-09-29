@@ -8,6 +8,7 @@ from .config import ConfigurationError, load_automation_settings, settings
 from .ebook_extraction import extract_ebook_identity
 from .ebook_security import inspect_ebook_security
 from .file_safety import sha256_file
+from .series_titles import bindery_series_names
 from .verification_engine import classify_identity
 from .verification_status import malware_scan_inconclusive
 
@@ -128,6 +129,7 @@ def verify_ebook_file(
         "book_id": int(book_id),
         "title": expected_title,
         "author": expected_author,
+        "series": bindery_series_names(int(book_id)),
     }
     # Staged bytes are headed into the library, so they get every check the
     # library verifier runs, including the deployment-configured malware scan.

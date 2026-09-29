@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from .matcher import author_match_strict, author_mentioned_in_text, meaningful_words, normalize
+from .series_titles import expected_title_variants
 from .verification_constants import FRONT_TEXT_CHARS
 
 PROXIMITY_CHARS = 3_000
@@ -130,16 +131,44 @@ def _classify_identity_base(
     embedded_title = str(metadata.get("title") or "")
     embedded_author = str(metadata.get("author") or "")
     front_text = front_text or text[:FRONT_TEXT_CHARS]
+    series_names = [str(name) for name in (result.get("series") or []) if str(name or "").strip()]
 
-    expected = _identity_signal(expected_title, expected_author, text, front_text)
+    # A catalogue title may carry its series ("Mary, Mary: Alex Cross, Book 11")
+    # while the book says only "Mary, Mary". The series-free title is an extra
+    # candidate; the full title is tried first and wins ties. Author, metadata,
+    # and front-of-book requirements below are unchanged.
+    title_variants = expected_title_variants(expected_title, series_names) or [expected_title]
+    matched_title, expected = max(
+        (
+            (variant, _identity_signal(variant, expected_author, text, front_text))
+            for variant in title_variants
+        ),
+        key=lambda item: (
+            item[1]["strong_identity"],
+            item[1]["front_proximity"],
+            item[1]["title_front_found"],
+            item[1]["title_found"],
+        ),
+    )
     embedded = _identity_signal(embedded_title, embedded_author, text, front_text)
 
-    metadata_title_match = _title_identity_match(expected_title, embedded_title)
+    metadata_title_match = any(
+        _title_identity_match(variant, embedded_title) for variant in title_variants
+    )
     metadata_author_match = author_match_strict(expected_author, embedded_author)
     metadata_matches_expected = metadata_title_match and metadata_author_match
 
+    expected_identity = {"title": expected_title, "author": expected_author}
+    if len(title_variants) > 1:
+        expected_identity.update(
+            {
+                "matchedTitle": matched_title,
+                "titleVariants": title_variants[1:],
+                "series": series_names,
+            }
+        )
     evidence = {
-        "expected": {"title": expected_title, "author": expected_author},
+        "expected": expected_identity,
         "embedded": {"title": embedded_title, "author": embedded_author, "identifiers": identifiers},
         "content": {
             # Preserve v0.4.7 keys for the UI/export while adding stronger evidence.
@@ -248,12 +277,18 @@ def classify_identity(
     title_position = expected_signal.get("title_first_position")
     embedded_title_position = embedded_signal.get("title_first_position")
 
-    expected_title = str(evidence.get("expected", {}).get("title") or "")
-    expected_author = str(evidence.get("expected", {}).get("author") or "")
+    expected_info = evidence.get("expected", {})
+    # Refinements judge the title the evidence was actually based on.
+    expected_title = str(expected_info.get("matchedTitle") or expected_info.get("title") or "")
+    expected_author = str(expected_info.get("author") or "")
     embedded_title = str(evidence.get("embedded", {}).get("title") or "")
     embedded_author = str(evidence.get("embedded", {}).get("author") or "")
 
-    metadata_title_match = _title_identity_match(expected_title, embedded_title)
+    metadata_title_match = any(
+        _title_identity_match(candidate, embedded_title)
+        for candidate in [str(expected_info.get("title") or ""), *expected_info.get("titleVariants", [])]
+        if candidate
+    )
     metadata_author_match = author_match_strict(expected_author, embedded_author)
 
     if _looks_collection_like(embedded_title):
