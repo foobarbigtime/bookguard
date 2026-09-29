@@ -36,13 +36,14 @@ from .repair import (
     require_current_scan_result,
     verify_repair_changes,
 )
+from .series_titles import bindery_series_names
 from .triage import result_signature, triage_state
 from .tika_client import test_connection
 from .verification_status import malware_scan_inconclusive, verification_is_inconclusive
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "19"
+VERIFIER_VERSION = "20"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -503,7 +504,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
 
             extracted = extract_ebook_identity(str(snapshot.path))
             verdict, confidence, evidence = classify_identity(
-                result,
+                {**result, "series": bindery_series_names(result.get("book_id"))},
                 extracted.metadata,
                 extracted.text,
                 extracted.identifiers,
@@ -741,7 +742,7 @@ def start_verification_job(classification: str = "REVIEW", reason_code: str | No
         try:
             for index, row in enumerate(rows, start=1):
                 with _job_lock:
-                    _job_state["current"] = f"{row['author']} — {row['title']}"
+                    _job_state["current"] = f"{row['author']} \u2014 {row['title']}"
                 verification = verify_result(row)
                 verdict = str(verification.get("verdict") or "INSUFFICIENT_EVIDENCE")
                 counts[verdict] = counts.get(verdict, 0) + 1
