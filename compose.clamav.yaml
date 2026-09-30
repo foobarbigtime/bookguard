@@ -20,6 +20,11 @@ services:
       CLAMD_CONF_StreamMaxLength: ${BOOKGUARD_CLAMD_STREAM_MAX_LENGTH:-512M}
       CLAMD_CONF_MaxFileSize: ${BOOKGUARD_CLAMD_MAX_FILE_SIZE:-512M}
       CLAMD_CONF_MaxScanSize: ${BOOKGUARD_CLAMD_MAX_SCAN_SIZE:-1024M}
+      # The image checks for new virus definitions once a day by default, so
+      # scans ran up to a day or more behind ClamAV's daily releases. 12 checks a
+      # day (every two hours) matches freshclam's own default and stays within
+      # ClamAV's guidance of no more than hourly checks.
+      FRESHCLAM_CHECKS: ${BOOKGUARD_FRESHCLAM_CHECKS:-12}
     security_opt:
       - no-new-privileges:true
     # Deliberately no host-published ports and no media mounts. BookGuard
