@@ -11,6 +11,7 @@ from .archive_io import read_zip_member_bounded, read_zip_member_prefix
 from .config import settings
 from .file_safety import read_file_prefix
 from .metadata import ebook_metadata
+from .mobi_text import read_mobi_text
 from . import pdf_probe
 from .tika_client import extract_text as tika_text
 from .verification_constants import FRONT_TEXT_CHARS, MIN_USEFUL_TEXT
@@ -167,6 +168,13 @@ def extract_plain_identity(path: str) -> tuple[dict, str, list[str], str]:
     return metadata, text, [], text[:FRONT_TEXT_CHARS]
 
 
+def extract_mobi_identity(path: str) -> tuple[dict, str, list[str], str, list[str]]:
+    """Kindle (MOBI/AZW/AZW3): header metadata plus the decoded book text."""
+    metadata = ebook_metadata(path)
+    result = read_mobi_text(path, settings.verification_max_text_chars)
+    return metadata, result.text, result.identifiers, result.text[:FRONT_TEXT_CHARS], result.notes
+
+
 def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
     """Extract native ebook evidence and use Tika only when configured and needed."""
     suffix = Path(path).suffix.lower()
@@ -187,6 +195,10 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
         elif suffix in {".txt", ".rtf"}:
             metadata, text, identifiers, front_text = extract_plain_identity(path)
             source = f"native-{suffix.lstrip('.')}"
+        elif suffix in {".mobi", ".azw", ".azw3"}:
+            metadata, text, identifiers, front_text, mobi_notes = extract_mobi_identity(path)
+            notes.extend(mobi_notes)
+            source = "native-mobi"
     except Exception as exc:
         notes.append(f"Native extraction error: {str(exc)[:300]}")
 
