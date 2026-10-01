@@ -43,7 +43,7 @@ from .verification_status import malware_scan_inconclusive, verification_is_inco
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "20"
+VERIFIER_VERSION = "21"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
