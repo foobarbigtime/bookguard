@@ -203,7 +203,9 @@ def _read_mobi_record0(path: str) -> bytes:
             )
 
         handle.seek(record0_offset)
-        record = handle.read(record_size + 1)
+        # Read exactly record 0. Real books always have more records after it,
+        # so reading one byte extra made every multi-record file look truncated.
+        record = handle.read(record_size)
         if len(record) != record_size:
             raise ValueError("MOBI metadata record is truncated")
         return record
