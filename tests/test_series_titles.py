@@ -143,3 +143,46 @@ def test_staged_replacement_with_series_tagged_catalog_title_is_admissible(tmp_p
 
     assert result["verdict"] == "VERIFIED_CORRECT"
     assert result["safeToAdmit"] is True
+
+
+# --- series tags in the file's own title -------------------------------------
+
+
+def test_file_title_with_numbered_series_tag_verifies():
+    # Real Kindle header from the Unraid library (Wings of Fire #11).
+    result = {"title": "Lost Continent", "author": "Tui T. Sutherland"}
+    text = _front("THE LOST CONTINENT", "TUI T. SUTHERLAND")
+
+    verdict, confidence, evidence = classify_identity(
+        result,
+        {"title": "The Lost Continent (Wings of Fire, Book 11)", "author": "Sutherland, Tui T."},
+        text, [], [], text,
+    )
+
+    assert (verdict, confidence) == ("VERIFIED_CORRECT", 99)
+    assert evidence["embedded"]["titleVariants"] == ["The Lost Continent"]
+
+
+def test_unnumbered_file_series_tag_needs_bindery_series_data():
+    # Real Kindle header: "The Feros (Vindico)" has no number to prove it is a series.
+    base = {"title": "The Feros", "author": "Wesley King"}
+    metadata = {"title": "The Feros (Vindico)", "author": "King, Wesley"}
+    text = _front("THE FEROS", "WESLEY KING")
+
+    with_series = classify_identity({**base, "series": ["Vindico"]}, metadata, text, [], [], text)
+    without_series = classify_identity(base, metadata, text, [], [], text)
+
+    assert with_series[:2] == ("VERIFIED_CORRECT", 99)
+    assert without_series[0] != "VERIFIED_CORRECT"
+
+
+def test_series_tagged_file_by_another_author_is_never_accepted():
+    result = {"title": "Mary, Mary: Alex Cross, Book 11", "author": "James Patterson"}
+    text = _front("MARY, MARY", "ED McBAIN")
+
+    verdict, _confidence, _evidence = classify_identity(
+        result, {"title": "Mary, Mary (87th Precinct, Book 37)", "author": "Ed McBain"},
+        text, [], [], text,
+    )
+
+    assert verdict not in {"VERIFIED_CORRECT", "METADATA_ERROR"}
