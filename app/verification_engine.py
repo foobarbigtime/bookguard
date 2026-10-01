@@ -152,8 +152,13 @@ def _classify_identity_base(
     )
     embedded = _identity_signal(embedded_title, embedded_author, text, front_text)
 
+    # Files carry series tags too ("The Lost Continent (Wings of Fire, Book 11)").
+    # The same unambiguous rule applies to the file's own title.
+    embedded_variants = expected_title_variants(embedded_title, series_names) or [embedded_title]
     metadata_title_match = any(
-        _title_identity_match(variant, embedded_title) for variant in title_variants
+        _title_identity_match(variant, embedded_variant)
+        for variant in title_variants
+        for embedded_variant in embedded_variants
     )
     metadata_author_match = author_match_strict(expected_author, embedded_author)
     metadata_matches_expected = metadata_title_match and metadata_author_match
@@ -167,9 +172,12 @@ def _classify_identity_base(
                 "series": series_names,
             }
         )
+    embedded_identity = {"title": embedded_title, "author": embedded_author, "identifiers": identifiers}
+    if len(embedded_variants) > 1:
+        embedded_identity["titleVariants"] = embedded_variants[1:]
     evidence = {
         "expected": expected_identity,
-        "embedded": {"title": embedded_title, "author": embedded_author, "identifiers": identifiers},
+        "embedded": embedded_identity,
         "content": {
             # Preserve v0.4.7 keys for the UI/export while adding stronger evidence.
             "expected_title_found": expected["title_found"],
@@ -284,10 +292,12 @@ def classify_identity(
     embedded_title = str(evidence.get("embedded", {}).get("title") or "")
     embedded_author = str(evidence.get("embedded", {}).get("author") or "")
 
+    embedded_info = evidence.get("embedded", {})
     metadata_title_match = any(
-        _title_identity_match(candidate, embedded_title)
+        _title_identity_match(candidate, embedded_candidate)
         for candidate in [str(expected_info.get("title") or ""), *expected_info.get("titleVariants", [])]
-        if candidate
+        for embedded_candidate in [embedded_title, *embedded_info.get("titleVariants", [])]
+        if candidate and embedded_candidate
     )
     metadata_author_match = author_match_strict(expected_author, embedded_author)
 
