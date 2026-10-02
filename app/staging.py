@@ -8,6 +8,7 @@ from .config import ConfigurationError, load_automation_settings, settings
 from .ebook_extraction import extract_ebook_identity
 from .ebook_security import inspect_ebook_security
 from .file_safety import sha256_file
+from .isbn_evidence import isbn_evidence
 from .series_titles import bindery_series_names
 from .verification_engine import classify_identity
 from .verification_status import malware_scan_inconclusive
@@ -149,7 +150,7 @@ def verify_ebook_file(
     if security["safe"]:
         extracted = extract_ebook_identity(str(path))
         verdict, confidence, evidence = classify_identity(
-            identity,
+            {**identity, "isbn_evidence": isbn_evidence(int(book_id), extracted.identifiers)},
             extracted.metadata,
             extracted.text,
             extracted.identifiers,
