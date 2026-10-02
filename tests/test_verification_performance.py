@@ -1,0 +1,141 @@
+"""Verification avoids copying unchanged books and records where time goes.
+
+An unchanged book with a saved verdict is answered from a read-only hash,
+without the private snapshot copy and fsync. Anything else (a changed file, a
+forced check, a file the snapshot rules refuse) still takes the full path.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import time
+
+import pytest
+
+from app import verifier
+from app.config import settings
+
+
+@dataclass
+class _Extracted:
+    metadata: dict
+    text: str
+    identifiers: list
+    notes: list
+    front_text: str
+    source: str
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    config = tmp_path / "config"
+    config.mkdir()
+    monkeypatch.setattr(settings, "config_dir", str(config))
+    monkeypatch.setattr(settings, "verification_enabled", True)
+    monkeypatch.setattr(settings, "verification_snapshot_max_bytes", 1024 * 1024)
+    verifier.init_verification_db()
+    monkeypatch.setattr(verifier, "inspect_ebook_security", lambda path, **kw: {
+        "safe": True, "checks": {}, "failures": [], "message": "ok"})
+    monkeypatch.setattr(verifier, "extract_ebook_identity", lambda path: _Extracted(
+        {"title": "Bel Canto", "author": "Ann Patchett"},
+        "Bel Canto by Ann Patchett " * 40, [], [], "Bel Canto\nAnn Patchett", "test"))
+    monkeypatch.setattr(verifier, "bindery_series_names", lambda _id: [])
+    monkeypatch.setattr(verifier, "isbn_evidence", lambda _id, _ids: {})
+    source = tmp_path / "Bel Canto - Ann Patchett.txt"
+    source.write_text("Bel Canto by Ann Patchett", encoding="utf-8")
+    result = {
+        "id": 1, "scan_id": "scan-1", "file_id": 2, "book_id": 3, "format": "ebook",
+        "author": "Ann Patchett", "title": "Bel Canto", "local_path": str(source),
+    }
+    return result, source
+
+
+@pytest.fixture
+def snapshot_calls(monkeypatch):
+    calls: list[str] = []
+    real = verifier.verification_snapshot
+
+    def counting(path, **kwargs):
+        calls.append(str(path))
+        return real(path, **kwargs)
+
+    monkeypatch.setattr(verifier, "verification_snapshot", counting)
+    return calls
+
+
+def test_unchanged_book_is_answered_from_cache_without_a_snapshot(env, snapshot_calls):
+    result, _source = env
+
+    first = verifier.verify_result(result)
+    second = verifier.verify_result(result)
+
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert second["verdict"] == first["verdict"]
+    assert len(snapshot_calls) == 1
+
+
+def test_changed_book_is_checked_again(env, snapshot_calls):
+    result, source = env
+
+    verifier.verify_result(result)
+    source.write_text("Bel Canto by Ann Patchett, revised", encoding="utf-8")
+    again = verifier.verify_result(result)
+
+    assert again["cached"] is False
+    assert len(snapshot_calls) == 2
+
+
+def test_forced_check_always_takes_the_full_path(env, snapshot_calls):
+    result, _source = env
+
+    verifier.verify_result(result)
+    forced = verifier.verify_result(result, force=True)
+
+    assert forced["cached"] is False
+    assert len(snapshot_calls) == 2
+
+
+def test_a_file_the_snapshot_refuses_is_not_served_from_the_hash_check(env, monkeypatch):
+    result, _source = env
+    monkeypatch.setattr(settings, "verification_snapshot_max_bytes", 4)
+
+    first = verifier.verify_result(result)
+    second = verifier.verify_result(result)
+
+    assert first["source"] == second["source"] == "source-snapshot"
+    assert second["cached"] is False
+
+
+def test_fresh_verification_records_stage_timings(env):
+    result, _source = env
+
+    timings = verifier.verify_result(result)["evidence"]["timings"]
+
+    assert set(timings) == {"snapshotMs", "safetyChecksMs", "identityMs"}
+    assert all(isinstance(value, int) and value >= 0 for value in timings.values())
+
+
+def test_verification_job_reports_cache_hits_and_elapsed_time(monkeypatch):
+    rows = [{"author": "A", "title": str(i)} for i in range(3)]
+    monkeypatch.setattr(verifier, "latest_scan", lambda: {"id": "s", "status": "complete"})
+    monkeypatch.setattr(verifier, "latest_results", lambda **kw: rows)
+    monkeypatch.setattr(verifier, "triage_state", lambda row: {})
+    outcomes = iter([{"verdict": "VERIFIED_CORRECT", "cached": True},
+                     {"verdict": "VERIFIED_CORRECT", "cached": False},
+                     {"verdict": "INSUFFICIENT_EVIDENCE", "cached": True}])
+    monkeypatch.setattr(verifier, "verify_result", lambda row: next(outcomes))
+    with verifier._job_lock:
+        verifier._job_state["status"] = "idle"
+
+    assert verifier.start_verification_job("REVIEW")
+    for _ in range(200):
+        if verifier.verification_job_status()["status"] == "complete":
+            break
+        time.sleep(0.01)
+    status = verifier.verification_job_status()
+
+    assert status["status"] == "complete"
+    assert status["processed"] == 3
+    assert status["cacheHits"] == 2
+    assert isinstance(status["elapsedSeconds"], int)
