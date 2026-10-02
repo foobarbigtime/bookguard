@@ -9,6 +9,7 @@ import threading
 import uuid
 
 from .audiobook_evidence import build_audiobook_evidence
+from .catalogue_relationship import classify_relationship, latest_ebook_scan_status
 from .config import settings
 from .db import (
     create_metadata_repair,
@@ -44,7 +45,7 @@ from .verification_status import malware_scan_inconclusive, verification_is_inco
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "23"
+VERIFIER_VERSION = "24"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -518,6 +519,13 @@ def verify_result(result: dict, force: bool = False) -> dict:
             )
             assert_snapshot_source_current(snapshot)
             evidence["security"] = security
+            if evidence.get("actualBook"):
+                # Read-only: how this file relates to the book it really is.
+                catalogue = classify_relationship(
+                    snapshot.sha256, evidence["actualBook"], latest_ebook_scan_status,
+                )
+                evidence["catalogue"] = catalogue
+                evidence["explanation"] = f"{evidence['explanation']} {catalogue['explanation']}"
             return _save_verification(
                 result,
                 target,
