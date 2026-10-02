@@ -264,7 +264,91 @@ def _looks_collection_like(title: str) -> bool:
     )
 
 
+def _metadata_title_matches(evidence: dict, title: str) -> bool:
+    """Does the file's own title (or a series-free variant) match ``title``?"""
+    embedded = evidence.get("embedded", {})
+    candidates = [str(embedded.get("title") or ""), *embedded.get("titleVariants", [])]
+    targets = expected_title_variants(title) or [title]
+    return any(
+        _title_identity_match(target, candidate)
+        for target in targets
+        for candidate in candidates
+        if target and candidate
+    )
+
+
+def _apply_isbn_evidence(
+    verdict: str, confidence: int, evidence: dict, result: dict
+) -> tuple[str, int, dict]:
+    """Use the file's ISBN only when a second, independent signal agrees.
+
+    - The ISBN is one of the expected book's editions and the file's own title
+      matches the expected book: the file is that book.
+    - The ISBN belongs to a different Bindery book and the file's own title
+      matches that book: the file is that other book.
+
+    Only undecided results are upgraded. An ISBN that contradicts a
+    WRONG_CONTENT verdict sends it back for review; an ISBN on its own never
+    decides anything.
+    """
+    isbn = result.get("isbn_evidence") or {}
+    if not isbn.get("isbns"):
+        return verdict, confidence, evidence
+    evidence["isbn"] = isbn
+    expected_title = str(evidence.get("expected", {}).get("title") or "")
+    title_agrees = _metadata_title_matches(evidence, expected_title)
+
+    if isbn.get("expectedMatch"):
+        if verdict == "INSUFFICIENT_EVIDENCE" and title_agrees:
+            evidence["explanation"] = (
+                "The file's ISBN is one of this book's editions in Bindery, and the "
+                "file's own title agrees with the expected book."
+            )
+            return "VERIFIED_CORRECT", 99, evidence
+        if verdict == "WRONG_CONTENT":
+            evidence["explanation"] = (
+                "The content points to a different book, but the file's ISBN is one of "
+                "this book's editions in Bindery. The evidence conflicts, so it is left "
+                "for review."
+            )
+            return "INSUFFICIENT_EVIDENCE", 70, evidence
+        return verdict, confidence, evidence
+
+    if verdict != "INSUFFICIENT_EVIDENCE" or title_agrees:
+        return verdict, confidence, evidence
+    for owner in isbn.get("otherOwners") or []:
+        if _metadata_title_matches(evidence, str(owner.get("title") or "")):
+            evidence["actualBook"] = owner
+            evidence["explanation"] = (
+                f"The file's ISBN and its own title both identify \"{owner.get('title')}\" "
+                f"(Bindery book {owner.get('bookId')}), not the expected book."
+                + (
+                    " Bindery already has a file for that book, so this may be a "
+                    "duplicate catalogue entry rather than a missing download."
+                    if owner.get("hasFile")
+                    else ""
+                )
+            )
+            return "WRONG_CONTENT", 99, evidence
+    return verdict, confidence, evidence
+
+
 def classify_identity(
+    result: dict,
+    metadata: dict,
+    text: str,
+    identifiers: list[str],
+    notes: list[str],
+    front_text: str = "",
+) -> tuple[str, int, dict]:
+    """Classify identity, apply safety refinements, then corroborated ISBN evidence."""
+    verdict, confidence, evidence = _classify_identity_refined(
+        result, metadata, text, identifiers, notes, front_text
+    )
+    return _apply_isbn_evidence(verdict, confidence, evidence, result)
+
+
+def _classify_identity_refined(
     result: dict,
     metadata: dict,
     text: str,
