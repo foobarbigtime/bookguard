@@ -64,8 +64,7 @@ def isbn_evidence(book_id: int | None, identifiers: Iterable[Any]) -> dict:
         with bindery_conn() as conn:
             rows = conn.execute(
                 f"""
-                SELECT e.book_id, e.isbn_13, e.isbn_10, b.title, a.name AS author,
-                       EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id) AS has_file
+                SELECT e.book_id, e.isbn_13, e.isbn_10, b.title, a.name AS author
                 FROM editions e
                 JOIN books b ON b.id = e.book_id
                 LEFT JOIN authors a ON a.id = b.author_id
@@ -74,23 +73,34 @@ def isbn_evidence(book_id: int | None, identifiers: Iterable[Any]) -> dict:
                 """,
                 [*candidates, *candidates],
             ).fetchall()
+            others: dict[int, dict] = {}
+            for row in rows:
+                owned = {isbn13(row["isbn_13"]), isbn13(row["isbn_10"])} & set(isbns)
+                if not owned:
+                    continue
+                owner = int(row["book_id"])
+                if owner == int(book_id):
+                    evidence["expectedMatch"] = True
+                elif owner not in others and len(others) < 5:
+                    # Only ebook files count: an audiobook does not make an
+                    # ebook a duplicate.
+                    files = conn.execute(
+                        "SELECT path, size_bytes FROM book_files "
+                        "WHERE book_id = ? AND format = 'ebook' ORDER BY id LIMIT 5",
+                        (owner,),
+                    ).fetchall()
+                    others[owner] = {
+                        "bookId": owner,
+                        "title": str(row["title"] or ""),
+                        "author": str(row["author"] or ""),
+                        "hasFile": bool(files),
+                        "ebookFiles": [
+                            {"path": str(f["path"]), "size": int(f["size_bytes"] or 0)}
+                            for f in files
+                        ],
+                    }
     except (sqlite3.Error, OSError, ValueError):
         return evidence
 
-    others: dict[int, dict] = {}
-    for row in rows:
-        owned = {isbn13(row["isbn_13"]), isbn13(row["isbn_10"])} & set(isbns)
-        if not owned:
-            continue
-        owner = int(row["book_id"])
-        if owner == int(book_id):
-            evidence["expectedMatch"] = True
-        elif owner not in others:
-            others[owner] = {
-                "bookId": owner,
-                "title": str(row["title"] or ""),
-                "author": str(row["author"] or ""),
-                "hasFile": bool(row["has_file"]),
-            }
-    evidence["otherOwners"] = list(others.values())[:5]
+    evidence["otherOwners"] = list(others.values())
     return evidence

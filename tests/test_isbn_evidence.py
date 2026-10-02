@@ -31,14 +31,15 @@ def bindery(tmp_path, monkeypatch):
             CREATE TABLE books (id INTEGER PRIMARY KEY, author_id INTEGER, title TEXT NOT NULL);
             CREATE TABLE editions (id INTEGER PRIMARY KEY, book_id INTEGER, title TEXT,
                                    isbn_13 TEXT, isbn_10 TEXT);
-            CREATE TABLE book_files (id INTEGER PRIMARY KEY, book_id INTEGER, path TEXT);
+            CREATE TABLE book_files (id INTEGER PRIMARY KEY, book_id INTEGER, format TEXT,
+                                     path TEXT, size_bytes INTEGER NOT NULL DEFAULT 0);
             INSERT INTO authors VALUES (1, 'James S. A. Corey'), (2, 'James Patterson'), (3, 'Stephen King');
             INSERT INTO books VALUES (10, 1, 'Old Mars'), (20, 2, 'Kill'), (21, 2, 'Kill Alex Cross'),
                                      (30, 3, 'Der Anschlag'), (31, 3, '11/22/63');
             INSERT INTO editions VALUES (1, 10, 'Old Mars', '978-0-345-53727-0', NULL),
                                         (2, 21, 'Kill Alex Cross', NULL, '0316198730'),
                                         (3, 31, '11/22/63', '9781451627282', NULL);
-            INSERT INTO book_files VALUES (1, 21, '/books/Kill Alex Cross.epub');
+            INSERT INTO book_files VALUES (1, 21, 'ebook', '/books/Kill Alex Cross.epub', 0);
             """
         )
     monkeypatch.setattr(settings, "bindery_db", str(path))
@@ -82,7 +83,10 @@ def test_isbn_ten_owned_by_another_book_is_reported_with_its_file_status(bindery
     evidence = isbn_evidence(20, [KILL_ALEX_CROSS])
     assert evidence["expectedMatch"] is False
     assert evidence["otherOwners"] == [
-        {"bookId": 21, "title": "Kill Alex Cross", "author": "James Patterson", "hasFile": True},
+        {
+            "bookId": 21, "title": "Kill Alex Cross", "author": "James Patterson", "hasFile": True,
+            "ebookFiles": [{"path": "/books/Kill Alex Cross.epub", "size": 0}],
+        },
     ]
 
 
@@ -124,7 +128,7 @@ def test_file_that_is_another_catalogued_book_is_identified(bindery):
 
     assert (verdict, confidence) == ("WRONG_CONTENT", 99)
     assert evidence["actualBook"]["bookId"] == 21
-    assert "duplicate catalogue entry" in evidence["explanation"]
+    assert "Kill Alex Cross" in evidence["explanation"]
 
 
 def test_a_translation_whose_title_matches_the_expected_book_is_not_called_wrong(bindery):
