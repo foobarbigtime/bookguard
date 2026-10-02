@@ -19,6 +19,7 @@ from .db import (
 )
 from .ebook_extraction import extract_ebook_identity
 from .ebook_security import inspect_ebook_security
+from .isbn_evidence import isbn_evidence
 from .file_snapshot import (
     SnapshotError,
     assert_snapshot_source_current,
@@ -43,7 +44,7 @@ from .verification_status import malware_scan_inconclusive, verification_is_inco
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "22"
+VERIFIER_VERSION = "23"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -504,7 +505,11 @@ def verify_result(result: dict, force: bool = False) -> dict:
 
             extracted = extract_ebook_identity(str(snapshot.path))
             verdict, confidence, evidence = classify_identity(
-                {**result, "series": bindery_series_names(result.get("book_id"))},
+                {
+                    **result,
+                    "series": bindery_series_names(result.get("book_id")),
+                    "isbn_evidence": isbn_evidence(result.get("book_id"), extracted.identifiers),
+                },
                 extracted.metadata,
                 extracted.text,
                 extracted.identifiers,
