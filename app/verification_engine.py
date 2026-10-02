@@ -322,12 +322,6 @@ def _apply_isbn_evidence(
             evidence["explanation"] = (
                 f"The file's ISBN and its own title both identify \"{owner.get('title')}\" "
                 f"(Bindery book {owner.get('bookId')}), not the expected book."
-                + (
-                    " Bindery already has a file for that book, so this may be a "
-                    "duplicate catalogue entry rather than a missing download."
-                    if owner.get("hasFile")
-                    else ""
-                )
             )
             return "WRONG_CONTENT", 99, evidence
     return verdict, confidence, evidence
