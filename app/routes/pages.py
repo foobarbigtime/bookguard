@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 
 from .. import __version__
 from ..attention import attention_snapshot
+from ..catalogue_move import list_moves
 from ..config import settings
 from ..diagnostics import diagnostics_snapshot
 from ..history import operation_detail, operation_history
@@ -157,6 +158,7 @@ def triage_page(
             "rows": enriched,
             "allow_actions": settings.allow_actions,
             "cleanup_history": recent_cleanup_actions(100),
+            "catalogue_moves": list_moves(50),
             "version": __version__,
         },
     )

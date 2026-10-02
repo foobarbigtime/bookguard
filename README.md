@@ -273,6 +273,43 @@ bash scripts/build-with-provenance.sh
 docker compose -f compose.yaml -f compose.actions.yaml up -d --no-build
 ```
 
+### Moving a misfiled ebook to the right book
+
+Sometimes verification shows that an ebook filed under one book is really
+another catalogued book, and that book has no ebook of its own. For example, a
+file imported for a truncated *Kill* entry is really *Kill Alex Cross*. The fix
+is not a download: Bindery can move the file to the book it really is.
+
+On the Triage page, a `WRONG_CONTENT` verification for such a file gains a
+**Move to correct book** button. It opens a read-only preview showing the book
+the file is filed under, the book it really belongs to, and the current and new
+paths. If anything makes the move unsafe, the preview lists the reasons instead
+of offering the move.
+
+The move requires `BOOKGUARD_ALLOW_ACTIONS=true` and explicit
+`MOVE_TO_CORRECT_BOOK` confirmation. At the moment of acting BookGuard verifies
+the file again (including the malware scan) and requires that:
+
+- the file is still proven to be the other book's missing ebook;
+- Bindery's import mode is normal, not `external` (which skips file moves);
+- the right book still has no ebook;
+- Bindery tracks the file under exactly the book it was filed as;
+- Bindery's own preview reports a move to a path inside the ebook library.
+
+BookGuard records the plan, asks Bindery once to reassign the exact path, and
+then confirms that the right book tracks the new path, the old book no longer
+tracks the old one, and the file at the new path has the verified SHA-256.
+Bindery performs the move; BookGuard never writes to the library itself and
+does not need the writable action alias. The book the file was filed under is
+left without an ebook; the Replacement workflow can fetch one for it.
+
+Bindery moves files in the background. If it has not finished within two
+minutes the move stays pending, and **Check again** in the Triage page's
+**Moves to the right book** history re-checks it read-only, without asking
+Bindery again. The same check is available from
+`POST /api/catalogue-moves/{id}/reconcile`, and the history from
+`GET /api/catalogue-moves`.
+
 ### Observe Mode (v0.6 foundation)
 
 Observe Mode is the first stage of BookGuard's safe automation work. It is
@@ -881,6 +918,8 @@ app/automatic_alternate.py  Operator-selected alternate grab executor
 app/alternate_*.py          Alternate candidate review and durable operator selection
 app/automatic_quarantine*.py Unsafe-media quarantine and post-quarantine grab
 app/quarantine_*.py         Quarantine filesystem moves, selection, handoff, and final-state proof
+app/catalogue_relationship.py How a misfiled ebook relates to the book it really is
+app/catalogue_move.py       Guarded move of a misfiled ebook to the right book
 app/attention.py            Attention queue assembly
 app/attention_execution.py  Attention entries for interrupted E4 receipts
 app/operator_guidance.py    Read-only operator guidance for Attention items
@@ -889,6 +928,7 @@ tools/clamav_acceptance.py  Live ClamAV clean/EICAR acceptance test
 scripts/smoke-test.sh       One-command containerized smoke-test runner
 compose.clamav.yaml         Optional private ClamAV deployment overlay
 static/triage-acquisition.js Supervised replacement UI controller
+static/triage-move.js       Move-to-correct-book UI controller
 ```
 
 Versioned entry-point and verifier wrappers are intentionally avoided. New
