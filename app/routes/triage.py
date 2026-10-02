@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..actions import ActionError, detach_missing, missing_detach_preview
+from ..actions import ActionError, detach_missing, missing_detach_preview, resolve_bindery_api_key
+from ..bindery_client import BinderyClient
+from ..catalogue_move import (
+    CatalogueMoveError,
+    list_moves,
+    move_preview,
+    move_to_correct_book,
+    reconcile_move,
+)
 from ..db import latest_results, latest_scan, result_by_id
 from ..scanner import start_scan
 from ..services.dashboard import latest_missing_cleanup
+from ..verifier import verify_result
 from ..triage import (
     TRIAGE_CLASSES,
     clear_keep_decision,
@@ -247,3 +256,49 @@ async def api_detach_all_missing(request: Request):
             "No physical files were deleted or moved. A validation scan was started."
         ),
     }
+
+
+@router.get("/triage/{result_id}/move-preview")
+def api_triage_move_preview(result_id: int):
+    """Read-only: can this file be moved to the Bindery book it really is?"""
+    item = _triage_item(result_id)
+    try:
+        client = BinderyClient(api_key=resolve_bindery_api_key())
+        return move_preview(item, verify_result(item), client)
+    except (ActionError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/triage/{result_id}/move-to-correct-book")
+async def api_triage_move_to_correct_book(result_id: int, request: Request):
+    item = _triage_item(result_id)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    confirm = payload.get("confirm") if isinstance(payload, dict) else None
+    try:
+        client = BinderyClient(api_key=resolve_bindery_api_key())
+        move = move_to_correct_book(item, str(confirm or ""), verify=verify_result, client=client)
+    except (ActionError, CatalogueMoveError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    messages = {
+        "confirmed": "Bindery moved the file to the right book; its fingerprint matches the verified file.",
+        "pending": "Bindery accepted the move but has not finished; check again with reconcile.",
+        "fingerprint_mismatch": "Bindery tracks the new path, but the file there does not match the verified file.",
+    }
+    return {"ok": move["status"] == "confirmed", "move": move, "message": messages.get(move["status"], move["status"])}
+
+
+@router.post("/catalogue-moves/{move_id}/reconcile")
+def api_catalogue_move_reconcile(move_id: int):
+    """Read-only re-check of a requested move; never asks Bindery again."""
+    try:
+        return reconcile_move(move_id)
+    except CatalogueMoveError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/catalogue-moves")
+def api_catalogue_moves():
+    return {"moves": list_moves()}
