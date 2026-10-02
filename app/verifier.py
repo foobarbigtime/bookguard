@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 import uuid
 
 from .audiobook_evidence import build_audiobook_evidence
@@ -66,6 +67,8 @@ _job_state: dict = {
     "counts": {},
     "current": "",
     "error": None,
+    "cacheHits": 0,
+    "elapsedSeconds": 0,
 }
 
 
@@ -389,6 +392,17 @@ def verify_result(result: dict, force: bool = False) -> dict:
         )
 
     target = resolve_ebook_target(result.get("local_path") or "")
+    started = time.monotonic()
+    if not force:
+        # Hash the file read-only and consult the cache before copying it. An
+        # unchanged book then costs one read instead of a full private copy and
+        # fsync. The hash uses the same no-follow descriptor and stability checks
+        # as the snapshot; failures fall through to the snapshot path unchanged.
+        precheck = _file_fingerprint(target)
+        if precheck.startswith("sha256:"):
+            cached = _verification_for_fingerprint(result, target, precheck)
+            if cached:
+                return cached
     snapshot_root = Path(settings.config_dir) / ".verification-snapshots"
     try:
         with verification_snapshot(
@@ -397,6 +411,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
             max_bytes=settings.verification_snapshot_max_bytes,
         ) as snapshot:
             fingerprint = snapshot.fingerprint
+            snapshot_done = time.monotonic()
             if not force:
                 cached = _verification_for_fingerprint(result, target, fingerprint)
                 if cached:
@@ -448,6 +463,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
                 "size": snapshot.size,
                 "sourceStable": True,
             }
+            security_done = time.monotonic()
             if not security["safe"] and malware_scan_inconclusive(security):
                 assert_snapshot_source_current(snapshot)
                 malware = (security.get("checks") or {}).get("malwareScan") or {}
@@ -519,6 +535,12 @@ def verify_result(result: dict, force: bool = False) -> dict:
             )
             assert_snapshot_source_current(snapshot)
             evidence["security"] = security
+            identity_done = time.monotonic()
+            evidence["timings"] = {
+                "snapshotMs": round((snapshot_done - started) * 1000),
+                "safetyChecksMs": round((security_done - snapshot_done) * 1000),
+                "identityMs": round((identity_done - security_done) * 1000),
+            }
             if evidence.get("actualBook"):
                 # Read-only: how this file relates to the book it really is.
                 catalogue = classify_relationship(
@@ -748,10 +770,14 @@ def start_verification_job(classification: str = "REVIEW", reason_code: str | No
             "counts": {},
             "current": "",
             "error": None,
+            "cacheHits": 0,
+            "elapsedSeconds": 0,
         })
 
     def worker() -> None:
         counts: dict[str, int] = {}
+        cache_hits = 0
+        job_started = time.monotonic()
         try:
             for index, row in enumerate(rows, start=1):
                 with _job_lock:
@@ -759,9 +785,13 @@ def start_verification_job(classification: str = "REVIEW", reason_code: str | No
                 verification = verify_result(row)
                 verdict = str(verification.get("verdict") or "INSUFFICIENT_EVIDENCE")
                 counts[verdict] = counts.get(verdict, 0) + 1
+                if verification.get("cached"):
+                    cache_hits += 1
                 with _job_lock:
                     _job_state["processed"] = index
                     _job_state["counts"] = dict(counts)
+                    _job_state["cacheHits"] = cache_hits
+                    _job_state["elapsedSeconds"] = round(time.monotonic() - job_started)
             with _job_lock:
                 _job_state["status"] = "complete"
                 _job_state["current"] = ""
