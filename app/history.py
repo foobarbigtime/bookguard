@@ -143,7 +143,7 @@ def _cleanup_events(conn, limit: int) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT id, action_kind, status, author, title, stored_path, local_path,
-               created_at, completed_at, error
+               created_at, completed_at, error, followup
         FROM cleanup_actions
         ORDER BY id DESC
         LIMIT ?
@@ -172,7 +172,7 @@ def _cleanup_events(conn, limit: int) -> list[dict[str, Any]]:
                 title=str(row["title"] or ""),
                 author=str(row["author"] or ""),
                 path=str(row["stored_path"] or row["local_path"] or ""),
-                message=str(row["error"] or action.replace("_", " ").title()),
+                message=str(row["error"] or row["followup"] or action.replace("_", " ").title()),
                 detail_href=f"/activity/cleanup/{row['id']}",
             )
         )

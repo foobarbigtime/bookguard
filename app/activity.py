@@ -136,11 +136,13 @@ def _from_history(item: dict[str, Any]) -> dict[str, Any] | None:
     if kind in {"cleanup", "repair"} and status in {"applied", "undone"}:
         base["detail"] = ""  # only the internal action name; errors are kept
     if kind == "cleanup":
-        result = _status_result(status, done={"applied"})
+        result = _status_result(status, done={"applied"}, waiting={"attention"})
         verb = {"Quarantine": "quarantined", "Detach": "detached from Bindery",
                 "Put back": "put back"}.get(label, "cleaned up")
         if result == "done":
             sentence = f"You {verb} {_book(title)}" + (" (nothing was deleted)" if label == "Quarantine" else "")
+        elif result == "waiting":
+            sentence = f"You {verb} {_book(title)}; Bindery needs you to finish"
         else:
             sentence = f"{label} of {_book(title)} {RESULTS[result].lower()}"
         return _event(**base, what="decisions", who="you", result=result, sentence=sentence)

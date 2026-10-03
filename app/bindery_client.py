@@ -161,6 +161,25 @@ class BinderyClient:
     def get_book(self, book_id: int) -> dict[str, Any]:
         return self._request("GET", f"/book/{int(book_id)}")
 
+    def set_book_monitored(self, book_id: int, monitored: bool) -> dict[str, Any]:
+        """Turn Bindery's monitoring of one book on or off; nothing else changes."""
+        return self._request("PUT", f"/book/{int(book_id)}", json={"monitored": bool(monitored)})
+
+    def list_unmatched(self, *, search: str = "", file_format: str | None = None) -> dict[str, Any]:
+        """Files Bindery's library scan found but could not match to a book."""
+        params: dict[str, Any] = {"limit": 250}
+        if search:
+            params["search"] = search
+        if file_format:
+            params["format"] = file_format
+        return self._request("GET", "/library/unmatched", params=params)
+
+    def adopt_unmatched(self, row_id: int, book_id: int) -> dict[str, Any]:
+        """Register one unmatched row's files in place against an existing book."""
+        return self._request(
+            "POST", f"/library/unmatched/{int(row_id)}/adopt", json={"bookId": int(book_id)}
+        )
+
     def search_book(self, book_id: int) -> dict[str, Any]:
         return self._request("POST", f"/book/{int(book_id)}/search")
 

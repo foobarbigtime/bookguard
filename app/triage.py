@@ -7,7 +7,8 @@ from pathlib import Path
 import time
 
 from .action_paths import ebook_action_preview, mount_is_writable
-from .actions import ActionError, detach, quarantine_file
+from .actions import ActionError, detach, quarantine_file, resolve_bindery_api_key
+from .bindery_client import BinderyClient, BinderyClientError
 from .config import settings
 from .db import (
     bindery_file_by_id,
@@ -319,7 +320,31 @@ def triage_detach(result: dict) -> int:
         raise ActionError(str(exc)) from exc
 
 
-def _record_quarantine_location(cleanup_id: int, original: Path, destination: Path) -> None:
+def _unmonitor_before_quarantine(book_id: int) -> bool:
+    """Stop Bindery searching for this book while its file is out. Returns the old state."""
+    client = BinderyClient(api_key=resolve_bindery_api_key(), timeout=30)
+    try:
+        was_monitored = bool(client.get_book(book_id).get("monitored"))
+        if was_monitored:
+            client.set_book_monitored(book_id, False)
+    except BinderyClientError as exc:
+        raise ActionError(
+            f"Could not stop Bindery monitoring this book, so nothing was moved: {exc}"
+        ) from exc
+    return was_monitored
+
+
+def _monitor_again(book_id: int) -> str:
+    try:
+        BinderyClient(api_key=resolve_bindery_api_key(), timeout=30).set_book_monitored(book_id, True)
+    except (ActionError, BinderyClientError) as exc:
+        return f" Bindery is no longer monitoring this book; turn monitoring back on in Bindery ({exc})."
+    return ""
+
+
+def _record_quarantine_location(
+    cleanup_id: int, original: Path, destination: Path, *, was_monitored: bool
+) -> None:
     """Remember where the file went and its bytes, so Put back can undo exactly this."""
     sha256 = size_bytes = None
     try:
@@ -334,6 +359,7 @@ def _record_quarantine_location(cleanup_id: int, original: Path, destination: Pa
         quarantine_path=str(destination),
         sha256=sha256,
         size_bytes=size_bytes,
+        was_monitored=was_monitored,
     )
 
 
@@ -353,12 +379,20 @@ def triage_quarantine(result: dict) -> tuple[int, str]:
         final_preview = triage_action_preview(result, "quarantine")
         if not final_preview["safe"]:
             raise ActionError(final_preview["reason"])
-        destination, original = quarantine_file(
-            result["book_id"],
-            result["stored_path"],
-            result["local_path"],
+        was_monitored = _unmonitor_before_quarantine(int(result["book_id"]))
+        try:
+            destination, original = quarantine_file(
+                result["book_id"],
+                result["stored_path"],
+                result["local_path"],
+            )
+        except Exception as exc:
+            if was_monitored:
+                raise ActionError(f"{exc}{_monitor_again(int(result['book_id']))}") from exc
+            raise
+        _record_quarantine_location(
+            cleanup_id, original, Path(destination), was_monitored=was_monitored
         )
-        _record_quarantine_location(cleanup_id, original, Path(destination))
         _wait_for_bindery_row_gone(int(result["file_id"]))
         finish_cleanup_action(cleanup_id, "applied")
         return cleanup_id, destination
