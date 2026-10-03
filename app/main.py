@@ -21,6 +21,7 @@ from .routes.repairs import router as repairs_router
 from .routes.system import router as system_router
 from .routes.triage import router as triage_router
 from .routes.verification import router as verification_router
+from .change_log import record_app_start
 from .scanner import start_scan
 from .triage import init_triage_db
 from .verifier import init_verification_db
@@ -31,6 +32,7 @@ async def lifespan(_: FastAPI):
     init_local_db()
     init_triage_db()
     init_verification_db()
+    record_app_start()
     settings.apply(load_persisted_settings())
     if settings.scan_on_start:
         start_scan()

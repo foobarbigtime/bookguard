@@ -126,8 +126,8 @@
             <li>
               <time data-local datetime="{{ event.timestamp }}">{{ event.timestamp[:16]|replace('T', ' ') }}</time>
               <span>
-                <a href="{{ event.detailHref }}">{{ event.kindLabel }} · {{ event.status|replace('_', ' ') }}</a>
-                {% if event.title %}<span class="muted"> · {{ event.title }}{% if event.author %}, {{ event.author }}{% endif %}</span>{% endif %}
+                {% if event.detailHref %}<a href="{{ event.detailHref }}">{{ event.sentence }}</a>{% else %}{{ event.sentence }}{% endif %}
+                <span class="muted"> · {{ event.whoLabel }}{% if event.result != 'done' %} · {{ event.resultLabel }}{% endif %}</span>
               </span>
             </li>
           {% endfor %}

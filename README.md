@@ -930,6 +930,8 @@ app/catalogue_relationship.py How a misfiled ebook relates to the book it really
 app/catalogue_move.py       Guarded move of a misfiled ebook to the right book
 app/attention.py            Attention queue assembly
 app/home.py                 Read-only Home summary (health, decisions, activity)
+app/activity.py             Activity timeline: plain sentences, who, result, filters
+app/change_log.py           Records of setting changes and BookGuard starts/updates
 app/library_review.py       Open items grouped by the decision they need
 app/attention_execution.py  Attention entries for interrupted E4 receipts
 app/operator_guidance.py    Read-only operator guidance for Attention items

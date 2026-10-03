@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard Activity</title>
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
+</head>
+<body>
+{% from "_layout.html" import site_header %}
+{{ site_header("activity", "", version) }}
+
+<main class="activity-page">
+  <div class="review-head">
+    <h1>Activity</h1>
+    <p>Everything BookGuard and you have done, newest first. Reading this page changes nothing.</p>
+  </div>
+
+  <form class="activity-filters" method="get" action="/activity" role="search">
+    <label>What
+      <select name="what">
+        <option value="">Everything</option>
+        {% for key, label in what_options.items() %}<option value="{{ key }}"{% if filters.what == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Who
+      <select name="who">
+        <option value="">Anyone</option>
+        {% for key, label in who_options.items() %}<option value="{{ key }}"{% if filters.who == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Result
+      <select name="result">
+        <option value="">Any result</option>
+        <option value="problems"{% if filters.result == 'problems' %} selected{% endif %}>Problems only</option>
+        {% for key, label in result_options.items() %}<option value="{{ key }}"{% if filters.result == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>When
+      <select name="period">
+        <option value="">Any time</option>
+        {% for key, label in [('1', 'Last 24 hours'), ('7', 'Last 7 days'), ('30', 'Last 30 days')] %}<option value="{{ key }}"{% if filters.period == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="activity-search">Search
+      <input type="search" name="q" value="{{ filters.q }}" placeholder="Title, author or path">
+    </label>
+    <button type="submit">Apply</button>
+    {% if filtering %}<a class="button-link" href="/activity">Clear</a>{% endif %}
+  </form>
+
+  <section class="activity-totals" aria-label="Totals">
+    <span><b>{{ totals.events }}</b> {{ 'event' if totals.events == 1 else 'events' }}</span>
+    <a href="/activity?result=problems"><b class="{{ 'tone-amber' if totals.problems }}">{{ totals.problems }}</b> stopped, failed or waiting for you</a>
+    {% if total_shown > events|length %}<span class="muted">Showing the newest {{ events|length }}.</span>{% endif %}
+  </section>
+
+  <section class="card activity-list" aria-label="Timeline">
+    {% for event in events %}
+      <article class="activity-event" data-day="{{ event.timestamp }}">
+        <time data-local="time" datetime="{{ event.timestamp }}">{{ event.timestamp[:16]|replace('T', ' ') }}</time>
+        <div class="activity-body">
+          <p class="activity-sentence">{{ event.sentence }}</p>
+          <div class="activity-meta">
+            <span class="who who-{{ event.who }}">{{ event.whoLabel }}</span>
+            <span class="result result-{{ event.result }}">{{ event.resultLabel }}</span>
+            {% if event.author and event.title %}<span class="muted">{{ event.author }}</span>{% endif %}
+          </div>
+          {% if event.path or event.detail or event['items'] or event.detailHref or event.actions %}
+          <details class="activity-more">
+            <summary>Details</summary>
+            {% if event.detail %}<p>{{ event.detail }}</p>{% endif %}
+            {% if event.path %}<p class="path">{{ event.path }}</p>{% endif %}
+            {% if event['items'] %}
+              <ul>
+                {% for item in event['items'] %}
+                  <li>{% if item.href %}<a href="{{ item.href }}">{{ item.text }}</a>{% else %}{{ item.text }}{% endif %}</li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+            <div class="detail-actions">
+              {% for action in event.actions %}
+                {% if action.kind == 'undo-repair' %}<button type="button" data-undo-repair="{{ action.id }}">{{ action.label }}</button>{% endif %}
+              {% endfor %}
+              {% if event.detailHref %}<a class="button-link" href="{{ event.detailHref }}">Technical details</a>{% endif %}
+            </div>
+          </details>
+          {% endif %}
+        </div>
+      </article>
+    {% else %}
+      <p class="empty">{% if filtering %}Nothing matches these filters.{% else %}Nothing has happened yet. Activity appears as BookGuard scans, checks files, and you make decisions.{% endif %}</p>
+    {% endfor %}
+  </section>
+</main>
+
+<script src="{{ static_url('local-time.js') }}" defer></script>
+<script src="{{ static_url('activity.js') }}" defer></script>
+</body>
+</html>

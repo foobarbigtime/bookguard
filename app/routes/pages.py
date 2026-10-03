@@ -12,7 +12,8 @@ from ..config import settings
 from ..diagnostics import diagnostics_snapshot
 from ..home import home_summary
 from ..library_review import GROUPS, group_counts, open_review_items
-from ..history import operation_detail, operation_history
+from ..activity import RESULTS, WHAT, WHO, activity_events, activity_totals, filter_events
+from ..history import operation_detail
 from ..db import (
     latest_counts,
     latest_reason_counts,
@@ -35,6 +36,7 @@ from ..triage import TRIAGE_CLASSES, triage_state, triage_summary
 router = APIRouter(tags=["pages"])
 templates = Jinja2Templates(directory="templates")
 templates.env.globals["static_url"] = static_url
+ACTIVITY_PAGE_LIMIT = 500
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -87,12 +89,28 @@ def dashboard(
 
 
 @router.get("/activity", response_class=HTMLResponse)
-def history_page(request: Request):
+def activity_page(
+    request: Request,
+    what: str = "",
+    who: str = "",
+    result: str = "",
+    period: str = "",
+    q: str = "",
+):
+    events = activity_events()
+    shown = filter_events(events, what=what, who=who, result=result, period=period, query=q)
     return templates.TemplateResponse(
         request=request,
-        name="history.html",
+        name="activity.html",
         context={
-            "history": operation_history(),
+            "events": shown[:ACTIVITY_PAGE_LIMIT],
+            "total_shown": len(shown),
+            "totals": activity_totals(shown),
+            "filters": {"what": what, "who": who, "result": result, "period": period, "q": q},
+            "filtering": any([what, who, result, period, q]),
+            "what_options": WHAT,
+            "who_options": WHO,
+            "result_options": RESULTS,
             "version": __version__,
         },
     )

@@ -11,7 +11,9 @@
     const date = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(value) ? value : `${value}Z`);
     if (Number.isNaN(date.getTime())) continue;
     let label;
-    if (sameDay(date, now)) label = `Today ${time(date)}`;
+    // data-local="time": the page already shows the day (Activity's day headings).
+    if (element.dataset.local === "time") label = time(date);
+    else if (sameDay(date, now)) label = `Today ${time(date)}`;
     else if (sameDay(date, yesterday)) label = `Yesterday ${time(date)}`;
     else {
       const options = { month: "short", day: "numeric" };
