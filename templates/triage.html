@@ -130,6 +130,17 @@
     <div id="replacementBody" class="replacement-body"></div>
   </section>
 
+  <section id="movePanel" class="table-card replacement-panel" aria-live="polite" hidden>
+    <div class="section-title row-between">
+      <div>
+        <h2>Move to the right book</h2>
+        <p id="moveSubtitle"></p>
+      </div>
+      <button type="button" data-move-close>Close</button>
+    </div>
+    <div id="moveBody" class="replacement-body"></div>
+  </section>
+
   <section class="filter-row">
     <div class="triage-toolbar">
       <strong>{{ classification }}</strong>
@@ -242,12 +253,38 @@
     </div>
   </section>
   {% endif %}
+
+  {% if catalogue_moves %}
+  <section class="table-card" style="margin-top:1rem">
+    <div class="section-title"><h2>Moves to the right book</h2><p>Misfiled ebooks Bindery was asked to move to the book they really are. Checking again is read-only.</p></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Status</th><th>Moved to</th><th>From</th><th>To</th><th>Updated</th><th></th></tr></thead>
+        <tbody>
+        {% for move in catalogue_moves %}
+          <tr>
+            <td>#{{ move.id }}</td>
+            <td>{{ move.status|replace('_',' ') }}</td>
+            <td class="book-cell"><strong>{{ move.target_title }}</strong><small>Bindery book {{ move.target_book_id }}</small></td>
+            <td class="path">{{ move.source_path }}</td>
+            <td class="path">{{ move.destination }}</td>
+            <td>{{ move.updated_at }}</td>
+            <td>{% if move.status not in ['confirmed', 'request_failed'] %}<button type="button" data-move-reconcile="{{ move.id }}">Check again</button>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
 </main>
 
 <script>
 const classification = {{ classification|tojson }};
 const reasonCode = {{ reason_code|tojson }};
 const verificationCache = {};
+const latestMoves = {};
+for (const move of [...{{ catalogue_moves|tojson }}].reverse()) latestMoves[move.result_id] = move;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -301,6 +338,17 @@ function renderVerification(id, verification) {
     cell.dataset.format === 'ebook' &&
     cell.dataset.reasonCode === 'MISMATCH'
   );
+  const relationship = verification.evidence?.catalogue?.relationship;
+  if (verification.verdict === 'WRONG_CONTENT' && relationship === 'missing_ebook' && cell.dataset.format === 'ebook') {
+    const move = latestMoves[id];
+    if (move && move.status === 'confirmed') {
+      controls += ` <span class="muted">Moved to ${escapeHtml(move.target_title)}</span>`;
+    } else if (move && move.status !== 'request_failed') {
+      controls += ` <button type="button" data-move-reconcile="${move.id}">Check move</button>`;
+    } else {
+      controls += ` <button type="button" data-move-result="${id}">Move to correct book</button>`;
+    }
+  }
   if (verification.verdict === 'WRONG_CONTENT' || preparedReplacement) {
     const bookId = Number(cell.dataset.bookId);
     const label = preparedReplacement ? 'Resume replacement' : 'Replacement workflow';
@@ -528,5 +576,6 @@ pollVerificationJob();
 </script>
 <script src="/static/triage-acquisition.js" defer></script>
 <script src="/static/triage-hardlinks.js" defer></script>
+<script src="/static/triage-move.js" defer></script>
 </body>
 </html>
