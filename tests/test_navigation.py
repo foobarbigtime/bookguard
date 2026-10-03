@@ -18,7 +18,8 @@ PAGES = {
     "repairs.html": ("review", "repairs"),
     "activity.html": ("activity", ""),
     "history_detail.html": ("activity", ""),
-    "diagnostics.html": ("system", ""),
+    "system.html": ("system", "status"),
+    "diagnostics.html": ("system", "advanced"),
     "settings.html": ("settings", ""),
 }
 
@@ -59,6 +60,8 @@ def test_older_review_pages_stay_reachable_as_tabs_until_replaced():
     assert 'href="/review" class="active" aria-current="page"' in review
     assert 'class="subbar"' not in header("home")
     assert 'class="subbar"' not in header("activity")
+    system = header("system", "advanced")
+    assert 'href="/system/advanced" class="active" aria-current="page"' in system
 
 
 def test_no_page_or_generated_link_uses_the_old_page_names():

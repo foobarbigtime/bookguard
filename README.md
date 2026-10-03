@@ -348,6 +348,17 @@ Bindery refuses webhooks to private (LAN) addresses unless its container has
 early: BookGuard still reads Bindery's database to decide which files are new,
 so without it the timer does the same work a few minutes later.
 
+### Scheduled scan
+
+A full library scan can run on a schedule: **Settings → Scanning →
+Scheduled library scan** (off, daily or weekly, at a set time in the
+container's local time; set `TZ` on the container to use yours), or
+`BOOKGUARD_SCAN_SCHEDULE`, `BOOKGUARD_SCAN_SCHEDULE_TIME` and
+`BOOKGUARD_SCAN_SCHEDULE_DAY` (0 = Monday … 6 = Sunday). It is off by default.
+**System** lists every scheduled task with its last and next run and a
+**Run now** button, and its Health section explains any problem and how to fix
+it.
+
 ### Observe Mode (v0.6 foundation)
 
 Observe Mode is the first stage of BookGuard's safe automation work. It is
@@ -963,6 +974,8 @@ app/home.py                 Read-only Home summary (health, decisions, activity)
 app/activity.py             Activity timeline: plain sentences, who, result, filters
 app/change_log.py           Records of setting changes and BookGuard starts/updates
 app/import_watch.py         Checks each new Bindery import soon after it appears
+app/health.py               System health checks with how-to-fix guidance
+app/scheduler.py            Optional scheduled library scan and the task list
 app/library_review.py       Open items grouped by the decision they need
 app/attention_execution.py  Attention entries for interrupted E4 receipts
 app/operator_guidance.py    Read-only operator guidance for Attention items

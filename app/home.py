@@ -20,7 +20,9 @@ from .attention import attention_snapshot
 from .config import ConfigurationError, load_automation_settings, settings
 from .db import latest_counts, latest_scan, local_conn
 from .diagnostics import _malware_report
+from .health import health_checks
 from .history import operation_history
+from .scanner import scan_is_running
 from .import_watch import watcher as import_watcher
 from .library_review import GROUP_LABELS, group_counts, open_review_items
 from .services.dashboard import scan_timing
@@ -169,19 +171,17 @@ def _undecided_group(counts: dict[str, int], unverified: int) -> list[dict[str, 
 
 
 def _health(scan: dict | None, malware: dict[str, Any], automation_error: str | None) -> dict[str, Any]:
-    problems: list[dict[str, str]] = []
-    if not os.path.exists(settings.bindery_db):
-        problems.append({"level": "error", "text": "BookGuard can't find Bindery's database, so it can't check your library.", "href": "/settings"})
+    problems: list[dict[str, str]] = [
+        {"level": check["level"], "text": check["title"], "href": "/system"}
+        for check in health_checks(malware, deep=False)["problems"]
+        if check["level"] in {"error", "warn"}
+    ]
     if automation_error:
         problems.append({"level": "error", "text": f"Automation settings are invalid: {automation_error}", "href": "/system"})
     if scan and scan.get("status") == "failed":
         problems.append({"level": "error", "text": "The last library scan failed.", "href": "/review/scan-results"})
     if not scan:
         problems.append({"level": "warn", "text": "The library has not been scanned yet.", "href": ""})
-    if malware["enabled"] and not malware["configured"]:
-        problems.append({"level": "warn", "text": "Virus scanning is on, but no virus scanner is configured.", "href": "/settings"})
-    elif malware["enabled"] and not malware["reachable"]:
-        problems.append({"level": "warn", "text": "The virus scanner is not answering.", "href": "/system"})
     level = "error" if any(p["level"] == "error" for p in problems) else "warn" if problems else "ok"
     title = {
         "ok": "BookGuard is healthy",
@@ -193,7 +193,8 @@ def _health(scan: dict | None, malware: dict[str, Any], automation_error: str | 
 
 def _now(scan: dict | None) -> dict[str, Any]:
     job = verification_job_status()
-    if scan and scan.get("status") == "running":
+    # A scan left "running" by a restart is not running; Health reports it.
+    if scan and scan.get("status") == "running" and scan_is_running():
         timing = scan_timing(scan)
         return {
             "active": True,

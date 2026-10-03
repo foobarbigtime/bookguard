@@ -97,6 +97,19 @@ def _clamp(value: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(value, maximum))
 
 
+def _scan_schedule(value: object, default: str = "off") -> str:
+    text = str(value or "").strip().lower()
+    return text if text in {"off", "daily", "weekly"} else default
+
+
+def _clock(value: object, default: str = "03:00") -> str:
+    text = str(value or "").strip()
+    parts = text.split(":")
+    if len(parts) == 2 and all(p.isdigit() for p in parts) and int(parts[0]) < 24 and int(parts[1]) < 60:
+        return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+    return default
+
+
 def _repair_mode(value: object, default: str = "preview") -> str:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in REPAIR_MODES else default
@@ -251,6 +264,10 @@ class Settings:
     # for the next full library scan. Reads Bindery's database read-only.
     watch_imports: bool = _bool("BOOKGUARD_WATCH_IMPORTS", True)
     watch_imports_minutes: int = _clamp(_int("BOOKGUARD_WATCH_IMPORTS_MINUTES", 5), 1, 60)
+    # Optional scheduled full scan, in the container's local time. Off by default.
+    scan_schedule: str = _scan_schedule(os.getenv("BOOKGUARD_SCAN_SCHEDULE", "off"))
+    scan_schedule_time: str = _clock(os.getenv("BOOKGUARD_SCAN_SCHEDULE_TIME", "03:00"))
+    scan_schedule_day: int = _clamp(_int("BOOKGUARD_SCAN_SCHEDULE_DAY", 6), 0, 6)
 
     # Matching behavior.
     title_min_shared_words: int = _clamp(_int("BOOKGUARD_TITLE_MIN_SHARED_WORDS", 2), 1, 5)
@@ -357,6 +374,7 @@ class Settings:
             "sample_files": (1, 50),
             "progress_every": (1, 100),
             "watch_imports_minutes": (1, 60),
+            "scan_schedule_day": (0, 6),
             "title_min_shared_words": (1, 5),
             "strong_mismatch_min_samples": (1, 10),
             "strong_mismatch_consensus_percent": (50, 100),
@@ -375,6 +393,11 @@ class Settings:
                 }:
                     value = value.rstrip("/")
                 setattr(self, key, value)
+
+        if "scan_schedule" in values:
+            self.scan_schedule = _scan_schedule(values["scan_schedule"], self.scan_schedule)
+        if "scan_schedule_time" in values:
+            self.scan_schedule_time = _clock(values["scan_schedule_time"], self.scan_schedule_time)
 
         if "metadata_repair_mode" in values:
             self.metadata_repair_mode = _repair_mode(values["metadata_repair_mode"], self.metadata_repair_mode)
@@ -418,6 +441,9 @@ class Settings:
             "scan_on_start": self.scan_on_start,
             "watch_imports": self.watch_imports,
             "watch_imports_minutes": self.watch_imports_minutes,
+            "scan_schedule": self.scan_schedule,
+            "scan_schedule_time": self.scan_schedule_time,
+            "scan_schedule_day": self.scan_schedule_day,
             "scan_audiobooks": self.scan_audiobooks,
             "scan_ebooks": self.scan_ebooks,
             "progress_every": self.progress_every,

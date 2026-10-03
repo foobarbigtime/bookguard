@@ -21,6 +21,7 @@ EXPECTED_ROUTES = {
     ("GET", "/activity"),
     ("GET", "/activity/{kind}/{record_id}"),
     ("GET", "/system"),
+    ("GET", "/system/advanced"),
     # Redirects from the pages' names before the UI redesign.
     ("GET", "/attention"),
     ("GET", "/triage"),
@@ -38,6 +39,9 @@ EXPECTED_ROUTES = {
     ("GET", "/api/activity"),
     ("POST", "/api/bindery/webhook"),
     ("GET", "/api/imports/status"),
+    ("POST", "/api/imports/check"),
+    ("GET", "/api/system/health"),
+    ("GET", "/api/system/tasks"),
     ("GET", "/api/diagnostics"),
     ("GET", "/api/history"),
     ("GET", "/api/history/{kind}/{record_id}"),
@@ -145,6 +149,7 @@ def test_templates_parse():
     env.get_template("activity.html")
     env.get_template("history_detail.html")
     env.get_template("diagnostics.html")
+    env.get_template("system.html")
     env.get_template("triage.html")
     env.get_template("settings.html")
     env.get_template("repairs.html")
