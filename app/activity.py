@@ -240,7 +240,7 @@ def _scan_events(conn, limit: int) -> list[dict[str, Any]]:
         result = _status_result(status, done={"complete"}, running={"running"})
         total, processed = int(row["total"] or 0), int(row["processed"] or 0)
         sentence = {
-            "done": f"Library scan finished: {total} books checked",
+            "done": f"Library scan finished: {total} {'book' if total == 1 else 'books'} checked",
             "running": f"Library scan running: {processed} of {total} books",
             "failed": "Library scan failed",
         }.get(result, f"Library scan stopped after {processed} of {total} books")

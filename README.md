@@ -318,6 +318,36 @@ Bindery again. The same check is available from
 `POST /api/catalogue-moves/{id}/reconcile`, and the history from
 `GET /api/catalogue-moves`.
 
+### Checking new imports
+
+BookGuard checks each file Bindery imports soon after it appears, instead of
+waiting for the next full library scan. Every few minutes (5 by default,
+**Settings → Scanning**) it looks in Bindery's database, read-only as the scan
+does, for files added since it last looked. Each new file is scanned exactly as
+a full scan would scan it and added to the latest scan, so it appears in
+Review and on Home; an ebook the scan flags is also verified. Activity records
+the outcome, for example "Bindery imported “The Client”; it contains the wrong
+file". Nothing in Bindery or the library is changed.
+
+The first check starts from that moment (the full scan covers what is already
+there), checks wait while a full scan runs, and a file is checked once. Turn
+it off with `BOOKGUARD_WATCH_IMPORTS=false` or in Settings.
+
+**Optional: instant checks with Bindery's webhook.** Bindery can tell BookGuard
+the moment it imports something. In Bindery, add a notification under
+**Settings → Notifications** with:
+
+- URL `http://<bookguard-host>:8788/api/bindery/webhook`
+- **On import** and **On upgrade** enabled
+- a custom header `Authorization` with the value `Basic ` followed by the
+  base64 of `bookguard:<your BookGuard password>`
+  (`echo -n 'bookguard:password' | base64`)
+
+Bindery refuses webhooks to private (LAN) addresses unless its container has
+`BINDERY_NOTIFICATIONS_ALLOW_PRIVATE=true`. The webhook only wakes the check
+early: BookGuard still reads Bindery's database to decide which files are new,
+so without it the timer does the same work a few minutes later.
+
 ### Observe Mode (v0.6 foundation)
 
 Observe Mode is the first stage of BookGuard's safe automation work. It is
@@ -932,6 +962,7 @@ app/attention.py            Attention queue assembly
 app/home.py                 Read-only Home summary (health, decisions, activity)
 app/activity.py             Activity timeline: plain sentences, who, result, filters
 app/change_log.py           Records of setting changes and BookGuard starts/updates
+app/import_watch.py         Checks each new Bindery import soon after it appears
 app/library_review.py       Open items grouped by the decision they need
 app/attention_execution.py  Attention entries for interrupted E4 receipts
 app/operator_guidance.py    Read-only operator guidance for Attention items
