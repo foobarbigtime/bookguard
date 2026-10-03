@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from .. import __version__
+from ..activity import activity_events, activity_totals, filter_events
+from ..change_log import record_settings_change
 from ..config import Settings, settings
 from ..diagnostics import diagnostics_snapshot
 from ..history import operation_detail, operation_history
@@ -101,6 +103,13 @@ def api_home():
     return home_summary()
 
 
+@router.get("/api/activity")
+def api_activity(what: str = "", who: str = "", result: str = "", period: str = "", q: str = ""):
+    """The Activity timeline as data, with the same filters as the page."""
+    events = filter_events(activity_events(), what=what, who=who, result=result, period=period, query=q)
+    return {"totals": activity_totals(events), "events": events[:500]}
+
+
 @router.get("/api/history")
 def api_history(limit: int = 250):
     return operation_history(limit)
@@ -143,8 +152,10 @@ async def api_save_settings(request: Request):
         payload.pop("bindery_api_key", None)
     payload.pop("clear_api_key", None)
 
+    before = settings.public_dict()
     settings.apply(payload)
     save_persisted_settings(settings.persistable_dict())
+    record_settings_change(before, settings.public_dict(), "save")
     return {"ok": True, "settings": settings.public_dict()}
 
 
@@ -154,7 +165,9 @@ def api_reset_settings(payload: ConfirmationRequest):
     scan = latest_scan()
     if scan and scan.get("status") == "running":
         raise HTTPException(status_code=409, detail="Wait for the current scan to finish before resetting settings.")
+    before = settings.public_dict()
     defaults = Settings()
     settings.__dict__.update(defaults.__dict__)
     clear_persisted_settings()
+    record_settings_change(before, settings.public_dict(), "reset")
     return {"ok": True, "settings": settings.public_dict()}

@@ -15,6 +15,7 @@ import os
 from typing import Any
 
 from . import __version__
+from .activity import activity_events
 from .attention import attention_snapshot
 from .config import ConfigurationError, load_automation_settings, settings
 from .db import latest_counts, latest_scan, local_conn
@@ -25,7 +26,6 @@ from .services.dashboard import scan_timing
 from .verifier import verification_job_status
 
 RECENT_DAYS = 7
-_QUIET_KINDS = {"verification", "observe"}
 
 # Workflow attention (interrupted or refused work), grouped by what it is.
 _WORKFLOW_GROUPS: dict[str, tuple[str, str]] = {
@@ -297,7 +297,8 @@ def _recent() -> dict[str, Any]:
     return {
         "days": RECENT_DAYS,
         "totals": totals,
-        "events": [event for event in events if event["kind"] not in _QUIET_KINDS][:6],
+        # The same plain sentences as Activity; per-file checks are folded per day there.
+        "events": activity_events(200)[:6],
     }
 
 

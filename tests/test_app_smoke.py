@@ -35,6 +35,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/scan/stop-immediately"),
     ("GET", "/api/status"),
     ("GET", "/api/home"),
+    ("GET", "/api/activity"),
     ("GET", "/api/diagnostics"),
     ("GET", "/api/history"),
     ("GET", "/api/history/{kind}/{record_id}"),
@@ -139,7 +140,7 @@ def test_templates_parse():
     env.get_template("index.html")
     env.get_template("home.html")
     env.get_template("review.html")
-    env.get_template("history.html")
+    env.get_template("activity.html")
     env.get_template("history_detail.html")
     env.get_template("diagnostics.html")
     env.get_template("triage.html")

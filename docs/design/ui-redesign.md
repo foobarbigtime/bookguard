@@ -1,7 +1,7 @@
 # UI redesign: workflow first
 
-Status: design approved (mockups). Build steps 1-3 (Foundations, Home, Review)
-are implemented, in one PR; steps 4-7 are not yet.
+Status: design approved (mockups). Build steps 1-4 (Foundations, Home, Review,
+Activity) are implemented; steps 5-7 are not yet.
 Mockups: <https://claude.ai/artifact/XAaZbvzFmJVCTgo8ZeX3Tp> (Home, Review,
 Replace, Setup, Activity, System, Settings).
 
@@ -264,3 +264,24 @@ Steps 1-3 as built (one PR):
 - Old URLs redirect (307, query kept): `/triage` → `/review/triage`,
   `/attention` → `/`, `/?classification=…` → `/review/scan-results?…`,
   `/history` → `/activity`, `/diagnostics` → `/system`.
+
+Step 4 as built:
+
+- **Activity** (`/activity`, `GET /api/activity`, `app/activity.py`) is one
+  timeline of every durable record: library scans, verifications (folded into
+  one "Checked N library files" event per day), decisions (review, detach,
+  quarantine, metadata fixes, moves, shared-file corrections), replacements,
+  Observe checks (folded per day), automatic steps and recovery plans,
+  setting changes and BookGuard starts. Each event is a sentence with who
+  (You, BookGuard, Automatic, System) and how it ended (Done, Failed,
+  Interrupted, Waiting for you, In progress), grouped under local day
+  headings, with filters for what, who, result (or "problems only"), period
+  and text, and the unchanged technical detail one click away.
+- New records (`app/change_log.py`): setting saves and resets store exactly
+  which values changed (the API key only as "changed"); every start stores
+  the version and Git revision, so a start on a new revision reads as
+  "BookGuard was updated to …".
+- Undo for an applied metadata fix is on its Activity entry. *Put back* for a
+  quarantined file is not built: BookGuard has no restore operation yet.
+- Home's recent activity uses the same sentences. The Repairs tab stays
+  until its repair proposals have a home in Review.

@@ -16,7 +16,7 @@ PAGES = {
     "index.html": ("review", "scan-results"),
     "triage.html": ("review", "triage"),
     "repairs.html": ("review", "repairs"),
-    "history.html": ("activity", ""),
+    "activity.html": ("activity", ""),
     "history_detail.html": ("activity", ""),
     "diagnostics.html": ("system", ""),
     "settings.html": ("settings", ""),
