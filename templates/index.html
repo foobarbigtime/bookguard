@@ -7,25 +7,8 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <div>
-        <h1>BookGuard</h1>
-        <p>Validation, quarantine, and metadata repair for Bindery imports.</p>
-      </div>
-      <span class="version">v{{ version }}</span>
-    </div>
-    <nav class="topnav">
-      <a class="nav-link active" href="/">Dashboard</a>
-      <a class="nav-link" href="/attention">Attention</a>
-    <a class="nav-link" href="/history">History</a>
-      <a class="nav-link" href="/diagnostics">Diagnostics</a>
-      <a class="nav-link" href="/triage">Triage</a>
-      <a class="nav-link" href="/repairs">Repairs</a>
-      <a class="nav-link" href="/settings">Settings</a>
-      <button id="scanButton" class="primary">Scan library</button>
-    </nav>
-  </header>
+{% from "_layout.html" import site_header %}
+{% call site_header("review", "scan-results", version) %}<button id="scanButton" class="primary">Scan library</button>{% endcall %}
 
   <main>
     <section class="status-grid">
@@ -63,12 +46,12 @@
 
     <section class="counts">
       {% for label in ["PASS","REVIEW","REJECT","MISSING"] %}
-        <a class="count-card {{ label|lower }}" href="/?classification={{ label }}">
+        <a class="count-card {{ label|lower }}" href="/review/scan-results?classification={{ label }}">
           <span>{{ label }}</span>
           <strong id="count{{ label }}">{{ counts.get(label, 0) }}</strong>
         </a>
       {% endfor %}
-      <a class="count-card" href="/">
+      <a class="count-card" href="/review/scan-results">
         <span>ALL</span>
         <strong id="countALL">{{ counts.values()|sum if counts else 0 }}</strong>
       </a>
@@ -114,7 +97,7 @@
       <div class="reason-chips" id="reviewReasonChips">
         {% if review_reasons %}
           {% for code, count in review_reasons.items() %}
-            <a class="reason-chip reason-{{ code|lower }} {% if reason_code == code %}active{% endif %}" href="/?classification=REVIEW&reason_code={{ code }}">
+            <a class="reason-chip reason-{{ code|lower }} {% if reason_code == code %}active{% endif %}" href="/review/scan-results?classification=REVIEW&reason_code={{ code }}">
               <span>{{ code|replace('_', ' ') }}</span><strong>{{ count }}</strong>
             </a>
           {% endfor %}
@@ -134,7 +117,7 @@
           </h2>
           <p id="tableHint">{% if classification or reason_code %}Filtered view. Counts continue updating during a scan.{% else %}Newest scan results appear here while BookGuard is working.{% endif %}</p>
         </div>
-        {% if classification or reason_code %}<a class="button-link" href="/">Clear filter</a>{% endif %}
+        {% if classification or reason_code %}<a class="button-link" href="/review/scan-results">Clear filter</a>{% endif %}
       </div>
 
       <div id="resultsContainer">
@@ -309,7 +292,7 @@ function renderReviewReasons(counts) {
   }
   container.innerHTML = entries.map(([code, count]) => {
     const active = reasonFilter === code ? " active" : "";
-    return `<a class="reason-chip reason-${escapeHtml(code.toLowerCase())}${active}" href="/?classification=REVIEW&reason_code=${encodeURIComponent(code)}"><span>${escapeHtml(reasonLabel(code))}</span><strong>${escapeHtml(count)}</strong></a>`;
+    return `<a class="reason-chip reason-${escapeHtml(code.toLowerCase())}${active}" href="/review/scan-results?classification=REVIEW&reason_code=${encodeURIComponent(code)}"><span>${escapeHtml(reasonLabel(code))}</span><strong>${escapeHtml(count)}</strong></a>`;
   }).join("");
 }
 

@@ -1,0 +1,51 @@
+{#- Shared page chrome: four sections plus the Settings gear (docs/design/ui-redesign.md).
+    Until a section's new page replaces them, its older pages appear as tabs inside it. -#}
+{% set SECTIONS = [
+  ("home", "Home", "/"),
+  ("review", "Review", "/review"),
+  ("activity", "Activity", "/activity"),
+  ("system", "System", "/system"),
+] %}
+{% set TABS = {
+  "review": [
+    ("books", "Books", "/review"),
+    ("triage", "Triage", "/review/triage"),
+    ("repairs", "Repairs", "/repairs"),
+    ("scan-results", "Scan results", "/review/scan-results"),
+  ],
+} %}
+
+{% macro site_header(section, tab="", version="") -%}
+<header class="topbar">
+  <a class="brand" href="/">
+    <span class="brand-logo" aria-hidden="true">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+    </span>
+    <span class="brand-name">BookGuard</span>
+    {% if version %}<span class="version">v{{ version }}</span>{% endif %}
+  </a>
+  <nav class="topnav" aria-label="Main">
+    {% for key, label, href in SECTIONS %}
+      <a class="nav-link{% if section == key %} active{% endif %}" href="{{ href }}"{% if section == key %} aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  <div class="topbar-tools">
+    <a class="icon-link{% if section == 'settings' %} active{% endif %}" href="/settings" aria-label="Settings" title="Settings"{% if section == 'settings' %} aria-current="page"{% endif %}>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </a>
+  </div>
+</header>
+{% set tabs = TABS.get(section, []) %}
+{% if tabs or caller is defined %}
+<div class="subbar">
+  {% if tabs %}
+  <nav class="tabs" aria-label="{{ section|capitalize }} pages">
+    {% for key, label, href in tabs %}
+      <a href="{{ href }}"{% if tab == key %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+  {% if caller is defined %}<div class="subbar-actions">{{ caller() }}</div>{% endif %}
+</div>
+{% endif %}
+{%- endmacro %}

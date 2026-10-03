@@ -315,7 +315,7 @@ def test_operation_detail_reads_all_supported_durable_record_types(tmp_path):
         assert details[kind] is not None
         assert details[kind]["kind"] == kind
         assert details[kind]["status"] == status
-        assert details[kind]["historyHref"] == "/history"
+        assert details[kind]["historyHref"] == "/activity"
 
     assert details["acquisition"]["title"] == "Bel Canto"
     assert details["verification"]["title"] == "Bel Canto"
@@ -473,7 +473,7 @@ def test_observe_decision_appears_in_history_and_detail(tmp_path):
 
     observed = next(item for item in history["items"] if item["kind"] == "observe")
     assert observed["status"] == "attention"
-    assert observed["detailHref"] == f"/history/observe/{observe_id}"
+    assert observed["detailHref"] == f"/activity/observe/{observe_id}"
 
     assert detail is not None
     assert detail["title"] == "Bel Canto"
@@ -705,7 +705,7 @@ def test_recovery_plan_history_detail_is_human_readable(tmp_path):
     event = next(item for item in history["items"] if item["kind"] == "recovery_plan")
     assert event["kindLabel"] == "Recovery plan"
     assert event["status"] == "planned"
-    assert event["detailHref"] == "/history/recovery-plan/1"
+    assert event["detailHref"] == "/activity/recovery-plan/1"
     assert "Recover Wrong Content" in event["message"]
 
     assert detail is not None

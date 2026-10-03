@@ -61,11 +61,11 @@ def stale_execution_items(limit: int = 200, *, now: datetime | None = None) -> l
                 "recordedError": "",
             },
             "updatedAt": row["updated_at"],
-            "detailHref": f"/history/recovery-plan/{row['plan_id']}" if row["subject_kind"] else "",
+            "detailHref": f"/activity/recovery-plan/{row['plan_id']}" if row["subject_kind"] else "",
             "href": (
-                "/triage#acquisitionPanel"
+                "/review/triage#acquisitionPanel"
                 if row["subject_kind"] in {"acquisition", "admission"}
-                else "/triage"
+                else "/review"
             ),
         })
     return items

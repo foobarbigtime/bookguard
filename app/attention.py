@@ -97,8 +97,8 @@ def _acquisition_items(limit: int) -> list[dict[str, Any]]:
                 or "This replacement workflow requires operator review or recovery.",
                 "guidance": operation_guidance("acquisition", status, error),
                 "updatedAt": row.get("updated_at") or row.get("created_at"),
-                "detailHref": f"/history/acquisition/{row.get('id')}",
-                "href": "/triage#acquisitionPanel",
+                "detailHref": f"/activity/acquisition/{row.get('id')}",
+                "href": "/review/triage#acquisitionPanel",
             }
         )
     return items
@@ -130,8 +130,8 @@ def _admission_items(limit: int) -> list[dict[str, Any]]:
                 "message": error or default,
                 "guidance": operation_guidance("admission", status, error),
                 "updatedAt": row.get("updated_at") or row.get("created_at"),
-                "detailHref": f"/history/admission/{row.get('id')}",
-                "href": "/triage#acquisitionPanel",
+                "detailHref": f"/activity/admission/{row.get('id')}",
+                "href": "/review/triage#acquisitionPanel",
             }
         )
     return items
@@ -156,8 +156,8 @@ def _hardlink_items() -> list[dict[str, Any]]:
                     str(row.get("error") or ""),
                 ),
                 "updatedAt": row.get("completed_at") or row.get("created_at"),
-                "detailHref": f"/history/hardlink-correction/{row['id']}",
-                "href": "/triage#hardlinkPanel",
+                "detailHref": f"/activity/hardlink-correction/{row['id']}",
+                "href": "/review/triage#hardlinkPanel",
             }
         )
     for row in _journal_rows("hardlink_alias_cleanups", "correction_id"):
@@ -177,8 +177,8 @@ def _hardlink_items() -> list[dict[str, Any]]:
                     str(row.get("error") or ""),
                 ),
                 "updatedAt": row.get("completed_at") or row.get("created_at"),
-                "detailHref": f"/history/hardlink-cleanup/{row['id']}",
-                "href": "/triage#hardlinkPanel",
+                "detailHref": f"/activity/hardlink-cleanup/{row['id']}",
+                "href": "/review/triage#hardlinkPanel",
             }
         )
     return items
@@ -213,7 +213,7 @@ def _coordinator_items() -> list[dict[str, Any]]:
             "guidance": guidance,
             "updatedAt": status.get("lastRunAt"),
             "detailHref": "",
-            "href": "/triage#acquisitionPanel",
+            "href": "/review/triage#acquisitionPanel",
         }
     ]
 
@@ -249,11 +249,11 @@ def _blocked_plan_items(limit: int) -> list[dict[str, Any]]:
                 "recordedError": reason,
             },
             "updatedAt": row["updated_at"],
-            "detailHref": f"/history/recovery-plan/{row['id']}",
+            "detailHref": f"/activity/recovery-plan/{row['id']}",
             "href": (
-                "/triage#acquisitionPanel"
+                "/review/triage#acquisitionPanel"
                 if row["subject_kind"] in {"acquisition", "admission"}
-                else "/triage"
+                else "/review"
             ),
         })
     return items

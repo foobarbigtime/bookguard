@@ -7,21 +7,8 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <div><h1>BookGuard</h1><p>Unified chronological operation history</p></div>
-    <span class="version">v{{ version }}</span>
-  </div>
-  <nav class="topnav">
-    <a class="nav-link" href="/">Dashboard</a>
-    <a class="nav-link" href="/attention">Attention</a>
-    <a class="nav-link active" href="/history">History</a>
-    <a class="nav-link" href="/diagnostics">Diagnostics</a>
-    <a class="nav-link" href="/triage">Triage</a>
-    <a class="nav-link" href="/repairs">Repairs</a>
-    <a class="nav-link" href="/settings">Settings</a>
-  </nav>
-</header>
+{% from "_layout.html" import site_header %}
+{{ site_header("activity", "", version) }}
 
 <main>
   <div class="notice info">

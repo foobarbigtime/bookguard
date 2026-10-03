@@ -280,7 +280,7 @@ another catalogued book, and that book has no ebook of its own. For example, a
 file imported for a truncated *Kill* entry is really *Kill Alex Cross*. The fix
 is not a download: Bindery can move the file to the book it really is.
 
-On the Triage page, a `WRONG_CONTENT` verification for such a file gains a
+In Review, and on the Triage page, a `WRONG_CONTENT` verification for such a file gains a
 **Move to correct book** button. It opens a read-only preview showing the book
 the file is filed under, the book it really belongs to, and the current and new
 paths. If anything makes the move unsafe, the preview lists the reasons instead
@@ -921,12 +921,16 @@ app/quarantine_*.py         Quarantine filesystem moves, selection, handoff, and
 app/catalogue_relationship.py How a misfiled ebook relates to the book it really is
 app/catalogue_move.py       Guarded move of a misfiled ebook to the right book
 app/attention.py            Attention queue assembly
+app/home.py                 Read-only Home summary (health, decisions, activity)
+app/library_review.py       Open items grouped by the decision they need
 app/attention_execution.py  Attention entries for interrupted E4 receipts
 app/operator_guidance.py    Read-only operator guidance for Attention items
 tools/smoke_test.py         Isolated workflow and Compose safety harness
 tools/clamav_acceptance.py  Live ClamAV clean/EICAR acceptance test
 scripts/smoke-test.sh       One-command containerized smoke-test runner
 compose.clamav.yaml         Optional private ClamAV deployment overlay
+templates/_layout.html      Shared header: Home, Review, Activity, System, Settings
+static/home.js, review.js   Home and Review page controllers
 static/triage-acquisition.js Supervised replacement UI controller
 static/triage-move.js       Move-to-correct-book UI controller
 ```

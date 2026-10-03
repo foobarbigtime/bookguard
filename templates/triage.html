@@ -8,8 +8,8 @@
   <style>
     .triage-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:.8rem; margin-bottom:1rem; }
     .triage-summary a { text-decoration:none; }
-    .triage-card { border:1px solid var(--border); background:var(--panel); border-radius:.8rem; padding:.9rem; }
-    .triage-card.active { border-color:#65788d; }
+    .triage-card { border:1px solid var(--border); background:var(--panel); border-radius:.5rem; padding:.9rem; }
+    .triage-card.active { border-color:var(--border-strong); }
     .triage-card strong { display:block; font-size:1.3rem; margin:.2rem 0; }
     .triage-card .split { display:flex; gap:1rem; margin-top:.45rem; color:var(--muted); font-size:.8rem; }
     .triage-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; padding:.8rem .9rem; border-bottom:1px solid var(--border); }
@@ -24,7 +24,7 @@
     .detach-button { background:rgba(40,103,178,.12); border-color:rgba(57,120,195,.5); color:#bad8f6; }
     .verify-button { background:rgba(144,102,214,.14); border-color:rgba(144,102,214,.55); color:#d5c0f2; }
     .repair-verified-button { margin-top:.35rem; background:rgba(56,178,111,.16); border-color:rgba(56,178,111,.55); color:#a6e3bc; }
-    .filter-row { border:1px solid var(--border); background:var(--panel); border-radius:.8rem; margin-bottom:1rem; overflow:hidden; }
+    .filter-row { border:1px solid var(--border); background:var(--panel); border-radius:.5rem; margin-bottom:1rem; overflow:hidden; }
     .filter-row .reason-chips { border-top:1px solid var(--border); }
     .resolved-row { opacity:.7; }
     .checkbox-cell { width:40px; }
@@ -44,26 +44,13 @@
   </style>
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <div><h1>BookGuard</h1><p>Review uncertain and rejected imports</p></div>
-    <span class="version">v{{ version }}</span>
-  </div>
-  <nav class="topnav">
-    <a class="nav-link" href="/">Dashboard</a>
-      <a class="nav-link" href="/attention">Attention</a>
-    <a class="nav-link" href="/history">History</a>
-      <a class="nav-link" href="/diagnostics">Diagnostics</a>
-    <a class="nav-link active" href="/triage">Triage</a>
-    <a class="nav-link" href="/repairs">Repairs</a>
-    <a class="nav-link" href="/settings">Settings</a>
-  </nav>
-</header>
+{% from "_layout.html" import site_header %}
+{{ site_header("review", "triage", version) }}
 
 <main>
   <section class="triage-summary">
     {% for kind in ["REVIEW", "REJECT"] %}
-      <a class="triage-card {% if classification == kind %}active{% endif %}" href="/triage?classification={{ kind }}">
+      <a class="triage-card {% if classification == kind %}active{% endif %}" href="/review/triage?classification={{ kind }}">
         <span class="label">{{ kind }}</span>
         <strong>{{ summary[kind].open }} open</strong>
         <div class="split">
@@ -144,10 +131,10 @@
   <section class="filter-row">
     <div class="triage-toolbar">
       <strong>{{ classification }}</strong>
-      <a class="button-link" href="/triage?classification={{ classification }}&show_resolved={{ 0 if show_resolved else 1 }}{% if reason_code %}&reason_code={{ reason_code }}{% endif %}">
+      <a class="button-link" href="/review/triage?classification={{ classification }}&show_resolved={{ 0 if show_resolved else 1 }}{% if reason_code %}&reason_code={{ reason_code }}{% endif %}">
         {{ "Hide resolved" if show_resolved else "Show resolved" }}
       </a>
-      {% if reason_code %}<a class="button-link" href="/triage?classification={{ classification }}{% if show_resolved %}&show_resolved=1{% endif %}">Clear reason filter</a>{% endif %}
+      {% if reason_code %}<a class="button-link" href="/review/triage?classification={{ classification }}{% if show_resolved %}&show_resolved=1{% endif %}">Clear reason filter</a>{% endif %}
       <button id="verifyOpenButton" class="verify-button" onclick="startVerification()">Verify all open {{ classification }}</button>
       <span id="verificationJobStatus" class="job-status"></span>
       <span class="spacer"></span>
@@ -157,7 +144,7 @@
     <div class="reason-chips">
       {% for code, count in reasons.items() %}
         <a class="reason-chip reason-{{ code|lower }} {% if reason_code == code %}active{% endif %}"
-           href="/triage?classification={{ classification }}&reason_code={{ code }}{% if show_resolved %}&show_resolved=1{% endif %}">
+           href="/review/triage?classification={{ classification }}&reason_code={{ code }}{% if show_resolved %}&show_resolved=1{% endif %}">
           <span>{{ code|replace('_',' ') }}</span><strong>{{ count }}</strong>
         </a>
       {% endfor %}

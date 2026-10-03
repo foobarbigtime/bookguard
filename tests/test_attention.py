@@ -73,7 +73,7 @@ def test_attention_snapshot_collects_only_intervention_states(monkeypatch):
         if item["kind"] == "acquisition" and item["status"] == "cleanup_required"
     )
     assert acquisition["guidance"]["label"] == "Final cleanup needs recovery"
-    assert acquisition["detailHref"] == "/history/acquisition/1"
+    assert acquisition["detailHref"] == "/activity/acquisition/1"
 
     admission = next(
         item
@@ -83,7 +83,7 @@ def test_attention_snapshot_collects_only_intervention_states(monkeypatch):
     assert admission["guidance"]["label"] == (
         "Bindery registration conflicts with the intended book"
     )
-    assert admission["detailHref"] == "/history/admission/4"
+    assert admission["detailHref"] == "/activity/admission/4"
 
 
 def test_attention_snapshot_zero_state(monkeypatch):
@@ -101,12 +101,11 @@ def test_attention_snapshot_zero_state(monkeypatch):
     assert snapshot["items"] == []
 
 
-def test_attention_template_renders_item_list():
+def test_home_renders_every_attention_item_with_its_guidance():
+    from app.home import _workflow_groups
+
     env = Environment(loader=FileSystemLoader("templates"))
-    template = env.get_template("attention.html")
-    rendered = template.render(
-        version="0.5.0",
-        attention={
+    attention = {
             "total": 1,
             "summary": {
                 "acquisitions": 1,
@@ -133,12 +132,12 @@ def test_attention_template_renders_item_list():
                         "nextStep": "Review the durable acquisition and recover cleanup.",
                     },
                     "updatedAt": "2026-09-20T11:29:00Z",
-                    "detailHref": "/history/acquisition/1",
-                    "href": "/triage#acquisitionPanel",
+                    "detailHref": "/activity/acquisition/1",
+                    "href": "/review/triage#acquisitionPanel",
                 }
             ],
-        },
-    )
+        }
+    rendered = env.get_template("home.html").render(version="0.6.0", home=_minimal_home(_workflow_groups(attention)))
 
     assert "Example Book" in rendered
     assert "cleanup required" in rendered
@@ -147,4 +146,17 @@ def test_attention_template_renders_item_list():
     assert "Why BookGuard stopped" in rendered
     assert "Next step" in rendered
     assert "Audit detail" in rendered
-    assert "/history/acquisition/1" in rendered
+    assert "/activity/acquisition/1" in rendered
+
+
+def _minimal_home(attention_groups):
+    return {
+        "health": {"level": "ok", "title": "BookGuard is healthy", "problems": []},
+        "decisions": len(attention_groups),
+        "library": {"checked": 0, "passed": 0, "verified": 0, "wrongFile": 0, "damaged": 0, "details": 0, "undecided": 0},
+        "attention": attention_groups,
+        "now": {"active": False, "label": "Nothing is running", "lastScan": None},
+        "automation": {"mode": "manual", "sentence": "", "allowed": 0, "lastObserve": ""},
+        "system": [],
+        "recent": {"days": 7, "totals": {"added": 0, "quarantined": 0, "blocked": 0}, "events": []},
+    }
