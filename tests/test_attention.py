@@ -73,7 +73,7 @@ def test_attention_snapshot_collects_only_intervention_states(monkeypatch):
         if item["kind"] == "acquisition" and item["status"] == "cleanup_required"
     )
     assert acquisition["guidance"]["label"] == "Final cleanup needs recovery"
-    assert acquisition["detailHref"] == "/history/acquisition/1"
+    assert acquisition["detailHref"] == "/activity/acquisition/1"
 
     admission = next(
         item
@@ -83,7 +83,7 @@ def test_attention_snapshot_collects_only_intervention_states(monkeypatch):
     assert admission["guidance"]["label"] == (
         "Bindery registration conflicts with the intended book"
     )
-    assert admission["detailHref"] == "/history/admission/4"
+    assert admission["detailHref"] == "/activity/admission/4"
 
 
 def test_attention_snapshot_zero_state(monkeypatch):
@@ -133,8 +133,8 @@ def test_attention_template_renders_item_list():
                         "nextStep": "Review the durable acquisition and recover cleanup.",
                     },
                     "updatedAt": "2026-09-20T11:29:00Z",
-                    "detailHref": "/history/acquisition/1",
-                    "href": "/triage#acquisitionPanel",
+                    "detailHref": "/activity/acquisition/1",
+                    "href": "/review#acquisitionPanel",
                 }
             ],
         },
@@ -147,4 +147,4 @@ def test_attention_template_renders_item_list():
     assert "Why BookGuard stopped" in rendered
     assert "Next step" in rendered
     assert "Audit detail" in rendered
-    assert "/history/acquisition/1" in rendered
+    assert "/activity/acquisition/1" in rendered

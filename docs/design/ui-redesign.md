@@ -1,6 +1,7 @@
 # UI redesign: workflow first
 
-Status: design approved (mockups), not yet implemented.
+Status: design approved (mockups). Build step 1 (Foundations) is implemented;
+steps 2-7 are not yet.
 Mockups: <https://claude.ai/artifact/XAaZbvzFmJVCTgo8ZeX3Tp> (Home, Review,
 Replace, Setup, Activity, System, Settings).
 
@@ -240,6 +241,14 @@ Each step is a separate, reviewable PR.
 
 Old pages stay reachable until their replacement ships. The audit trail and
 every existing API remain unchanged.
+
+Step 1 as built: every page shares one header (`templates/_layout.html`):
+Home · Review · Activity · System and the Settings gear. Pages whose new
+section is a rename moved: `/triage` → `/review`, `/history` → `/activity`
+(and `/history/{kind}/{id}` → `/activity/{kind}/{id}`), `/diagnostics` →
+`/system`; the old URLs answer with a temporary redirect that keeps the query
+string. Until Home and Review ship, the existing Dashboard and Attention pages
+are tabs under Home, and Triage and Repairs are tabs under Review.
 
 ## Relationship to other work
 

@@ -7,25 +7,8 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <div>
-        <h1>BookGuard</h1>
-        <p>Validation, quarantine, and metadata repair for Bindery imports.</p>
-      </div>
-      <span class="version">v{{ version }}</span>
-    </div>
-    <nav class="topnav">
-      <a class="nav-link active" href="/">Dashboard</a>
-      <a class="nav-link" href="/attention">Attention</a>
-    <a class="nav-link" href="/history">History</a>
-      <a class="nav-link" href="/diagnostics">Diagnostics</a>
-      <a class="nav-link" href="/triage">Triage</a>
-      <a class="nav-link" href="/repairs">Repairs</a>
-      <a class="nav-link" href="/settings">Settings</a>
-      <button id="scanButton" class="primary">Scan library</button>
-    </nav>
-  </header>
+{% from "_layout.html" import site_header %}
+{% call site_header("home", "overview", version) %}<button id="scanButton" class="primary">Scan library</button>{% endcall %}
 
   <main>
     <section class="status-grid">

@@ -927,6 +927,7 @@ tools/smoke_test.py         Isolated workflow and Compose safety harness
 tools/clamav_acceptance.py  Live ClamAV clean/EICAR acceptance test
 scripts/smoke-test.sh       One-command containerized smoke-test runner
 compose.clamav.yaml         Optional private ClamAV deployment overlay
+templates/_layout.html      Shared header: Home, Review, Activity, System, Settings
 static/triage-acquisition.js Supervised replacement UI controller
 static/triage-move.js       Move-to-correct-book UI controller
 ```

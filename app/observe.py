@@ -1060,9 +1060,9 @@ def observe_attention_items(limit: int = 200) -> list[dict[str, Any]]:
         ):
             continue
         workflow = (
-            "/triage#acquisitionPanel"
+            "/review#acquisitionPanel"
             if decoded["subjectKind"] in {"acquisition", "admission"}
-            else "/triage"
+            else "/review"
         )
         items.append({
             "kind": "observe",
@@ -1079,7 +1079,7 @@ def observe_attention_items(limit: int = 200) -> list[dict[str, Any]]:
                 "recordedError": "",
             },
             "updatedAt": decoded["lastSeenAt"],
-            "detailHref": f"/history/observe/{decoded['id']}",
+            "detailHref": f"/activity/observe/{decoded['id']}",
             "href": workflow,
         })
         if len(items) >= limit:

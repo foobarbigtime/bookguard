@@ -36,7 +36,7 @@ def test_blocked_e4_plan_is_visible_and_auditable_without_work(tmp_path, monkeyp
     assert item["id"] == plan_id
     assert item["status"] == "blocked"
     assert "staged source changed" in item["message"]
-    assert item["detailHref"] == f"/history/recovery-plan/{plan_id}"
+    assert item["detailHref"] == f"/activity/recovery-plan/{plan_id}"
     detail = history.operation_detail("recovery-plan", plan_id)
     assert detail and "execution outcomes are recorded separately" in detail["summary"]
 
@@ -88,7 +88,7 @@ def test_only_stale_running_e4_receipts_enter_attention(tmp_path, monkeypatch):
     items = attention_execution.stale_execution_items(now=now)
     assert len(items) == 1
     assert items[0]["kind"] == "automatic_execution"
-    assert items[0]["detailHref"] == f"/history/recovery-plan/{plan}"
+    assert items[0]["detailHref"] == f"/activity/recovery-plan/{plan}"
     assert "outcome is unproven" in items[0]["message"]
     assert attention.attention_snapshot()["summary"]["runningExecutions"] == 1
 
