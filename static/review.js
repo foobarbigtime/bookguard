@@ -176,6 +176,10 @@
       row.classList.toggle("active", Number(row.dataset.reviewId) === item.id);
     }
     const evidence = el("ul", { class: "detail-evidence" });
+    const language = item.language || {};
+    evidence.append(el("li", {
+      text: language.declared ? `Language: ${language.label} (declared in the file).` : "Language: not declared in the file.",
+    }));
     if (item.explanation) evidence.append(el("li", { text: item.explanation }));
     if (item.verified) evidence.append(el("li", { text: `Verified with ${item.confidence}% confidence.` }));
     for (const reason of item.scanReasons || []) evidence.append(el("li", { text: `Library scan: ${reason}` }));
@@ -188,7 +192,10 @@
         el("p", { class: "muted", text: [item.author, item.format].filter(Boolean).join(" · ") })),
       section("What's wrong", el("p", { text: (WHAT_IS_WRONG[item.group] || WHAT_IS_WRONG.undecided)(item) })),
       section("How BookGuard knows", evidence),
-      section("Suggestion", el("p", { text: item.suggestion }), el("div", { class: "detail-actions" }, ...primaryActions(item))),
+      section("Suggestion",
+        language.nonEnglish ? el("p", { class: "lang-warning", text: `This book is in ${language.label}. If you only keep English books, quarantine it instead of keeping or moving it.` }) : null,
+        el("p", { text: item.suggestion }),
+        el("div", { class: "detail-actions" }, ...primaryActions(item))),
       el("p", { class: "detail-status notice warning", role: "alert", hidden: true }),
     ];
     if (data.allowActions) {

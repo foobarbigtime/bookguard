@@ -286,6 +286,14 @@ the file is filed under, the book it really belongs to, and the current and new
 paths. If anything makes the move unsafe, the preview lists the reasons instead
 of offering the move.
 
+The preview, and the book's panel in Review, also show the language the file
+declares about itself (from its EPUB or PDF metadata, recorded by the library
+scan). A file in another language can be exactly the book it says it is, such
+as a Swedish edition catalogued as its own Bindery book, so language never
+blocks the move; the preview warns instead, because moving keeps the
+translation. Review's **Not in English** filter lists every open book whose
+file declares a language other than English.
+
 The move requires `BOOKGUARD_ALLOW_ACTIONS=true` and explicit
 `MOVE_TO_CORRECT_BOOK` confirmation. At the moment of acting BookGuard verifies
 the file again (including the malware scan) and requires that:

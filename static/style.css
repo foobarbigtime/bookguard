@@ -411,3 +411,6 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
   .review-layout { grid-template-columns: 1fr; }
   .review-detail { position: static; max-height: none; }
 }
+.lang-tag { display: inline-block; margin-left: .4rem; padding: 0 .4rem; border-radius: .3rem; background: #2e1065; color: #c4b5fd; font-size: .7rem; font-weight: 600; line-height: 1.5; vertical-align: middle; }
+.chip .lang-tag { margin-left: 0; }
+.lang-warning { padding: .55rem .7rem; border: 1px solid #5b21b6; border-radius: .4rem; background: rgba(91,33,182,.15); color: #ddd6fe !important; }

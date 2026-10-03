@@ -106,7 +106,15 @@
       ["Really belongs to", `${proof.targetTitle} (Bindery book ${proof.targetBookId})`],
       ["Current path", proof.sourcePath],
       ["New path", proof.destination],
+      ["Language", proof.language && proof.language.declared ? proof.language.label : "Not declared in the file"],
     ]);
+    if (proof.language && proof.language.nonEnglish) {
+      line(
+        `This file is in ${proof.language.label}. Moving it files the ${proof.language.label} edition under ` +
+        `“${proof.targetTitle}”. If you only keep English books, quarantine it instead.`,
+        "notice warning",
+      );
+    }
     if (!proof.eligible) {
       line("This move is not safe right now:");
       const list = document.createElement("ul");

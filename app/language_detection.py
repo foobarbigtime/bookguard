@@ -123,3 +123,29 @@ def ebook_languages(path: str) -> dict:
 def explicit_non_english(result: dict) -> list[str]:
     languages = [normalize_language(value) for value in result.get("languages", [])]
     return sorted({language for language in languages if language and language not in ENGLISH_CODES})
+
+
+LANGUAGE_NAMES = {
+    "en": "English", "de": "German", "fr": "French", "es": "Spanish", "it": "Italian",
+    "pt": "Portuguese", "nl": "Dutch", "sv": "Swedish", "no": "Norwegian", "da": "Danish",
+    "fi": "Finnish", "pl": "Polish", "cs": "Czech", "ru": "Russian", "uk": "Ukrainian",
+    "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
+}
+
+
+def declared_language(result: dict) -> dict:
+    """The language a scanned file declares about itself, for display.
+
+    Read from what the library scan recorded (EPUB/PDF metadata or audio
+    tags); nothing is opened here. ``nonEnglish`` is true only when the file
+    explicitly declares a language other than English.
+    """
+    detection = (result.get("metadata") or {}).get("language_detection") or {}
+    codes = sorted({code for code in (normalize_language(v) for v in detection.get("languages") or []) if code})
+    names = [LANGUAGE_NAMES.get(code, code.upper()) for code in codes]
+    return {
+        "codes": codes,
+        "label": " and ".join(names),
+        "declared": bool(codes),
+        "nonEnglish": bool(explicit_non_english({"languages": codes})),
+    }

@@ -167,7 +167,7 @@ def triage_page(
 
 
 @router.get("/review", response_class=HTMLResponse)
-def review_page(request: Request, group: str = ""):
+def review_page(request: Request, group: str = "", language: str = ""):
     items = open_review_items()
     known = {key for key, _, _ in GROUPS}
     selected = [key for key in group.split(",") if key in known]
@@ -180,6 +180,8 @@ def review_page(request: Request, group: str = ""):
             "tones": {key: tone for key, _, tone in GROUPS},
             "counts": group_counts(items),
             "group": ",".join(selected),
+            "language_filter": language == "other",
+            "non_english": sum(1 for item in items if item["language"]["nonEnglish"]),
             "allow_actions": settings.allow_actions,
             "repair_mode": settings.metadata_repair_mode,
             "catalogue_moves": list_moves(50),

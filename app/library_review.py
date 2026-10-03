@@ -16,6 +16,7 @@ import json
 from typing import Any
 
 from .db import latest_results, local_conn
+from .language_detection import declared_language
 from .triage import triage_state
 from .verification_status import verification_is_inconclusive
 
@@ -164,6 +165,7 @@ def review_item(row: dict, verification: dict | None) -> dict[str, Any]:
         "reasonCode": str(row.get("reason_code") or "UNKNOWN"),
         "riskScore": int(row.get("risk_score") or 0),
         "storedPath": str(row.get("stored_path") or ""),
+        "language": declared_language(row),
         "scanReasons": list(row.get("reasons") or []),
         "group": group,
         "groupLabel": GROUP_LABELS[group],

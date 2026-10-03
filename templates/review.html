@@ -11,6 +11,7 @@
 {{ site_header("review", "books", version) }}
 {% set selected = group.split(',') if group else [] %}
 {% set shown = items|selectattr('group', 'in', selected)|list if selected else items %}
+{% if language_filter %}{% set shown = shown|selectattr('language.nonEnglish')|list %}{% endif %}
 
 <main class="review">
   <div class="review-head">
@@ -19,7 +20,7 @@
   </div>
 
   <nav class="chips" aria-label="Filter by what needs deciding">
-    <a class="chip{% if not selected %} active{% endif %}" href="/review"{% if not selected %} aria-current="page"{% endif %}>All <b>{{ items|length }}</b></a>
+    <a class="chip{% if not selected and not language_filter %} active{% endif %}" href="/review"{% if not selected and not language_filter %} aria-current="page"{% endif %}>All <b>{{ items|length }}</b></a>
     {% for key, label, tone in groups %}
       {% if counts[key] or key in selected %}
         <a class="chip{% if selected == [key] %} active{% endif %}" href="/review?group={{ key }}"{% if selected == [key] %} aria-current="page"{% endif %}>
@@ -27,6 +28,11 @@
         </a>
       {% endif %}
     {% endfor %}
+    {% if non_english or language_filter %}
+      <a class="chip{% if language_filter %} active{% endif %}" href="/review?language=other"{% if language_filter %} aria-current="page"{% endif %}>
+        <span class="lang-tag" aria-hidden="true">Aa</span>Not in English <b>{{ non_english }}</b>
+      </a>
+    {% endif %}
   </nav>
 
   <div class="review-layout">
@@ -36,6 +42,7 @@
           <span class="dot tone-bg-{{ tones[item.group] }}" aria-hidden="true"></span>
           <span class="review-row-text">
             <strong>{{ item.title }}</strong>{% if item.author %}<span class="muted"> · {{ item.author }}</span>{% endif %}
+            {% if item.language.nonEnglish %}<span class="lang-tag">{{ item.language.label }}</span>{% endif %}
             <small>
               {% if item.group == 'verified' %}Verified as the right book.
               {% elif item.contains and item.group in ['move', 'duplicate', 'wrong'] %}Contains {{ item.contains }}.
@@ -47,7 +54,7 @@
           <span class="review-row-group">{{ item.groupLabel }}</span>
         </button>
       {% else %}
-        <p class="empty">{% if selected %}Nothing in this group.{% else %}Nothing needs a decision. Every book in the latest scan passed or has been reviewed.{% endif %}</p>
+        <p class="empty">{% if selected or language_filter %}Nothing matches this filter.{% else %}Nothing needs a decision. Every book in the latest scan passed or has been reviewed.{% endif %}</p>
       {% endfor %}
     </section>
 
