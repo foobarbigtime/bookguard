@@ -1,7 +1,7 @@
 # UI redesign: workflow first
 
-Status: design approved (mockups). Build steps 1-4 (Foundations, Home, Review,
-Activity) are implemented; steps 5-7 are not yet.
+Status: design approved (mockups). Build steps 1-5 (Foundations, Home, Review,
+Activity, System) are implemented; steps 6-7 are not yet.
 Mockups: <https://claude.ai/artifact/XAaZbvzFmJVCTgo8ZeX3Tp> (Home, Review,
 Replace, Setup, Activity, System, Settings).
 
@@ -285,3 +285,27 @@ Step 4 as built:
   quarantined file is not built: BookGuard has no restore operation yet.
 - Home's recent activity uses the same sentences. The Repairs tab stays
   until its repair proposals have a home in Review.
+
+Step 5 as built:
+
+- **System** (`/system`) has a Status tab and an Advanced tab (the previous
+  diagnostics page, unchanged, at `/system/advanced`).
+- **Health** (`app/health.py`, `GET /api/system/health`): each problem says what
+  is wrong, why it matters and how to fix it; passing checks are a short list.
+  Checks: Bindery's database readable, library folders readable, virus scanner
+  answering and its definitions under three days old, BookGuard's database
+  integrity (System only; Home skips it), a scan left running by a restart,
+  repeated nightly restarts (from the start records, shown in local time),
+  import checks failing, a scheduled scan that couldn't start,
+  running as root. Home's health line uses the same checks.
+- **Scheduled tasks** (`app/scheduler.py`, `GET /api/system/tasks`): an optional
+  scheduled library scan (off, daily or weekly at a set time, container local
+  time, following daylight saving; a missed slot runs if under three hours
+  late, and a start that fails is retried in that window, then reported in
+  Health until a scan runs), the import check and the
+  Observe check, each with last and next run and Run now.
+- **About**: version and revision, running since, last update, virus scanner,
+  automation mode.
+- Not built: in-app backups. Backups stay on the host
+  (`scripts/bookguard-backup.sh`, and before every upgrade) so BookGuard's own
+  data never needs a writable backup mount inside the container.

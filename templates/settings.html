@@ -50,6 +50,13 @@
           <label class="check-field"><input name="scan_ebooks" type="checkbox" {% if settings.scan_ebooks %}checked{% endif %}><span>Scan ebooks</span></label>
           <label class="check-field"><input name="scan_on_start" type="checkbox" {% if settings.scan_on_start %}checked{% endif %}><span>Run a scan on container start</span></label>
           <label class="check-field"><input name="watch_imports" type="checkbox" {% if settings.watch_imports %}checked{% endif %}><span>Check each new Bindery import</span></label>
+          <label class="field"><span>Scheduled library scan</span><select name="scan_schedule">
+            {% for value, label in [('off', 'Off'), ('daily', 'Daily'), ('weekly', 'Weekly')] %}<option value="{{ value }}"{% if settings.scan_schedule == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select><small>A full scan at a quiet time. Times are the container's local time.</small></label>
+          <label class="field"><span>Scan at</span><input name="scan_schedule_time" type="time" value="{{ settings.scan_schedule_time }}"></label>
+          <label class="field"><span>Weekly scan day</span><select name="scan_schedule_day">
+            {% for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] %}<option value="{{ loop.index0 }}"{% if settings.scan_schedule_day == loop.index0 %} selected{% endif %}>{{ day }}</option>{% endfor %}
+          </select></label>
           <label class="field"><span>Look for new imports every (minutes)</span><input name="watch_imports_minutes" type="number" min="1" max="60" value="{{ settings.watch_imports_minutes }}"><small>New files are scanned and verified soon after Bindery imports them.</small></label>
           <label class="field"><span>Audio samples per association</span><input name="sample_files" type="number" min="1" max="50" value="{{ settings.sample_files }}"><small>Samples are spread across the audiobook.</small></label>
           <label class="field"><span>Progress update interval</span><input name="progress_every" type="number" min="1" max="100" value="{{ settings.progress_every }}"></label>
@@ -164,7 +171,7 @@ const booleanFields = [
   "repair_audio_album_artist", "repair_audio_genre", "clear_api_key"
 ];
 const integerFields = [
-  "sample_files", "progress_every", "watch_imports_minutes", "title_min_shared_words",
+  "sample_files", "progress_every", "watch_imports_minutes", "scan_schedule_day", "title_min_shared_words",
   "strong_mismatch_min_samples", "strong_mismatch_consensus_percent",
   "verification_max_text_chars", "verification_pdf_pages",
   "dashboard_poll_ms", "live_results_limit", "dashboard_result_limit"

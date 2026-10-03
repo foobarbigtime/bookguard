@@ -8,7 +8,9 @@ from ..change_log import record_settings_change
 from ..config import Settings, settings
 from ..diagnostics import diagnostics_snapshot
 from ..history import operation_detail, operation_history
+from ..health import health_checks
 from ..home import home_summary
+from ..scheduler import scheduled_tasks
 from ..import_watch import watcher as import_watcher
 from ..db import (
     clear_persisted_settings,
@@ -118,6 +120,26 @@ async def api_bindery_webhook(request: Request):
         import_watcher.nudge()
         return {"ok": True, "checking": True}
     return {"ok": True, "checking": False}
+
+
+@router.post("/api/imports/check", status_code=202)
+def api_import_check_now(payload: ConfirmationRequest):
+    """Look for new Bindery imports now instead of waiting for the timer."""
+    require_confirmation(payload, "CHECK_IMPORTS")
+    if not settings.watch_imports:
+        raise HTTPException(status_code=409, detail="Import checks are turned off in Settings.")
+    import_watcher.nudge()
+    return {"ok": True, "message": "Looking for new imports now. Results appear in Activity."}
+
+
+@router.get("/api/system/health")
+def api_system_health():
+    return health_checks()
+
+
+@router.get("/api/system/tasks")
+def api_system_tasks():
+    return {"tasks": scheduled_tasks()}
 
 
 @router.get("/api/imports/status")

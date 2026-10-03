@@ -9,7 +9,9 @@ from fastapi.templating import Jinja2Templates
 from .. import __version__
 from ..catalogue_move import list_moves
 from ..config import settings
-from ..diagnostics import diagnostics_snapshot
+from ..diagnostics import _malware_report, diagnostics_snapshot
+from ..health import health_checks, system_about
+from ..scheduler import scheduled_tasks
 from ..home import home_summary
 from ..library_review import GROUPS, group_counts, open_review_items
 from ..activity import RESULTS, WHAT, WHO, activity_events, activity_totals, filter_events
@@ -132,6 +134,21 @@ def history_detail_page(request: Request, kind: str, record_id: int):
 
 
 @router.get("/system", response_class=HTMLResponse)
+def system_page(request: Request):
+    malware = _malware_report()
+    return templates.TemplateResponse(
+        request=request,
+        name="system.html",
+        context={
+            "health": health_checks(malware),
+            "tasks": scheduled_tasks(),
+            "about": system_about(malware),
+            "version": __version__,
+        },
+    )
+
+
+@router.get("/system/advanced", response_class=HTMLResponse)
 def diagnostics_page(request: Request):
     return templates.TemplateResponse(
         request=request,

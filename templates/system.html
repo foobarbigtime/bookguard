@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard System</title>
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
+</head>
+<body>
+{% from "_layout.html" import site_header %}
+{{ site_header("system", "status", version) }}
+
+<main class="system-page">
+  <div class="review-head">
+    <h1>System</h1>
+    <p>How BookGuard and the services it depends on are doing, and what runs on a schedule.</p>
+  </div>
+
+  <div class="system-layout">
+    <div class="home-col">
+      <section class="card home-card" aria-labelledby="healthHeading">
+        <div class="card-head">
+          <h2 id="healthHeading">Health {% if health.problems %}<span class="count-badge">{{ health.problems|length }}</span>{% endif %}</h2>
+        </div>
+        {% for check in health.problems %}
+          <article class="health-check">
+            <span class="sv sv-{{ check.level }}" aria-label="{{ {'error': 'Problem', 'warn': 'Warning', 'info': 'Note'}[check.level] }}">{{ '!' if check.level in ['error', 'warn'] else 'i' }}</span>
+            <div>
+              <h3>{{ check.title }}</h3>
+              {% if check.message %}<p>{{ check.message }}</p>{% endif %}
+              {% if check.fix %}
+                <details class="how-to-fix">
+                  <summary>How to fix</summary>
+                  <p>{{ check.fix }}</p>
+                </details>
+              {% endif %}
+            </div>
+          </article>
+        {% else %}
+          <p class="all-clear">Everything BookGuard checks is working.</p>
+        {% endfor %}
+        {% if health.passing %}
+          <ul class="ok-list">
+            {% for check in health.passing %}<li>{{ check.title }}</li>{% endfor %}
+          </ul>
+        {% endif %}
+      </section>
+
+      <section class="card home-card" aria-labelledby="tasksHeading">
+        <div class="card-head">
+          <h2 id="tasksHeading">Scheduled tasks</h2>
+          <a class="more" href="/settings">Change schedules</a>
+        </div>
+        <div class="table-wrap task-table">
+          <table>
+            <thead><tr><th>Task</th><th>Runs</th><th>Last run</th><th>Next run</th><th></th></tr></thead>
+            <tbody>
+            {% for task in tasks %}
+              <tr>
+                <td><strong>{{ task.name }}</strong><small>{{ task.about }}</small></td>
+                <td>{{ task.schedule }}</td>
+                <td>
+                  {% if task.lastAt %}<time data-local datetime="{{ task.lastAt }}">{{ task.lastAt[:16]|replace('T', ' ') }}</time>{% else %}<span class="muted">Never</span>{% endif %}
+                  {% if task.last %}<small>{{ task.last }}</small>{% endif %}
+                </td>
+                <td>{% if task.nextAt %}<time data-local datetime="{{ task.nextAt }}">{{ task.nextAt[:16]|replace('T', ' ') }}</time>{% else %}<span class="muted">—</span>{% endif %}</td>
+                <td>
+                  {% if task.action %}
+                    <button type="button" data-run-task="{{ task.action }}"{% if task.running %} disabled{% endif %}>{{ 'Running' if task.running else 'Run now' }}</button>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <small class="muted">Backups are made on the server by <code>scripts/bookguard-backup.sh</code> and before every upgrade by the upgrade script; see Backup and validation in the README.</small>
+      </section>
+    </div>
+
+    <aside class="home-col">
+      <section class="card home-card" aria-labelledby="aboutHeading">
+        <div class="card-head"><h2 id="aboutHeading">About</h2></div>
+        <dl class="about-list">
+          {% for entry in about %}
+            <div>
+              <dt>{{ entry.label }}</dt>
+              <dd>{{ entry.text }}{% if entry.at %}<time data-local datetime="{{ entry.at }}">{{ entry.at[:16]|replace('T', ' ') }}</time>{% endif %}</dd>
+            </div>
+          {% endfor %}
+        </dl>
+      </section>
+      <section class="card home-card" aria-labelledby="advancedHeading">
+        <div class="card-head"><h2 id="advancedHeading">Advanced</h2><a class="more" href="/system/advanced">Open →</a></div>
+        <p>Safety gates, readiness checks, deployment and folder permissions, shown as-is for troubleshooting.</p>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<script src="{{ static_url('local-time.js') }}" defer></script>
+<script src="{{ static_url('system.js') }}" defer></script>
+</body>
+</html>

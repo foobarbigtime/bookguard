@@ -452,3 +452,30 @@ main > .notice { margin: 0 0 1rem; }
 .activity-more a { color: #d4d4d8; }
 .activity-more .path { width: auto; max-width: none; }
 @media (max-width: 600px) { .activity-event { flex-direction: column; gap: .3rem; } .activity-event time { flex-basis: auto; } }
+
+/* System (docs/design/ui-redesign.md) */
+.system-page { display: flex; flex-direction: column; gap: 1rem; }
+.system-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); gap: 1.4rem; align-items: start; }
+.health-check { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: .8rem; padding: .8rem 0; border-top: 1px solid var(--border); }
+.health-check:first-of-type { border-top: 0; padding-top: .2rem; }
+.health-check h3 { font-size: .92rem; }
+.health-check p { margin-top: .2rem; font-size: .84rem; color: var(--muted); }
+.sv { width: 24px; height: 24px; border-radius: 999px; display: flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 700; }
+.sv-error { background: #450a0a; color: #fca5a5; }
+.sv-warn { background: #451a03; color: #fcd34d; }
+.sv-info { background: #082f49; color: #7dd3fc; }
+.how-to-fix summary { cursor: pointer; margin-top: .35rem; font-size: .8rem; color: var(--accent); }
+.how-to-fix p { color: #d4d4d8 !important; }
+.ok-list { list-style: none; margin: 0; padding: .7rem 0 0; border-top: 1px solid var(--border); display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .35rem 1.2rem; font-size: .84rem; color: #d4d4d8; }
+.ok-list li::before { content: "\2713  "; color: #6ee7b7; }
+.task-table { border-top: 0; }
+.task-table table { min-width: 620px; }
+.task-table th { background: transparent; }
+.task-table td small { margin-top: .2rem; }
+.about-list { margin: 0; display: grid; gap: .55rem; font-size: .84rem; }
+.about-list div { display: flex; justify-content: space-between; gap: 1rem; }
+.about-list dt { color: var(--muted); }
+.about-list dd { margin: 0; text-align: right; color: #e4e4e7; overflow-wrap: anywhere; }
+@media (max-width: 950px) { .system-layout { grid-template-columns: 1fr; } }
+.card .task-table td strong { font-size: .92rem; margin: 0; }
+.task-table td button { white-space: nowrap; }

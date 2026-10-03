@@ -23,6 +23,7 @@ from .routes.triage import router as triage_router
 from .routes.verification import router as verification_router
 from .change_log import record_app_start
 from .import_watch import init_import_watch_db, watcher as import_watcher
+from .scheduler import init_scheduler_db, scheduler
 from .scanner import start_scan
 from .triage import init_triage_db
 from .verifier import init_verification_db
@@ -40,9 +41,12 @@ async def lifespan(_: FastAPI):
     start_acquisition_coordinator()
     init_import_watch_db()
     import_watcher.start()
+    init_scheduler_db()
+    scheduler.start()
     try:
         yield
     finally:
+        scheduler.stop()
         import_watcher.stop()
         stop_acquisition_coordinator()
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 from fastapi import FastAPI
@@ -42,7 +43,13 @@ def library(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "bindery_db", str(tmp_path / "bindery.db"))
     monkeypatch.setattr(settings, "verification_malware_scan", False)
     monkeypatch.setattr(settings, "verification_clamd_host", "")
-    (tmp_path / "bindery.db").write_bytes(b"")
+    with sqlite3.connect(tmp_path / "bindery.db") as conn:
+        conn.execute("CREATE TABLE book_files (id INTEGER PRIMARY KEY, book_id INTEGER, format TEXT, path TEXT)")
+    for folder in ("books", "audiobooks"):
+        (tmp_path / folder).mkdir()
+    monkeypatch.setattr(settings, "ebook_root", str(tmp_path / "books"))
+    monkeypatch.setattr("app.health._uid", lambda: 99)
+    monkeypatch.setattr(settings, "audiobook_root", str(tmp_path / "audiobooks"))
     init_local_db()
     init_triage_db()
     init_verification_db()

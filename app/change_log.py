@@ -30,6 +30,9 @@ SETTING_LABELS = {
     "verification_use_tika": "Tika text extraction",
     "watch_imports": "Check each new Bindery import",
     "watch_imports_minutes": "Minutes between import checks",
+    "scan_schedule": "Scheduled library scan",
+    "scan_schedule_time": "Scheduled scan time",
+    "scan_schedule_day": "Weekly scan day",
 }
 
 
