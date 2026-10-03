@@ -47,6 +47,27 @@ def validate_runtime(payload: Any) -> dict[str, Any]:
         item = mount_map.get(target)
         return bool(item) and not bool(item.get("RW"))
 
+    env = {
+        str(item).split("=", 1)[0]: str(item).split("=", 1)[1]
+        for item in (config.get("Env") or [])
+        if "=" in str(item)
+    }
+
+    def action_alias_ok() -> bool:
+        """With ebook actions off, no writable ebook alias. With them on, the alias
+        must be mounted, writable, and the very same host folder as read-only /books."""
+        alias = mount_map.get("/action-books")
+        enabled = env.get("BOOKGUARD_EBOOK_ACTIONS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return alias is None
+        books = mount_map.get("/books") or {}
+        return (
+            alias is not None
+            and bool(alias.get("RW"))
+            and bool(alias.get("Source"))
+            and alias.get("Source") == books.get("Source")
+        )
+
     checks = {
         "runtimeUserConfigured": bool(runtime_user),
         "runtimeUserNonRoot": uid not in {"", "0", "root"},
@@ -68,7 +89,7 @@ def validate_runtime(payload: Any) -> dict[str, Any]:
         "binderyMountedReadOnly": mounted_ro("/bindery"),
         "ebooksMountedReadOnly": mounted_ro("/books"),
         "audiobooksMountedReadOnly": mounted_ro("/audiobooks"),
-        "writableActionAliasAbsent": "/action-books" not in mount_map,
+        "writableActionAliasOptedIn": action_alias_ok(),
         "writableAdmissionAliasAbsent": "/admission-books" not in mount_map,
     }
 

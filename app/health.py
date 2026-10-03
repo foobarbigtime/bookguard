@@ -11,10 +11,12 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import os
+from pathlib import Path
 import sqlite3
 from typing import Any, Callable
 
 from .config import settings
+from .file_safety import roots_overlap
 from .db import bindery_conn, latest_scan, local_conn, local_db_path
 
 DEFINITIONS_MAX_AGE_DAYS = 3
@@ -192,6 +194,51 @@ def _import_checks() -> dict[str, Any] | None:
     return _check("import_checks", "ok", "New imports are being checked")
 
 
+def _same_folder(left: str, right: str) -> bool:
+    """Two distinct mount points showing the very same directory (same device and inode)."""
+    try:
+        a, b = os.stat(left), os.stat(right)
+    except OSError:
+        return False
+    return os.path.normpath(left) != os.path.normpath(right) and (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+
+
+def _book_actions() -> dict[str, Any]:
+    """Can Quarantine, Replace and Put back run, and if not, the one thing to do."""
+    from .action_paths import mount_is_writable
+    from .config import ConfigurationError, load_automation_settings
+
+    if not settings.allow_actions:
+        # Off is a choice, not a problem: say how to switch it on without raising an alert.
+        return _check("book_actions", "ok",
+                      "Quarantine, Replace and Put back are off (Settings → Safety and Bindery actions to switch on)")
+    try:
+        automation = load_automation_settings()
+    except ConfigurationError as exc:
+        return _check("book_actions", "warn", "Ebook quarantine settings are invalid", str(exc))
+    if not automation.ebook_actions_enabled:
+        return _check("book_actions", "ok",
+                      "Ebook quarantine is off (set BOOKGUARD_EBOOK_ACTIONS_ENABLED=true in .env, then run the "
+                      "upgrade command; it adds the writable books folder for you)")
+    action_root = automation.ebook_action_root
+    if not os.path.isdir(action_root) or not mount_is_writable(action_root):
+        return _check("book_actions", "warn", "Ebook quarantine is on, but the writable books folder is missing",
+                      f"Nothing writable is mounted at {action_root}.",
+                      "Run the upgrade command again; with ebook actions on it mounts compose.actions.yaml for you.")
+    if not _same_folder(action_root, settings.ebook_root) or roots_overlap(
+        Path(action_root).resolve(), Path(settings.quarantine_root).resolve()
+    ):
+        return _check("book_actions", "warn", "The writable books folder is not your books folder",
+                      f"{action_root} must be the same host folder as {settings.ebook_root}, mounted a second time "
+                      "as writable, and separate from the quarantine folder.",
+                      "In compose.actions.yaml, mount the same host folder you mount at /books.")
+    if not os.path.isdir(settings.quarantine_root) or not mount_is_writable(settings.quarantine_root):
+        return _check("book_actions", "warn", "The quarantine folder isn't writable",
+                      f"BookGuard can't write to {settings.quarantine_root}.",
+                      "Check the /quarantine mount in compose.yaml points at a folder BookGuard's user can write to.")
+    return _check("book_actions", "ok", "Quarantine, Replace and Put back are ready")
+
+
 def _scheduled_scan() -> dict[str, Any] | None:
     from .scheduler import scheduler
 
@@ -241,6 +288,7 @@ def health_checks(
     for optional in (_import_checks(), _scheduled_scan()):
         if optional:
             checks.append(optional)
+    checks.append(_book_actions())
     checks.append(_runtime())
     order = {"error": 0, "warn": 1, "info": 2, "ok": 3}
     problems = sorted((c for c in checks if c["level"] != "ok"), key=lambda c: order[c["level"]])

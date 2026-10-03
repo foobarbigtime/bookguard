@@ -266,16 +266,17 @@ BOOKGUARD_EBOOK_ACTIONS_ENABLED=false
 BOOKGUARD_EBOOK_ACTION_ROOT=/action-books
 ```
 
-Include `compose.actions.yaml` only for a deliberate ebook action session. The
-read-only source path and writable alias must have identical library-relative
-paths and must resolve to the same device and inode before BookGuard will move
-anything. A failed move occurs before Bindery is changed; a later detach failure
-causes BookGuard to restore the file through the writable alias.
-
-```bash
-bash scripts/build-with-provenance.sh
-docker compose -f compose.yaml -f compose.actions.yaml up -d --no-build
-```
+To switch ebook quarantine on, set `BOOKGUARD_EBOOK_ACTIONS_ENABLED=true` in
+`.env` and run the usual upgrade command. `scripts/safer-upgrade.sh` then adds
+`compose.actions.yaml` (the writable alias) by itself, on this and every later
+upgrade, and its hardening check accepts the alias only while ebook actions are
+on and the alias is the same host folder as the read-only `/books` mount.
+System → Health says whether Quarantine, Replace and Put back are ready, and if
+not, the one thing to do. The read-only source path and writable alias must have
+identical library-relative paths and must resolve to the same device and inode
+before BookGuard will move anything. A failed move occurs before Bindery is
+changed; a later detach failure causes BookGuard to restore the file through the
+writable alias.
 
 ### Moving a misfiled ebook to the right book
 
