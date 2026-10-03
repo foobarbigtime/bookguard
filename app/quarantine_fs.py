@@ -285,3 +285,20 @@ def commit_quarantine_or_rollback(
         except Exception as rollback_exc:
             rollback_error = rollback_exc
         raise QuarantineCommitError(exc, rollback_error) from exc
+
+
+def move_out_of_quarantine(
+    quarantined: Path,
+    original: Path,
+    *,
+    expected_sha256: str,
+) -> None:
+    """Put one quarantined file back where it came from, never replacing anything."""
+    try:
+        _move_no_replace(quarantined, original, expected_sha256=expected_sha256)
+    except Exception as exc:
+        raise QuarantineMoveError(str(exc)) from exc
+    if os.path.lexists(quarantined):
+        raise QuarantineMoveError("The quarantined file is still in quarantine after the move.")
+    if not original.is_file() or sha256_file(original) != expected_sha256:
+        raise QuarantineMoveError("The put-back file did not verify at its original path.")

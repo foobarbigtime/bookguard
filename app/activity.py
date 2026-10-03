@@ -137,7 +137,8 @@ def _from_history(item: dict[str, Any]) -> dict[str, Any] | None:
         base["detail"] = ""  # only the internal action name; errors are kept
     if kind == "cleanup":
         result = _status_result(status, done={"applied"})
-        verb = {"Quarantine": "quarantined", "Detach": "detached from Bindery"}.get(label, "cleaned up")
+        verb = {"Quarantine": "quarantined", "Detach": "detached from Bindery",
+                "Put back": "put back"}.get(label, "cleaned up")
         if result == "done":
             sentence = f"You {verb} {_book(title)}" + (" (nothing was deleted)" if label == "Quarantine" else "")
         else:

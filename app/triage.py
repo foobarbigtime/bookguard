@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from pathlib import Path
 import time
 
 from .action_paths import ebook_action_preview, mount_is_writable
-from .actions import ActionError, detach, quarantine
+from .actions import ActionError, detach, quarantine_file
 from .config import settings
 from .db import (
     bindery_file_by_id,
@@ -15,7 +16,9 @@ from .db import (
     latest_results,
     latest_scan,
     local_conn,
+    record_cleanup_location,
 )
+from .file_safety import sha256_file
 
 
 TRIAGE_CLASSES = {"REVIEW", "REJECT"}
@@ -316,6 +319,24 @@ def triage_detach(result: dict) -> int:
         raise ActionError(str(exc)) from exc
 
 
+def _record_quarantine_location(cleanup_id: int, original: Path, destination: Path) -> None:
+    """Remember where the file went and its bytes, so Put back can undo exactly this."""
+    sha256 = size_bytes = None
+    try:
+        if destination.is_file() and not destination.is_symlink():
+            sha256 = sha256_file(destination)
+            size_bytes = destination.stat().st_size
+    except OSError:
+        sha256 = size_bytes = None  # the quarantine still stands; it just cannot be put back
+    record_cleanup_location(
+        cleanup_id,
+        original_path=str(original),
+        quarantine_path=str(destination),
+        sha256=sha256,
+        size_bytes=size_bytes,
+    )
+
+
 def triage_quarantine(result: dict) -> tuple[int, str]:
     if not settings.allow_actions:
         raise ActionError("Bindery actions are disabled. Enable actions in Settings before quarantining REVIEW/REJECT items.")
@@ -332,11 +353,12 @@ def triage_quarantine(result: dict) -> tuple[int, str]:
         final_preview = triage_action_preview(result, "quarantine")
         if not final_preview["safe"]:
             raise ActionError(final_preview["reason"])
-        destination = quarantine(
+        destination, original = quarantine_file(
             result["book_id"],
             result["stored_path"],
             result["local_path"],
         )
+        _record_quarantine_location(cleanup_id, original, Path(destination))
         _wait_for_bindery_row_gone(int(result["file_id"]))
         finish_cleanup_action(cleanup_id, "applied")
         return cleanup_id, destination

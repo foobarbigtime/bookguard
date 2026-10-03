@@ -154,7 +154,9 @@ def _cleanup_events(conn, limit: int) -> list[dict[str, Any]]:
     for row in rows:
         action = str(row["action_kind"] or "").upper()
         label = (
-            "Quarantine"
+            "Put back"
+            if action == "PUT_BACK"
+            else "Quarantine"
             if "QUARANTINE" in action
             else "Detach"
             if "DETACH" in action

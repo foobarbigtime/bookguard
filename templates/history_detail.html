@@ -13,7 +13,7 @@
 <main class="history-detail-main">
   <div class="notice info">
     <strong>Read-only audit detail.</strong>
-    This page displays an existing durable BookGuard record. It cannot retry, resume, correct, delete, quarantine, admit, repair, or otherwise change BookGuard state.
+    This page displays an existing durable BookGuard record. It cannot retry, resume, correct, delete, quarantine, admit, repair, or otherwise change BookGuard state.{% if put_back and put_back.safe %} The one exception is Put back below.{% endif %}
   </div>
 
   <div class="history-detail-toolbar">
@@ -237,6 +237,20 @@
   </section>
   {% endif %}
 
+  {% if put_back %}
+  <section class="table-card history-detail-card history-put-back">
+    <div class="section-title">
+      <h2>Put back</h2>
+      <p>Move this file from quarantine back to where it was. Bindery then scans its library to find it again.</p>
+    </div>
+    {% if put_back.safe %}
+      <button type="button" data-put-back="{{ detail.id }}">Put back</button>
+    {% else %}
+      <p class="empty">{{ put_back.reason }}</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
   <section class="table-card history-detail-card">
     <div class="section-title">
       <h2>Stored fields</h2>
@@ -277,5 +291,6 @@
   </section>
   {% endif %}
 </main>
+{% if put_back and put_back.safe %}<script src="{{ static_url('put-back.js') }}" defer></script>{% endif %}
 </body>
 </html>

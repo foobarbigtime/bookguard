@@ -16,6 +16,7 @@ from ..home import home_summary
 from ..library_review import GROUPS, group_counts, open_review_items
 from ..activity import RESULTS, WHAT, WHO, activity_events, activity_totals, filter_events
 from ..history import operation_detail
+from ..put_back import put_back_preview
 from ..db import (
     latest_counts,
     latest_reason_counts,
@@ -128,6 +129,7 @@ def history_detail_page(request: Request, kind: str, record_id: int):
         name="history_detail.html",
         context={
             "detail": detail,
+            "put_back": put_back_preview(record_id, check_bytes=False) if kind == "cleanup" else None,
             "version": __version__,
         },
     )

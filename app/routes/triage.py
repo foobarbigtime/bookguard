@@ -12,9 +12,11 @@ from ..catalogue_move import (
     reconcile_move,
 )
 from ..db import latest_results, latest_scan, result_by_id
+from ..put_back import put_back
 from ..scanner import start_scan
 from ..services.dashboard import latest_missing_cleanup
 from ..verifier import verify_result
+from .models import ConfirmationRequest, require_confirmation
 from ..triage import (
     TRIAGE_CLASSES,
     clear_keep_decision,
@@ -160,6 +162,17 @@ async def api_triage_quarantine(result_id: int, request: Request):
         "destination": destination,
         "message": f"Item detached from Bindery and moved to {destination}",
     }
+
+
+@router.post("/quarantine/{cleanup_id}/put-back")
+def api_put_back(cleanup_id: int, payload: ConfirmationRequest):
+    """Move one quarantined file back to its original path."""
+    require_confirmation(payload, "PUT_BACK")
+    try:
+        put_back_id, message = put_back(cleanup_id)
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True, "cleanup_id": put_back_id, "message": message}
 
 
 @router.get("/results/{result_id}/missing-detach-preview")
