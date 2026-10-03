@@ -184,11 +184,15 @@ td { font-size: .86rem; }
 .metadata-repair-section { border-color: rgba(56,178,111,.38); }
 .form-grid { padding: 1rem 1.1rem; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem 1.1rem; }
 .compact-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+input[type="time"] { color-scheme: dark; }
+.settings-group { grid-column: 1 / -1; font-size: .85rem; color: var(--muted); margin-top: .3rem; }
+.settings-group:first-child { margin-top: 0; }
+.field[hidden] { display: none; }
 .span-2 { grid-column: span 2; }
 .field { display: flex; flex-direction: column; gap: .4rem; min-width: 0; }
 .field > span { font-weight: 600; font-size: .9rem; }
 .option-panel { background: rgba(40,103,178,.055); border: 1px solid rgba(57,120,195,.28); border-radius: .65rem; padding: .8rem; }
-input[type="text"], input[type="password"], input[type="number"], select, textarea { width: 100%; min-width: 0; background: var(--inset); color: var(--text); border: 1px solid var(--border); border-radius: .55rem; padding: .66rem .7rem; font: inherit; }
+input[type="text"], input[type="password"], input[type="number"], input[type="time"], select, textarea { width: 100%; min-width: 0; background: var(--inset); color: var(--text); border: 1px solid var(--border); border-radius: .55rem; padding: .66rem .7rem; font: inherit; }
 textarea { resize: vertical; min-height: 120px; line-height: 1.45; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent-strong); box-shadow: 0 0 0 2px rgba(16,185,129,.15); }
 .check-field { display: flex; align-items: center; gap: .6rem; color: var(--text); min-height: 2.3rem; }

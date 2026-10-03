@@ -256,6 +256,7 @@ def scheduled_tasks(now: datetime | None = None) -> list[dict[str, Any]]:
             "schedule": f"Every {imports['minutes']} min" if imports["enabled"] else "Off",
             "lastAt": str(imports["lastCheckAt"] or ""),
             "last": (f"{imports['lastChecked']} new" if imports["lastState"] == "checked"
+                     else "Watching from now" if imports["lastState"] == "started"
                      else str(imports["lastState"] or "").replace("_", " ")),
             "nextAt": imports_next,
             "running": False,
