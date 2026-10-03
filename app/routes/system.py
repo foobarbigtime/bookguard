@@ -9,6 +9,7 @@ from ..config import Settings, settings
 from ..diagnostics import diagnostics_snapshot
 from ..history import operation_detail, operation_history
 from ..home import home_summary
+from ..import_watch import watcher as import_watcher
 from ..db import (
     clear_persisted_settings,
     latest_counts,
@@ -101,6 +102,27 @@ def api_status():
 def api_home():
     """Read-only summary for the Home page: health, decisions, activity."""
     return home_summary()
+
+
+@router.post("/api/bindery/webhook", status_code=202)
+async def api_bindery_webhook(request: Request):
+    """Bindery's notification webhook. An import or upgrade only wakes the import
+    watcher early; it reads Bindery's database to decide which files are new, so
+    nothing in the payload is trusted beyond its event type."""
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    event = str(payload.get("eventType") or "") if isinstance(payload, dict) else ""
+    if event in {"bookImported", "upgrade"}:
+        import_watcher.nudge()
+        return {"ok": True, "checking": True}
+    return {"ok": True, "checking": False}
+
+
+@router.get("/api/imports/status")
+def api_import_watch_status():
+    return import_watcher.status()
 
 
 @router.get("/api/activity")

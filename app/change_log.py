@@ -28,6 +28,8 @@ SETTING_LABELS = {
     "scan_on_start": "Scan when BookGuard starts",
     "verification_malware_scan": "Virus scanning",
     "verification_use_tika": "Tika text extraction",
+    "watch_imports": "Check each new Bindery import",
+    "watch_imports_minutes": "Minutes between import checks",
 }
 
 

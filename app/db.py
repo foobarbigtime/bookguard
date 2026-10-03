@@ -48,6 +48,37 @@ def load_bindery_files() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def bindery_files_after(file_id: int, limit: int = 50) -> list[dict]:
+    """Bindery file associations added after a known row id, oldest first."""
+    with bindery_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                bf.id AS file_id,
+                bf.book_id,
+                bf.format,
+                bf.path AS stored_path,
+                b.title,
+                b.status,
+                a.name AS author
+            FROM book_files bf
+            JOIN books b ON b.id = bf.book_id
+            JOIN authors a ON a.id = b.author_id
+            WHERE bf.id > ?
+            ORDER BY bf.id
+            LIMIT ?
+            """,
+            (int(file_id), int(limit)),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def bindery_max_file_id() -> int:
+    with bindery_conn() as conn:
+        row = conn.execute("SELECT COALESCE(MAX(id), 0) AS n FROM book_files").fetchone()
+    return int(row["n"] or 0)
+
+
 def bindery_file_by_id(file_id: int) -> dict | None:
     """Read one current Bindery file association by its stable row id."""
     with bindery_conn() as conn:
