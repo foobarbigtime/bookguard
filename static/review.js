@@ -147,25 +147,29 @@
     }), "danger");
   }
 
-  function primaryActions(item) {
-    const actions = [];
+  function moveAction(item) {
     const move = latestMove[item.id];
-    if (item.group === "move") {
-      if (move && move.status === "confirmed") actions.push(el("span", { class: "muted", text: `Moved to ${move.target_title}.` }));
-      else if (move && move.status !== "request_failed") actions.push(el("button", { type: "button", text: "Check move", "data-move-reconcile": String(move.id) }));
-      else actions.push(el("button", { type: "button", class: "primary", text: "Move to correct book", "data-move-result": String(item.id) }));
-    }
-    if (item.group === "metadata") actions.push(metadataFix(item));
-    if (["wrong", "duplicate", "move"].includes(item.group)) {
-      actions.push(el("a", {
-        class: "button-link" + (item.group === "wrong" ? " primary-link" : ""),
-        href: `/review/triage?classification=${encodeURIComponent(item.classification)}#verification-cell-${item.id}`,
-        text: "Start a replacement in Triage",
-      }));
-    }
-    actions.push(keep(item));
-    actions.push(button(item.verified ? "Verify again" : "Verify now", verifyAgain(item)));
-    return actions;
+    if (move && move.status === "confirmed") return el("span", { class: "muted", text: `Moved to ${move.target_title}.` });
+    if (move && move.status !== "request_failed") return el("button", { type: "button", text: "Check move", "data-move-reconcile": String(move.id) });
+    return el("button", { type: "button", class: "primary", text: "Move to correct book", "data-move-result": String(item.id) });
+  }
+
+  // One main action that fits the problem; everything else waits under "More".
+  function actionsFor(item) {
+    const guarded = data.allowActions;
+    const quarantine = guarded ? guardedAction(item, "quarantine") : null;
+    const main = [];
+    const more = [];
+    if (item.group === "move") main.push(moveAction(item), quarantine);
+    else if (item.group === "wrong") main.push(guarded ? replaceAction(item) : null, quarantine);
+    else if (item.group === "duplicate" || item.group === "unsafe") main.push(quarantine);
+    else if (item.group === "metadata") { main.push(metadataFix(item)); more.push(quarantine); }
+    else more.push(quarantine);
+    if (!item.verified) main.push(button("Verify now", verifyAgain(item)));
+    main.push(keep(item));
+    if (item.verified) more.push(button("Verify again", verifyAgain(item)));
+    if (guarded) more.push(guardedAction(item, "detach"));
+    return { main: main.filter(Boolean), more: more.filter(Boolean) };
   }
 
   function technicalDetails(item) {
@@ -198,6 +202,7 @@
     for (const reason of item.scanReasons || []) evidence.append(el("li", { text: `Library scan: ${reason}` }));
     if (!evidence.children.length) evidence.append(el("li", { text: "No evidence has been recorded yet." }));
 
+    const actions = actionsFor(item);
     const parts = [
       el("div", { class: "detail-title" },
         el("span", { class: "detail-group", text: item.groupLabel }),
@@ -208,16 +213,15 @@
       section("Suggestion",
         language.nonEnglish ? el("p", { class: "lang-warning", text: `This book is in ${language.label}. If you only keep English books, quarantine it instead of keeping or moving it.` }) : null,
         el("p", { text: item.suggestion }),
-        el("div", { class: "detail-actions" }, ...primaryActions(item))),
+        el("div", { class: "detail-actions" }, ...actions.main),
+        actions.more.length ? el("details", { class: "detail-section more-actions" },
+          el("summary", { text: "More" }),
+          el("p", { class: "muted", text: "Quarantine moves the file out of the library; Put back is in Activity. Detach removes only Bindery's record. Nothing is ever deleted." }),
+          el("div", { class: "detail-actions" }, ...actions.more)) : null),
       el("p", { class: "detail-status notice warning", role: "alert", hidden: true }),
     ];
-    if (data.allowActions) {
-      parts.push(el("section", { class: "detail-section danger-zone" },
-        el("h3", { text: "Danger zone" }),
-        el("p", { class: "muted", text: "Detach removes only Bindery's record; the file stays. Quarantine also moves the file out of the library. Replace quarantines it and has Bindery fetch a new copy. Nothing is ever deleted." }),
-        el("div", { class: "detail-actions" }, guardedAction(item, "detach"), guardedAction(item, "quarantine"), replaceAction(item))));
-    } else {
-      parts.push(el("p", { class: "muted small-print", text: "Detach and quarantine appear here when Bindery actions are enabled in Settings." }));
+    if (!data.allowActions) {
+      parts.push(el("p", { class: "muted small-print", text: "Quarantine and Replace appear here when Bindery actions are enabled in Settings." }));
     }
     parts.push(technicalDetails(item));
     detail.replaceChildren(...parts);

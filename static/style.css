@@ -414,8 +414,6 @@ main > .notice { margin: 0 0 1rem; }
 .detail-facts dt { color: var(--faint); }
 .detail-facts dd { margin: 0; color: #d4d4d8; overflow-wrap: anywhere; }
 .detail-status { margin: 0; }
-.danger-zone { border: 1px solid #7f1d1d; border-radius: .45rem; padding: .8rem; }
-.danger-zone h3 { color: #fca5a5; }
 .small-print { font-size: .78rem; }
 @media (max-width: 950px) {
   .review-layout { grid-template-columns: 1fr; }

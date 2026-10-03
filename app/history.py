@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .db import local_conn, result_by_id, utc_now
+from .db import bindery_files_for_book, local_conn, result_by_id, utc_now
 from .operator_guidance import operation_guidance
 
 
@@ -137,13 +137,21 @@ def _admission_events(conn, limit: int) -> list[dict[str, Any]]:
     return items
 
 
+def _bindery_has_copy(row) -> bool:
+    """Read-only: does Bindery track a file of this format for the book now?"""
+    try:
+        return bool(bindery_files_for_book(int(row["book_id"]), str(row["format"])))
+    except Exception:
+        return False  # Bindery's database unreadable: keep the entry as it was
+
+
 def _cleanup_events(conn, limit: int) -> list[dict[str, Any]]:
     if not _table_exists(conn, "cleanup_actions"):
         return []
     rows = conn.execute(
         """
         SELECT id, action_kind, status, author, title, stored_path, local_path,
-               created_at, completed_at, error, followup
+               created_at, completed_at, error, followup, book_id, format
         FROM cleanup_actions
         ORDER BY id DESC
         LIMIT ?
@@ -162,17 +170,27 @@ def _cleanup_events(conn, limit: int) -> list[dict[str, Any]]:
             if "DETACH" in action
             else "Cleanup"
         )
+        status = str(row["status"] or "")
+        followup = str(row["followup"] or "")
+        if (status == "attention" or followup.startswith("Needs you")) and _bindery_has_copy(row):
+            # The user finished it in Bindery since; don't keep asking.
+            status = "applied"
+            followup = (
+                "Fixed in Bindery since: it has the file again."
+                if label == "Put back"
+                else "Replacement requested: Bindery has a copy of this book now."
+            )
         items.append(
             _event(
                 kind="cleanup",
                 label=label,
                 record_id=row["id"],
-                status=row["status"],
+                status=status,
                 timestamp=row["completed_at"] or row["created_at"],
                 title=str(row["title"] or ""),
                 author=str(row["author"] or ""),
                 path=str(row["stored_path"] or row["local_path"] or ""),
-                message=str(row["error"] or row["followup"] or action.replace("_", " ").title()),
+                message=str(row["error"] or followup or action.replace("_", " ").title()),
                 detail_href=f"/activity/cleanup/{row['id']}",
             )
         )
