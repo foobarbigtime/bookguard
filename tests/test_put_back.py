@@ -39,6 +39,9 @@ class FakeBindery:
     adopted: list = []
     monitored: list = []
     register_on_scan = True
+    scan_book = 3
+    reassigned: list = []
+    preview = {"status": "move", "destination": "/data/books/Author/Mary/Mary.epub"}
 
     def __init__(self, *args, **kwargs):
         pass
@@ -46,7 +49,15 @@ class FakeBindery:
     def scan_library(self):
         FakeBindery.scans += 1
         if FakeBindery.register_on_scan:
-            FakeBindery.tracked.append({"book_id": 3})
+            title = "Mary, Mary" if FakeBindery.scan_book == 3 else "Mary"
+            FakeBindery.tracked.append({"book_id": FakeBindery.scan_book, "title": title, "format": "ebook"})
+
+    def preview_manual_reassignment(self, path, book_id, *, file_format="ebook"):
+        return FakeBindery.preview
+
+    def reassign_manual_import(self, path, book_id, *, file_format="ebook"):
+        FakeBindery.reassigned.append((path, book_id, file_format))
+        FakeBindery.tracked[:] = [{"book_id": book_id, "title": "Mary, Mary", "format": file_format}]
 
     def list_unmatched(self, *, search="", file_format=None):
         ran = "after" if FakeBindery.scans else "before"
@@ -54,7 +65,7 @@ class FakeBindery:
 
     def adopt_unmatched(self, row_id, book_id):
         FakeBindery.adopted.append((row_id, book_id))
-        FakeBindery.tracked.append({"book_id": book_id})
+        FakeBindery.tracked.append({"book_id": book_id, "title": "Mary, Mary", "format": "ebook"})
 
     def set_book_monitored(self, book_id, monitored):
         FakeBindery.monitored.append((book_id, monitored))
@@ -72,10 +83,17 @@ def quarantined(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "allow_actions", True)
     monkeypatch.setattr(put_back_module, "BinderyClient", FakeBindery)
     monkeypatch.setattr(put_back_module, "resolve_bindery_api_key", lambda: "key")
-    FakeBindery.scans, FakeBindery.register_on_scan = 0, True
+    monkeypatch.setattr(settings, "ebook_bindery_prefix", "/data/books")
+    FakeBindery.scans, FakeBindery.register_on_scan, FakeBindery.scan_book = 0, True, 3
     FakeBindery.tracked, FakeBindery.unmatched, FakeBindery.adopted, FakeBindery.monitored = [], [], [], []
-    monkeypatch.setattr(put_back_module, "associations_inside_path", lambda path: FakeBindery.tracked)
-    monkeypatch.setattr(put_back_module, "bindery_files_for_book", lambda book_id, fmt: [])
+    FakeBindery.reassigned = []
+    FakeBindery.preview = {"status": "move", "destination": "/data/books/Author/Mary/Mary.epub"}
+    monkeypatch.setattr(put_back_module, "associations_inside_path", lambda path: list(FakeBindery.tracked))
+    monkeypatch.setattr(
+        put_back_module, "bindery_files_for_book",
+        lambda book_id, fmt: [t for t in FakeBindery.tracked if t["book_id"] == book_id and t["format"] == fmt],
+    )
+    monkeypatch.setattr(put_back_module, "FOLLOWUP_POLL_SECONDS", 0)
     monkeypatch.setattr(put_back_module, "_start_followup", lambda put_back_id, row: None)
     init_local_db()
     create_scan("scan-1", 1)
@@ -264,3 +282,27 @@ def test_quarantine_that_fails_turns_monitoring_back_on(triage_env, monkeypatch)
     with pytest.raises(ActionError, match="disk full"):
         triage_env["triage"].triage_quarantine(triage_env["result"])
     assert triage_env["calls"] == [("monitored", 3, False), ("monitored", 3, True)]
+
+
+def test_followup_moves_the_file_off_a_wrong_match_with_fix_match(quarantined):
+    FakeBindery.scan_book = 9  # Bindery's scan picks "Mary", the wrong book
+    put_back_id, _ = put_back_module.put_back(quarantined["id"])
+
+    message = put_back_module.relink_in_bindery(put_back_id, _row(quarantined["id"]))
+
+    assert FakeBindery.reassigned == [("/data/books/Author/Mary.epub", 3, "ebook")]
+    assert FakeBindery.monitored == [(3, True)]
+    assert message == "Bindery is tracking the file again and monitoring the book."
+
+
+def test_wrong_match_that_bindery_will_not_move_safely_names_the_book_and_the_button(quarantined):
+    FakeBindery.scan_book = 9
+    FakeBindery.preview = {"status": "move", "destination": "/elsewhere/Mary.epub"}
+    put_back_id, _ = put_back_module.put_back(quarantined["id"])
+
+    message = put_back_module.relink_in_bindery(put_back_id, _row(quarantined["id"]))
+
+    assert FakeBindery.reassigned == [] and FakeBindery.monitored == []
+    assert message.startswith("Needs you: Bindery's scan put the file on “Mary”.")
+    assert "More → Fix match" in message
+    assert _row(put_back_id)["status"] == "attention"
