@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>BookGuard Review</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
 </head>
 <body>
 {% from "_layout.html" import site_header %}
@@ -74,7 +74,7 @@
   "repairMode": repair_mode,
   "moves": catalogue_moves,
 }|tojson }}</script>
-<script src="/static/review.js" defer></script>
-<script src="/static/triage-move.js" defer></script>
+<script src="{{ static_url('review.js') }}" defer></script>
+<script src="{{ static_url('triage-move.js') }}" defer></script>
 </body>
 </html>

@@ -3,9 +3,9 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from .static_assets import RevalidatedStaticFiles
 from .acquisition_coordinator import (
     start_acquisition_coordinator,
     stop_acquisition_coordinator,
@@ -45,7 +45,7 @@ app = FastAPI(title="BookGuard", version=__version__, lifespan=lifespan)
 app.add_middleware(BasicAuthMiddleware)
 # Added last so it runs first: reject cross-site writes before anything else.
 app.add_middleware(SameOriginMiddleware)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", RevalidatedStaticFiles(directory="static"), name="static")
 app.include_router(pages_router)
 app.include_router(system_router)
 app.include_router(repairs_router)

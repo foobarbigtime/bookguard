@@ -1,5 +1,7 @@
 from jinja2 import Environment, FileSystemLoader
 
+from app.static_assets import static_url
+
 import app.attention as attention
 
 
@@ -105,6 +107,7 @@ def test_home_renders_every_attention_item_with_its_guidance():
     from app.home import _workflow_groups
 
     env = Environment(loader=FileSystemLoader("templates"))
+    env.globals["static_url"] = static_url
     attention = {
             "total": 1,
             "summary": {

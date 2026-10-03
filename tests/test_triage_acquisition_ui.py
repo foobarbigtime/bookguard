@@ -12,7 +12,7 @@ def test_triage_loads_supervised_replacement_controller():
     assert 'data-book-id="{{ row.book_id }}"' in TEMPLATE
     assert 'data-format="{{ row.format }}"' in TEMPLATE
     assert 'data-reason-code="{{ row.reason_code }}"' in TEMPLATE
-    assert 'src="/static/triage-acquisition.js"' in TEMPLATE
+    assert "src=\"{{ static_url('triage-acquisition.js') }}\"" in TEMPLATE
     assert 'data-replacement-result="${id}"' in TEMPLATE
 
 

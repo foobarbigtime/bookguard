@@ -21,6 +21,7 @@ from ..db import (
     recent_cleanup_actions,
     recent_metadata_repairs,
 )
+from ..static_assets import static_url
 from ..services.dashboard import (
     compact_result,
     enrich_results,
@@ -33,6 +34,7 @@ from ..triage import TRIAGE_CLASSES, triage_state, triage_summary
 
 router = APIRouter(tags=["pages"])
 templates = Jinja2Templates(directory="templates")
+templates.env.globals["static_url"] = static_url
 
 
 @router.get("/", response_class=HTMLResponse)
