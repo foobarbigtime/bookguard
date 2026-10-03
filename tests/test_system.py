@@ -225,3 +225,28 @@ def test_first_import_check_reads_watching_from_now(system, monkeypatch):
     })
     task = next(t for t in scheduler.scheduled_tasks() if t["key"] == "import_check")
     assert task["last"] == "Watching from now"
+
+
+def test_book_actions_check_says_what_to_do_next(system, monkeypatch, tmp_path):
+    from app import action_paths, config
+
+    monkeypatch.setattr(settings, "allow_actions", False)
+    check = health._book_actions()
+    assert check["level"] == "ok" and "Settings → Safety and Bindery actions" in check["title"]
+
+    monkeypatch.setattr(settings, "allow_actions", True)
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTIONS_ENABLED", "false")
+    assert "BOOKGUARD_EBOOK_ACTIONS_ENABLED=true" in health._book_actions()["title"]
+
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTIONS_ENABLED", "true")
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTION_ROOT", str(tmp_path / "missing"))
+    assert health._book_actions()["level"] == "warn"
+
+    (tmp_path / "action").mkdir()
+    (tmp_path / "quarantine").mkdir()
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTION_ROOT", str(tmp_path / "action"))
+    monkeypatch.setattr(settings, "quarantine_root", str(tmp_path / "quarantine"))
+    monkeypatch.setattr(action_paths, "mount_is_writable", lambda path: True)
+    check = health._book_actions()
+    assert (check["level"], check["title"]) == ("ok", "Quarantine, Replace and Put back are ready")
+    assert config.load_automation_settings().ebook_actions_enabled is True

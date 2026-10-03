@@ -68,7 +68,7 @@ def test_runtime_hardening_accepts_expected_production_topology():
             lambda p: p[0]["Mounts"].append(
                 {"Destination": "/action-books", "RW": True}
             ),
-            "writableActionAliasAbsent",
+            "writableActionAliasOptedIn",
         ),
         (
             lambda p: next(
@@ -160,3 +160,20 @@ def test_safer_upgrade_shell_syntax_and_safety_contract():
     assert "compose.clamav.yaml" in script
     assert "up -d --no-build" in script
     assert "No automatic rollback was attempted" in script
+
+
+def test_writable_ebook_alias_is_accepted_only_when_opted_in_and_same_folder():
+    payload = copy.deepcopy(_inspect_payload())
+    mounts = payload[0]["Mounts"]
+    next(m for m in mounts if m["Destination"] == "/books")["Source"] = "/mnt/user/data/media/books"
+    mounts.append({"Destination": "/action-books", "RW": True, "Source": "/mnt/user/data/media/books"})
+
+    with pytest.raises(UpgradeSafetyError, match="writableActionAliasOptedIn"):
+        validate_runtime(payload)  # alias mounted, but ebook actions not switched on
+
+    payload[0]["Config"]["Env"] = ["BOOKGUARD_EBOOK_ACTIONS_ENABLED=true"]
+    assert validate_runtime(payload)["checks"]["writableActionAliasOptedIn"] is True
+
+    mounts[-1]["Source"] = "/mnt/user/data/other"
+    with pytest.raises(UpgradeSafetyError, match="writableActionAliasOptedIn"):
+        validate_runtime(payload)  # opted in, but not the same folder as /books

@@ -10,6 +10,11 @@ backup_root="${BOOKGUARD_BACKUP_ROOT:-/mnt/cache/appdata/bookguard-backups}"
 health_wait_seconds="${BOOKGUARD_UPGRADE_HEALTH_WAIT_SECONDS:-180}"
 confirmation="DEPLOY_BOOKGUARD_UPGRADE"
 compose_files=(-f compose.yaml -f compose.clamav.yaml)
+# Ebook quarantine needs the writable library alias; keep it across upgrades
+# whenever the operator switched ebook actions on in .env.
+if [[ -f .env ]] && grep -Eiq '^[[:space:]]*BOOKGUARD_EBOOK_ACTIONS_ENABLED[[:space:]]*=[[:space:]]*"?(1|true|yes|on)"?[[:space:]]*$' .env; then
+  compose_files+=(-f compose.actions.yaml)
+fi
 
 candidate_image_ref=""
 candidate_image_id=""
