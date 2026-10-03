@@ -11,8 +11,11 @@ health_wait_seconds="${BOOKGUARD_UPGRADE_HEALTH_WAIT_SECONDS:-180}"
 confirmation="DEPLOY_BOOKGUARD_UPGRADE"
 compose_files=(-f compose.yaml -f compose.clamav.yaml)
 # Ebook quarantine needs the writable library alias; keep it across upgrades
-# whenever the operator switched ebook actions on in .env.
-if [[ -f .env ]] && grep -Eiq '^[[:space:]]*BOOKGUARD_EBOOK_ACTIONS_ENABLED[[:space:]]*=[[:space:]]*"?(1|true|yes|on)"?[[:space:]]*$' .env; then
+# whenever ebook actions are switched on. Ask Compose for the value it resolves
+# (.env quoting, comments and shell overrides included) instead of parsing .env.
+if command -v docker >/dev/null 2>&1 &&
+  docker compose -f compose.yaml config 2>/dev/null |
+    grep -Eiq '^[[:space:]]*BOOKGUARD_EBOOK_ACTIONS_ENABLED:[[:space:]]*"?(1|true|yes|on)"?[[:space:]]*$'; then
   compose_files+=(-f compose.actions.yaml)
 fi
 

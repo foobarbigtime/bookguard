@@ -177,3 +177,7 @@ def test_writable_ebook_alias_is_accepted_only_when_opted_in_and_same_folder():
     mounts[-1]["Source"] = "/mnt/user/data/other"
     with pytest.raises(UpgradeSafetyError, match="writableActionAliasOptedIn"):
         validate_runtime(payload)  # opted in, but not the same folder as /books
+
+    mounts.pop()
+    with pytest.raises(UpgradeSafetyError, match="writableActionAliasOptedIn"):
+        validate_runtime(payload)  # opted in, but the writable alias is missing

@@ -242,11 +242,15 @@ def test_book_actions_check_says_what_to_do_next(system, monkeypatch, tmp_path):
     monkeypatch.setenv("BOOKGUARD_EBOOK_ACTION_ROOT", str(tmp_path / "missing"))
     assert health._book_actions()["level"] == "warn"
 
-    (tmp_path / "action").mkdir()
+    (tmp_path / "unrelated").mkdir()
     (tmp_path / "quarantine").mkdir()
-    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTION_ROOT", str(tmp_path / "action"))
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTION_ROOT", str(tmp_path / "unrelated"))
     monkeypatch.setattr(settings, "quarantine_root", str(tmp_path / "quarantine"))
     monkeypatch.setattr(action_paths, "mount_is_writable", lambda path: True)
+    assert health._book_actions()["title"] == "The writable books folder is not your books folder"
+
+    (tmp_path / "action").symlink_to(settings.ebook_root)  # stands in for a second mount of /books
+    monkeypatch.setenv("BOOKGUARD_EBOOK_ACTION_ROOT", str(tmp_path / "action"))
     check = health._book_actions()
     assert (check["level"], check["title"]) == ("ok", "Quarantine, Replace and Put back are ready")
     assert config.load_automation_settings().ebook_actions_enabled is True

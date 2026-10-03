@@ -54,14 +54,16 @@ def validate_runtime(payload: Any) -> dict[str, Any]:
     }
 
     def action_alias_ok() -> bool:
-        """The writable ebook alias is allowed only when ebook actions are opted in
-        and it is the very same host folder as the read-only /books mount."""
+        """With ebook actions off, no writable ebook alias. With them on, the alias
+        must be mounted, writable, and the very same host folder as read-only /books."""
         alias = mount_map.get("/action-books")
-        if alias is None:
-            return True
+        enabled = env.get("BOOKGUARD_EBOOK_ACTIONS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return alias is None
         books = mount_map.get("/books") or {}
         return (
-            env.get("BOOKGUARD_EBOOK_ACTIONS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+            alias is not None
+            and bool(alias.get("RW"))
             and bool(alias.get("Source"))
             and alias.get("Source") == books.get("Source")
         )
