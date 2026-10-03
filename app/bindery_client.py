@@ -180,6 +180,13 @@ class BinderyClient:
             "POST", f"/library/unmatched/{int(row_id)}/adopt", json={"bookId": int(book_id)}
         )
 
+    def search_book_automatic(self, book_id: int) -> dict[str, Any]:
+        """Bindery's "Automatic search": it picks, grabs and imports a release itself.
+
+        Bindery has no per-book route for this; its own web UI posts this bulk body.
+        """
+        return self._request("POST", "/book/bulk", json={"ids": [int(book_id)], "action": "search"})
+
     def search_book(self, book_id: int) -> dict[str, Any]:
         return self._request("POST", f"/book/{int(book_id)}/search")
 

@@ -123,6 +123,7 @@ configuration and endpoints.
 - Can optionally detach a tracked path using Bindery's API.
 - Can optionally detach and move a single, non-shared tracked path into quarantine.
 - Can put a file quarantined from Triage back where it was: open the quarantine in Activity and choose **Put back**. BookGuard refuses if anything is now at the original path, the quarantined file is missing or changed, or the path is outside the library folders. It then gets Bindery to track the file on the same book again (a library scan, adopting the unmatched file to that book, or, if the scan attached it to the wrong book, Bindery's Fix match) and turns monitoring back on. It also refuses if Bindery already has another copy of the book. Quarantines made before this version did not record enough to be put back.
+- **Replace** (Review → Danger zone) quarantines a bad file and hands the rest to Bindery: it blocklists the download the file came from, keeps the book monitored, and runs Bindery's Automatic search, so Bindery picks, downloads and imports a new copy with your Bindery settings. BookGuard checks the new import like any other. If Bindery's automatic grabbing is off, Activity says so and what to click.
 - Quarantine from Triage stops Bindery monitoring the book first, so Bindery does not download a replacement while the file is out. If the quarantine fails, monitoring is turned back on.
 
 BookGuard **never automatically deletes media**.
