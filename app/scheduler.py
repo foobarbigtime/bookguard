@@ -12,9 +12,11 @@ timer, see import_watch), and the Observe check (run by hand).
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone, tzinfo
+import os
 import threading
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config import settings
 from .db import latest_scan, local_conn
@@ -22,6 +24,24 @@ from .db import latest_scan, local_conn
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 SCHEDULES = {"off", "daily", "weekly"}
 LATE_LIMIT = timedelta(hours=3)
+
+
+def local_zone() -> tzinfo:
+    """The container's time zone as a real zone, so slots follow daylight saving.
+
+    datetime.now().astimezone() gives only today's fixed offset; slots a week
+    away computed from it would be an hour off across a clock change."""
+    name = os.getenv("TZ", "").lstrip(":")
+    if name:
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+    return datetime.now().astimezone().tzinfo or timezone.utc
+
+
+def local_now() -> datetime:
+    return datetime.now(local_zone())
 
 
 def init_scheduler_db() -> None:
@@ -76,7 +96,7 @@ def _slots(now: datetime) -> tuple[datetime | None, datetime | None]:
 
 def schedule_label(now: datetime | None = None) -> str:
     # The zone is shown so a container without TZ (scans at UTC) is obvious.
-    zone = (now or datetime.now().astimezone()).tzname() or ""
+    zone = (now or local_now()).tzname() or ""
     suffix = f" ({zone})" if zone else ""
     if settings.scan_schedule == "daily":
         return f"Daily at {_scan_time():%H:%M}{suffix}"
@@ -96,22 +116,35 @@ def scan_due(now: datetime, last_started: datetime | None) -> datetime | None:
 
 
 def run_due_tasks(now: datetime | None = None) -> str | None:
-    """Start the scheduled scan if it is due. Returns the scan id when one starts."""
+    """Start the scheduled scan if it is due. Returns the scan id when one starts.
+
+    The slot is marked done only once the scan has started, so a start that
+    fails (Bindery's database unreadable, say) is retried until LATE_LIMIT."""
     from .scanner import scan_is_running, start_scan
 
-    now = now or datetime.now().astimezone()
+    now = now or local_now()
     slot = scan_due(now, _last_started("library_scan"))
     if slot is None or scan_is_running():
         return None
-    _set_last_started("library_scan", now)
-    return start_scan()
+    scan_id = start_scan()
+    if scan_id:
+        _set_last_started("library_scan", now)
+    return scan_id
+
+
+def _parse(value: str) -> datetime | None:
+    try:
+        at = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
 
 
 class Scheduler:
     def __init__(self) -> None:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self.last_error: str | None = None
+        self.failure: dict[str, str] | None = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -127,12 +160,28 @@ class Scheduler:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            try:
-                run_due_tasks()
-                self.last_error = None
-            except Exception as exc:  # noqa: BLE001 - shown on the System page
-                self.last_error = str(exc)[:500]
+            self.tick()
             self._stop.wait(30)
+
+    def tick(self, now: datetime | None = None) -> None:
+        try:
+            if run_due_tasks(now):
+                self.failure = None
+        except Exception as exc:  # noqa: BLE001 - shown in Health and on the task
+            self.failure = {"at": datetime.now(timezone.utc).isoformat(), "error": str(exc)[:500] or type(exc).__name__}
+
+    def last_failure(self) -> dict[str, str] | None:
+        """Why the scheduled scan last failed to start, until a scan starts after it.
+
+        Kept after the retry window ends, so a skipped night stays visible."""
+        failure = self.failure
+        if not failure:
+            return None
+        started = _parse(str((latest_scan() or {}).get("started_at") or ""))
+        failed = _parse(failure["at"])
+        if started and failed and started > failed:
+            return None
+        return failure
 
 
 scheduler = Scheduler()
@@ -165,7 +214,7 @@ def scheduled_tasks(now: datetime | None = None) -> list[dict[str, Any]]:
     from .import_watch import watcher
     from .scanner import scan_is_running
 
-    now = now or datetime.now().astimezone()
+    now = now or local_now()
     scan = latest_scan()
     running = scan_is_running()
     _, next_slot = _slots(now)
@@ -174,6 +223,9 @@ def scheduled_tasks(now: datetime | None = None) -> list[dict[str, Any]]:
         status = str(scan.get("status") or "")
         took = _duration(scan.get("started_at"), scan.get("finished_at"))
         scan_last = "Running now" if running else f"{status.capitalize()}" + (f" · {took}" if took else "")
+    failure = scheduler.last_failure()
+    if failure and not running:
+        scan_last = f"Scheduled scan couldn't start: {failure['error']}"
 
     imports = watcher.status()
     imports_next = ""

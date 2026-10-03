@@ -148,6 +148,8 @@ def nightly_restarts(starts: list[dict[str, Any]], now: datetime) -> dict[str, A
             at = at.replace(tzinfo=timezone.utc)
         if at < since or not start.get("previous_revision") or start["revision"] != start["previous_revision"]:
             continue
+        # Grouped in the same zone as now, so the hour reads as local time.
+        at = at.astimezone(now.tzinfo)
         nights[at.hour].add(at.date().isoformat())
     if not nights:
         return None
@@ -166,8 +168,10 @@ def _restarts(now: datetime) -> dict[str, Any]:
     found = nightly_restarts(rows, now)
     if not found:
         return _check("restarts", "ok", "No repeated nightly restarts")
+    zone = now.tzname() or ""
     return _check(
-        "restarts", "warn", f"BookGuard is restarted most nights around {found['hour']:02d}:00 UTC",
+        "restarts", "warn",
+        f"BookGuard is restarted most nights around {found['hour']:02d}:00" + (f" ({zone})" if zone else ""),
         f"It restarted at that time on {found['nights']} nights in the last {RESTART_LOOKBACK_DAYS} days without "
         "an update. A restart cuts short any scan or check that is running.",
         "Something restarts the container on a schedule, often an automatic container updater such as "
@@ -186,6 +190,21 @@ def _import_checks() -> dict[str, Any] | None:
                       f"The last attempt failed: {status['lastError']}",
                       "This usually means Bindery's database can't be read; see that check above.")
     return _check("import_checks", "ok", "New imports are being checked")
+
+
+def _scheduled_scan() -> dict[str, Any] | None:
+    from .scheduler import scheduler
+
+    if settings.scan_schedule == "off":
+        return None
+    failure = scheduler.last_failure()
+    if failure:
+        return _check("scheduled_scan", "warn", "The scheduled library scan couldn't start",
+                      f"It failed with: {failure['error'].rstrip('.')}. No scan has run since, so new problems in the "
+                      "library may not be found.",
+                      "Fix any problem listed above (usually Bindery's database or a library folder), then "
+                      "start a scan with Run now in Scheduled tasks below.")
+    return _check("scheduled_scan", "ok", "Scheduled scan starting on time")
 
 
 def _uid() -> int:
@@ -213,14 +232,15 @@ def health_checks(
     database; Home uses that, the System page does not."""
     from .diagnostics import _malware_report
     from .scanner import scan_is_running
+    from .scheduler import local_now
 
-    now = now or datetime.now(timezone.utc)
+    now = now or local_now()
     checks = [_bindery_database(), *_library_folders(), *_virus_scanner(malware or _malware_report(), now),
               *([_bookguard_database()] if deep else []),
               _interrupted_scan(scan_running or scan_is_running), _restarts(now)]
-    imports = _import_checks()
-    if imports:
-        checks.append(imports)
+    for optional in (_import_checks(), _scheduled_scan()):
+        if optional:
+            checks.append(optional)
     checks.append(_runtime())
     order = {"error": 0, "warn": 1, "info": 2, "ok": 3}
     problems = sorted((c for c in checks if c["level"] != "ok"), key=lambda c: order[c["level"]])

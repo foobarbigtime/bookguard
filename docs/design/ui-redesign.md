@@ -295,11 +295,14 @@ Step 5 as built:
   Checks: Bindery's database readable, library folders readable, virus scanner
   answering and its definitions under three days old, BookGuard's database
   integrity (System only; Home skips it), a scan left running by a restart,
-  repeated nightly restarts (from the start records), import checks failing,
+  repeated nightly restarts (from the start records, shown in local time),
+  import checks failing, a scheduled scan that couldn't start,
   running as root. Home's health line uses the same checks.
 - **Scheduled tasks** (`app/scheduler.py`, `GET /api/system/tasks`): an optional
   scheduled library scan (off, daily or weekly at a set time, container local
-  time; a missed slot runs if under three hours late), the import check and the
+  time, following daylight saving; a missed slot runs if under three hours
+  late, and a start that fails is retried in that window, then reported in
+  Health until a scan runs), the import check and the
   Observe check, each with last and next run and Run now.
 - **About**: version and revision, running since, last update, virus scanner,
   automation mode.

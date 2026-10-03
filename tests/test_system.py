@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import sqlite3
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi import FastAPI
@@ -31,6 +32,7 @@ def system(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "audiobook_root", str(tmp_path / "audiobooks"))
     monkeypatch.setattr(settings, "scan_schedule", "off")
     monkeypatch.setattr(health, "_uid", lambda: 99)
+    monkeypatch.setattr(scheduler.scheduler, "failure", None)
     init_local_db()
     return tmp_path
 
@@ -88,6 +90,20 @@ def test_nightly_restarts_are_spotted_but_updates_are_not():
     assert health.nightly_restarts([start(1, 0), start(1, 9), start(2, 17)], NOW) is None
 
 
+def test_restart_hour_is_shown_in_local_time(system):
+    toronto = NOW.astimezone(ZoneInfo("America/Toronto"))
+    midnight_local = [start(day, 4) for day in (28, 29, 30)] + [start(1, 4, 7)]  # 04:0x UTC = 00:0x EDT
+    assert health.nightly_restarts(midnight_local, toronto) == {"hour": 0, "nights": 4}
+    with health.local_conn() as conn:
+        conn.execute("""CREATE TABLE app_starts (id INTEGER PRIMARY KEY, started_at TEXT, version TEXT,
+                        revision TEXT, previous_version TEXT, previous_revision TEXT)""")
+        conn.executemany("INSERT INTO app_starts(started_at, revision, previous_revision) VALUES (?, ?, ?)",
+                         [(s["started_at"], s["revision"], s["previous_revision"]) for s in midnight_local])
+        conn.commit()
+    result = health.health_checks(scanner_up(), now=toronto, scan_running=lambda: False)
+    assert [c["title"] for c in result["problems"]] == ["BookGuard is restarted most nights around 00:00 (EDT)"]
+
+
 def test_running_as_root_is_a_warning(system, monkeypatch):
     monkeypatch.setattr(health, "_uid", lambda: 0)
     assert keys(health.health_checks(scanner_up(), now=NOW, scan_running=lambda: False)) == {"runtime_user": "warn"}
@@ -124,6 +140,50 @@ def test_a_due_scan_starts_once(system, monkeypatch):
     assert scheduler.run_due_tasks(at) == "scan-1"
     assert scheduler.run_due_tasks(at + timedelta(minutes=1)) is None
     assert started == [1]
+
+
+def test_a_scheduled_scan_that_fails_to_start_is_retried_and_reported(system, monkeypatch):
+    monkeypatch.setattr(settings, "scan_schedule", "daily")
+    monkeypatch.setattr(settings, "scan_schedule_time", "03:00")
+    monkeypatch.setattr("app.scanner.scan_is_running", lambda: False)
+
+    def broken():
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr("app.scanner.start_scan", broken)
+    at = datetime(2026, 10, 4, 3, 5, tzinfo=LOCAL)
+    scheduler.scheduler.tick(at)
+    assert scheduler.scheduler.last_failure()["error"] == "unable to open database file"
+    assert scheduler._last_started("library_scan") is None  # the slot is not used up
+
+    # Still reported once the retry window has passed and nothing is due.
+    scheduler.scheduler.tick(at + timedelta(hours=5))
+    result = health.health_checks(scanner_up(), now=NOW, scan_running=lambda: False)
+    assert keys(result) == {"scheduled_scan": "warn"}
+    assert "unable to open database file" in result["problems"][0]["message"]
+    scan_task = scheduler.scheduled_tasks(at)[0]
+    assert scan_task["last"] == "Scheduled scan couldn't start: unable to open database file"
+
+    # Any scan that starts afterwards clears it; a working retry does too.
+    create_scan("by-hand", 1)
+    assert scheduler.scheduler.last_failure() is None
+    scheduler.scheduler.failure = {"at": "2999-01-01T00:00:00+00:00", "error": "x"}
+    monkeypatch.setattr("app.scanner.start_scan", lambda: "scan-2")
+    scheduler.scheduler.tick(at)
+    assert scheduler.scheduler.failure is None and scheduler._last_started("library_scan") == at
+
+
+def test_slots_follow_daylight_saving(monkeypatch):
+    monkeypatch.setattr(settings, "scan_schedule", "weekly")
+    monkeypatch.setattr(settings, "scan_schedule_time", "03:00")
+    monkeypatch.setattr(settings, "scan_schedule_day", 6)
+    toronto = ZoneInfo("America/Toronto")
+    saturday = datetime(2026, 10, 31, 12, 0, tzinfo=toronto)  # EDT; clocks go back Sunday 02:00
+    _, upcoming = scheduler._slots(saturday)
+    assert upcoming.isoformat() == "2026-11-01T03:00:00-05:00"
+    assert scheduler.scan_due(datetime(2026, 11, 1, 3, 20, tzinfo=toronto), None).isoformat() == "2026-11-01T03:00:00-05:00"
+    monkeypatch.setenv("TZ", "America/Toronto")
+    assert scheduler.local_zone() == toronto
 
 
 def test_schedule_settings_are_validated():
