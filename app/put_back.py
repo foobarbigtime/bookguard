@@ -151,11 +151,21 @@ def _start_followup(put_back_id: int, row: dict) -> None:
     ).start()
 
 
+class _NeedsYou(Exception):
+    """A follow-up stop whose message already says what to do in Bindery."""
+
+
 def _tracked(row: dict) -> bool:
-    return any(
-        int(item["book_id"]) == int(row["book_id"])
-        for item in associations_inside_path(row["stored_path"])
-    )
+    # Put back refuses when the book already has a file in this format, so any
+    # file of that format on the book now is this one, renamed or not.
+    return bool(bindery_files_for_book(int(row["book_id"]), str(row["format"])))
+
+
+def _wait_until_tracked(row: dict, deadline: float) -> None:
+    while not _tracked(row):
+        if time.monotonic() > deadline:
+            raise ActionError("Bindery accepted the file but does not show it on the book yet.")
+        time.sleep(FOLLOWUP_POLL_SECONDS)
 
 
 def _unmatched_row(listing: dict, stored_path: str) -> dict | None:
@@ -168,8 +178,31 @@ def _unmatched_row(listing: dict, stored_path: str) -> dict | None:
     return None
 
 
+def _inside_library(destination: str, file_format: str) -> bool:
+    prefix = settings.audiobook_bindery_prefix if file_format == "audiobook" else settings.ebook_bindery_prefix
+    path = PurePosixPath(destination)
+    return ".." not in path.parts and is_within(Path(destination), Path(prefix)) and path != PurePosixPath(prefix)
+
+
+def _move_to_own_book(client: BinderyClient, row: dict, owners: list[dict]) -> None:
+    """Bindery's scan put the file on another book: use Bindery's Fix match to move it."""
+    wrong = owners[0]
+    fix_by_hand = _NeedsYou(
+        f"Needs you: Bindery's scan put the file on “{wrong.get('title') or 'another book'}”. "
+        f"In Bindery, open that book and use More → Fix match to move it to “{row['title']}”, "
+        "then turn monitoring back on if you want it."
+    )
+    if len(owners) != 1:
+        raise fix_by_hand
+    file_format = str(row["format"])
+    preview = client.preview_manual_reassignment(row["stored_path"], int(row["book_id"]), file_format=file_format)
+    if preview.get("status") != "move" or not _inside_library(str(preview.get("destination") or ""), file_format):
+        raise fix_by_hand
+    client.reassign_manual_import(row["stored_path"], int(row["book_id"]), file_format=file_format)
+
+
 def relink_in_bindery(put_back_id: int, row: dict) -> str:
-    """Scan, adopt the file to its own book if the scan did not, then monitor again."""
+    """Scan; then adopt the file, or move it off a wrong match, to its own book; then monitor again."""
     book_id = int(row["book_id"])
     try:
         client = BinderyClient(api_key=resolve_bindery_api_key(), timeout=30)
@@ -181,20 +214,29 @@ def relink_in_bindery(put_back_id: int, row: dict) -> str:
             listing = client.list_unmatched(search=stem, file_format=row.get("format"))
             scan = listing.get("scan") or {}
             if not scan.get("running") and scan.get("ranAt") != before:
-                item = _unmatched_row(listing, row["stored_path"])
-                if item is None:
-                    raise ActionError("Bindery's scan finished but did not list the file.")
-                client.adopt_unmatched(int(item["id"]), book_id)
-                if not _tracked(row):
-                    raise ActionError("Bindery accepted the file but does not show it on the book yet.")
+                owners = [
+                    item for item in associations_inside_path(row["stored_path"])
+                    if int(item["book_id"]) != book_id
+                ]
+                if owners:
+                    _move_to_own_book(client, row, owners)
+                else:
+                    item = _unmatched_row(listing, row["stored_path"])
+                    if item is None:
+                        raise ActionError("Bindery's scan finished but did not list the file.")
+                    client.adopt_unmatched(int(item["id"]), book_id)
+                _wait_until_tracked(row, deadline)
                 break
             if time.monotonic() > deadline:
                 raise ActionError("Bindery's library scan did not finish within 30 minutes.")
             time.sleep(FOLLOWUP_POLL_SECONDS)
+    except _NeedsYou as exc:
+        set_cleanup_followup(put_back_id, str(exc)[:1000], status="attention")
+        return str(exc)
     except Exception as exc:  # a background step: anything unexpected must still reach Activity
         message = (
             f"Needs you: the file is back on disk, but Bindery is not tracking it yet ({exc}). "
-            "In Bindery, open Library → Unmatched and add it to the book."
+            f"In Bindery, open Import, find the file and add it to “{row['title']}”."
         )
         set_cleanup_followup(put_back_id, message[:1000], status="attention")
         return message
