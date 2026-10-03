@@ -63,7 +63,7 @@ def stale_execution_items(limit: int = 200, *, now: datetime | None = None) -> l
             "updatedAt": row["updated_at"],
             "detailHref": f"/activity/recovery-plan/{row['plan_id']}" if row["subject_kind"] else "",
             "href": (
-                "/review#acquisitionPanel"
+                "/review/triage#acquisitionPanel"
                 if row["subject_kind"] in {"acquisition", "admission"}
                 else "/review"
             ),

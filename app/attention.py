@@ -98,7 +98,7 @@ def _acquisition_items(limit: int) -> list[dict[str, Any]]:
                 "guidance": operation_guidance("acquisition", status, error),
                 "updatedAt": row.get("updated_at") or row.get("created_at"),
                 "detailHref": f"/activity/acquisition/{row.get('id')}",
-                "href": "/review#acquisitionPanel",
+                "href": "/review/triage#acquisitionPanel",
             }
         )
     return items
@@ -131,7 +131,7 @@ def _admission_items(limit: int) -> list[dict[str, Any]]:
                 "guidance": operation_guidance("admission", status, error),
                 "updatedAt": row.get("updated_at") or row.get("created_at"),
                 "detailHref": f"/activity/admission/{row.get('id')}",
-                "href": "/review#acquisitionPanel",
+                "href": "/review/triage#acquisitionPanel",
             }
         )
     return items
@@ -157,7 +157,7 @@ def _hardlink_items() -> list[dict[str, Any]]:
                 ),
                 "updatedAt": row.get("completed_at") or row.get("created_at"),
                 "detailHref": f"/activity/hardlink-correction/{row['id']}",
-                "href": "/review#hardlinkPanel",
+                "href": "/review/triage#hardlinkPanel",
             }
         )
     for row in _journal_rows("hardlink_alias_cleanups", "correction_id"):
@@ -178,7 +178,7 @@ def _hardlink_items() -> list[dict[str, Any]]:
                 ),
                 "updatedAt": row.get("completed_at") or row.get("created_at"),
                 "detailHref": f"/activity/hardlink-cleanup/{row['id']}",
-                "href": "/review#hardlinkPanel",
+                "href": "/review/triage#hardlinkPanel",
             }
         )
     return items
@@ -213,7 +213,7 @@ def _coordinator_items() -> list[dict[str, Any]]:
             "guidance": guidance,
             "updatedAt": status.get("lastRunAt"),
             "detailHref": "",
-            "href": "/review#acquisitionPanel",
+            "href": "/review/triage#acquisitionPanel",
         }
     ]
 
@@ -251,7 +251,7 @@ def _blocked_plan_items(limit: int) -> list[dict[str, Any]]:
             "updatedAt": row["updated_at"],
             "detailHref": f"/activity/recovery-plan/{row['id']}",
             "href": (
-                "/review#acquisitionPanel"
+                "/review/triage#acquisitionPanel"
                 if row["subject_kind"] in {"acquisition", "admission"}
                 else "/review"
             ),

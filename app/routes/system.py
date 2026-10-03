@@ -6,6 +6,7 @@ from .. import __version__
 from ..config import Settings, settings
 from ..diagnostics import diagnostics_snapshot
 from ..history import operation_detail, operation_history
+from ..home import home_summary
 from ..db import (
     clear_persisted_settings,
     latest_counts,
@@ -92,6 +93,12 @@ def api_status():
         "repair_mode": settings.metadata_repair_mode,
     }
 
+
+
+@router.get("/api/home")
+def api_home():
+    """Read-only summary for the Home page: health, decisions, activity."""
+    return home_summary()
 
 
 @router.get("/api/history")

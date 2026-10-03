@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard Review</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% from "_layout.html" import site_header %}
+{{ site_header("review", "books", version) }}
+{% set selected = group.split(',') if group else [] %}
+{% set shown = items|selectattr('group', 'in', selected)|list if selected else items %}
+
+<main class="review">
+  <div class="review-head">
+    <h1>Review</h1>
+    <p>Books from the latest scan that need a decision. Nothing changes until you choose an action.</p>
+  </div>
+
+  <nav class="chips" aria-label="Filter by what needs deciding">
+    <a class="chip{% if not selected %} active{% endif %}" href="/review"{% if not selected %} aria-current="page"{% endif %}>All <b>{{ items|length }}</b></a>
+    {% for key, label, tone in groups %}
+      {% if counts[key] or key in selected %}
+        <a class="chip{% if selected == [key] %} active{% endif %}" href="/review?group={{ key }}"{% if selected == [key] %} aria-current="page"{% endif %}>
+          <span class="dot tone-bg-{{ tone }}" aria-hidden="true"></span>{{ label }} <b>{{ counts[key] }}</b>
+        </a>
+      {% endif %}
+    {% endfor %}
+  </nav>
+
+  <div class="review-layout">
+    <section class="card review-list" aria-label="Books">
+      {% for item in shown %}
+        <button type="button" class="review-row" data-review-id="{{ item.id }}" aria-controls="reviewDetail">
+          <span class="dot tone-bg-{{ tones[item.group] }}" aria-hidden="true"></span>
+          <span class="review-row-text">
+            <strong>{{ item.title }}</strong>{% if item.author %}<span class="muted"> · {{ item.author }}</span>{% endif %}
+            <small>
+              {% if item.group == 'verified' %}Verified as the right book.
+              {% elif item.contains and item.group in ['move', 'duplicate', 'wrong'] %}Contains {{ item.contains }}.
+              {% elif item.explanation %}{{ item.explanation|truncate(140) }}
+              {% elif not item.verified %}Not verified yet. {{ item.scanReasons|first|default('') }}
+              {% else %}{{ item.groupLabel }}.{% endif %}
+            </small>
+          </span>
+          <span class="review-row-group">{{ item.groupLabel }}</span>
+        </button>
+      {% else %}
+        <p class="empty">{% if selected %}Nothing in this group.{% else %}Nothing needs a decision. Every book in the latest scan passed or has been reviewed.{% endif %}</p>
+      {% endfor %}
+    </section>
+
+    <aside id="reviewDetail" class="card review-detail" aria-live="polite">
+      <p class="muted">Choose a book to see what's wrong, how BookGuard knows, and what you can do.</p>
+    </aside>
+  </div>
+
+  <section id="movePanel" class="table-card replacement-panel" aria-live="polite" hidden>
+    <div class="section-title row-between">
+      <div>
+        <h2>Move to the right book</h2>
+        <p id="moveSubtitle"></p>
+      </div>
+      <button type="button" data-move-close>Close</button>
+    </div>
+    <div id="moveBody" class="replacement-body"></div>
+  </section>
+</main>
+
+<script id="reviewData" type="application/json">{{ {
+  "items": shown,
+  "allowActions": allow_actions,
+  "repairMode": repair_mode,
+  "moves": catalogue_moves,
+}|tojson }}</script>
+<script src="/static/review.js" defer></script>
+<script src="/static/triage-move.js" defer></script>
+</body>
+</html>

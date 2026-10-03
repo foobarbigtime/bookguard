@@ -11,8 +11,9 @@ from app.routes.pages import router
 
 
 PAGES = {
-    "index.html": ("home", "overview"),
-    "attention.html": ("home", "attention"),
+    "home.html": ("home", ""),
+    "review.html": ("review", "books"),
+    "index.html": ("review", "scan-results"),
     "triage.html": ("review", "triage"),
     "repairs.html": ("review", "repairs"),
     "history.html": ("activity", ""),
@@ -51,12 +52,12 @@ def test_settings_page_marks_only_the_gear_as_current():
     assert 'class="icon-link active" href="/settings"' in html
 
 
-def test_existing_pages_stay_reachable_as_tabs_until_replaced():
-    home = header("home", "attention")
-    assert 'href="/"' in home and 'href="/attention" class="active" aria-current="page"' in home
-    review = header("review", "triage")
+def test_older_review_pages_stay_reachable_as_tabs_until_replaced():
+    review = header("review", "books")
+    tabs = re.findall(r'<nav class="tabs".*?</nav>', review, re.S)[0]
+    assert re.findall(r'href="([^"]+)"', tabs) == ["/review", "/review/triage", "/repairs", "/review/scan-results"]
     assert 'href="/review" class="active" aria-current="page"' in review
-    assert 'href="/repairs"' in review
+    assert 'class="subbar"' not in header("home")
     assert 'class="subbar"' not in header("activity")
 
 
@@ -77,8 +78,10 @@ def test_old_page_urls_redirect_and_keep_their_query():
     app.include_router(router)
     with TestClient(app) as client:
         expected = {
-            "/triage": "/review",
-            "/triage?classification=REJECT&reason_code=MISMATCH": "/review?classification=REJECT&reason_code=MISMATCH",
+            "/triage": "/review/triage",
+            "/triage?classification=REJECT&reason_code=MISMATCH": "/review/triage?classification=REJECT&reason_code=MISMATCH",
+            "/attention": "/",
+            "/?classification=MISSING": "/review/scan-results?classification=MISSING",
             "/history": "/activity",
             "/history/acquisition/5": "/activity/acquisition/5",
             "/diagnostics": "/system",

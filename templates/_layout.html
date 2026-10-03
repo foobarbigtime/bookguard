@@ -1,5 +1,5 @@
 {#- Shared page chrome: four sections plus the Settings gear (docs/design/ui-redesign.md).
-    Until each section's new page ships, its existing pages appear as tabs inside it. -#}
+    Until a section's new page replaces them, its older pages appear as tabs inside it. -#}
 {% set SECTIONS = [
   ("home", "Home", "/"),
   ("review", "Review", "/review"),
@@ -7,8 +7,12 @@
   ("system", "System", "/system"),
 ] %}
 {% set TABS = {
-  "home": [("overview", "Overview", "/"), ("attention", "Attention", "/attention")],
-  "review": [("triage", "Triage", "/review"), ("repairs", "Repairs", "/repairs")],
+  "review": [
+    ("books", "Books", "/review"),
+    ("triage", "Triage", "/review/triage"),
+    ("repairs", "Repairs", "/repairs"),
+    ("scan-results", "Scan results", "/review/scan-results"),
+  ],
 } %}
 
 {% macro site_header(section, tab="", version="") -%}

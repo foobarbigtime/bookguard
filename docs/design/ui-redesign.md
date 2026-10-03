@@ -1,7 +1,7 @@
 # UI redesign: workflow first
 
-Status: design approved (mockups). Build step 1 (Foundations) is implemented;
-steps 2-7 are not yet.
+Status: design approved (mockups). Build steps 1-3 (Foundations, Home, Review)
+are implemented, in one PR; steps 4-7 are not yet.
 Mockups: <https://claude.ai/artifact/XAaZbvzFmJVCTgo8ZeX3Tp> (Home, Review,
 Replace, Setup, Activity, System, Settings).
 
@@ -242,18 +242,25 @@ Each step is a separate, reviewable PR.
 Old pages stay reachable until their replacement ships. The audit trail and
 every existing API remain unchanged.
 
-Step 1 as built: every page shares one header (`templates/_layout.html`):
-Home · Review · Activity · System and the Settings gear. Pages whose new
-section is a rename moved: `/triage` → `/review`, `/history` → `/activity`
-(and `/history/{kind}/{id}` → `/activity/{kind}/{id}`), `/diagnostics` →
-`/system`; the old URLs answer with a temporary redirect that keeps the query
-string. Until Home and Review ship, the existing Dashboard and Attention pages
-are tabs under Home, and Triage and Repairs are tabs under Review.
+Steps 1-3 as built (one PR):
 
-## Relationship to other work
-
-- **Propose mode** (`docs/design/propose-mode.md`) supplies proposals with
-  rationale; Home and Review are where they are shown and accepted, and the
-  scorecard feeds the automation ladder in Settings.
-- **Evidence work** (Kindle reading, series-aware titles, ISBN evidence) feeds
-  the Review detail panel's "How BookGuard knows".
+- Every page shares one header (`templates/_layout.html`): Home · Review ·
+  Activity · System and the Settings gear.
+- **Home** (`/`) is backed by `GET /api/home` (`app/home.py`), read-only and
+  without calling Bindery. Open REVIEW and REJECT items are grouped by the
+  decision they need (`app/library_review.py`), alongside interrupted or
+  refused workflows from the attention queue, each with what BookGuard did.
+  The automation card shows the mode read-only until step 6 makes it a
+  setting; "Right now" has no schedule until step 5.
+- **Review** (`/review`) lists those items as sentences with a detail panel:
+  what's wrong, how BookGuard knows, the suggestion and its actions (move,
+  metadata fix, mark reviewed, verify again), a separate danger zone (detach,
+  quarantine) and technical details. It uses the existing guarded endpoints
+  and confirmations.
+- Until later steps replace them, older pages are tabs under Review: Triage
+  (`/review/triage`, which keeps the supervised replacement and shared-file
+  panels until step 7), Repairs (until Undo moves to Activity in step 4) and
+  Scan results (`/review/scan-results`, the old dashboard).
+- Old URLs redirect (307, query kept): `/triage` → `/review/triage`,
+  `/attention` → `/`, `/?classification=…` → `/review/scan-results?…`,
+  `/history` → `/activity`, `/diagnostics` → `/system`.

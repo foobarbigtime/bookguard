@@ -15,12 +15,14 @@ EXPECTED_ROUTES = {
     ("POST", "/api/hardlink-conflicts/history/{correction_id}/cleanup"),
     ("POST", "/api/hardlink-conflicts/history/{correction_id}/reconcile-cleanup"),
     ("GET", "/"),
-    ("GET", "/attention"),
     ("GET", "/review"),
+    ("GET", "/review/triage"),
+    ("GET", "/review/scan-results"),
     ("GET", "/activity"),
     ("GET", "/activity/{kind}/{record_id}"),
     ("GET", "/system"),
     # Redirects from the pages' names before the UI redesign.
+    ("GET", "/attention"),
     ("GET", "/triage"),
     ("GET", "/history"),
     ("GET", "/history/{kind}/{record_id}"),
@@ -32,6 +34,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/scan/cancel-safe"),
     ("POST", "/api/scan/stop-immediately"),
     ("GET", "/api/status"),
+    ("GET", "/api/home"),
     ("GET", "/api/diagnostics"),
     ("GET", "/api/history"),
     ("GET", "/api/history/{kind}/{record_id}"),
@@ -134,7 +137,8 @@ def test_route_contract_is_exact():
 def test_templates_parse():
     env = Environment(loader=FileSystemLoader("templates"))
     env.get_template("index.html")
-    env.get_template("attention.html")
+    env.get_template("home.html")
+    env.get_template("review.html")
     env.get_template("history.html")
     env.get_template("history_detail.html")
     env.get_template("diagnostics.html")

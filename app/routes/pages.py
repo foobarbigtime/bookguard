@@ -7,10 +7,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import __version__
-from ..attention import attention_snapshot
 from ..catalogue_move import list_moves
 from ..config import settings
 from ..diagnostics import diagnostics_snapshot
+from ..home import home_summary
+from ..library_review import GROUPS, group_counts, open_review_items
 from ..history import operation_detail, operation_history
 from ..db import (
     latest_counts,
@@ -35,6 +36,18 @@ templates = Jinja2Templates(directory="templates")
 
 
 @router.get("/", response_class=HTMLResponse)
+def home_page(request: Request):
+    # The scan dashboard used to live here and took filters in the query.
+    if request.url.query:
+        return _redirect_renamed(request, "/review/scan-results")
+    return templates.TemplateResponse(
+        request=request,
+        name="home.html",
+        context={"home": home_summary(), "version": __version__},
+    )
+
+
+@router.get("/review/scan-results", response_class=HTMLResponse)
 def dashboard(
     request: Request,
     classification: str | None = None,
@@ -69,19 +82,6 @@ def dashboard(
             "version": __version__,
         },
     )
-
-
-@router.get("/attention", response_class=HTMLResponse)
-def attention_page(request: Request):
-    return templates.TemplateResponse(
-        request=request,
-        name="attention.html",
-        context={
-            "attention": attention_snapshot(),
-            "version": __version__,
-        },
-    )
-
 
 
 @router.get("/activity", response_class=HTMLResponse)
@@ -123,7 +123,7 @@ def diagnostics_page(request: Request):
     )
 
 
-@router.get("/review", response_class=HTMLResponse)
+@router.get("/review/triage", response_class=HTMLResponse)
 def triage_page(
     request: Request,
     classification: str = "REVIEW",
@@ -158,6 +158,28 @@ def triage_page(
             "rows": enriched,
             "allow_actions": settings.allow_actions,
             "cleanup_history": recent_cleanup_actions(100),
+            "catalogue_moves": list_moves(50),
+            "version": __version__,
+        },
+    )
+
+
+@router.get("/review", response_class=HTMLResponse)
+def review_page(request: Request, group: str = ""):
+    items = open_review_items()
+    known = {key for key, _, _ in GROUPS}
+    selected = [key for key in group.split(",") if key in known]
+    return templates.TemplateResponse(
+        request=request,
+        name="review.html",
+        context={
+            "items": items,
+            "groups": GROUPS,
+            "tones": {key: tone for key, _, tone in GROUPS},
+            "counts": group_counts(items),
+            "group": ",".join(selected),
+            "allow_actions": settings.allow_actions,
+            "repair_mode": settings.metadata_repair_mode,
             "catalogue_moves": list_moves(50),
             "version": __version__,
         },
@@ -214,7 +236,12 @@ def _add_renamed_page(old: str, new: str) -> None:
     router.add_api_route(old, redirect, methods=["GET"], include_in_schema=False)
 
 
-for _old, _new in {"/triage": "/review", "/history": "/activity", "/diagnostics": "/system"}.items():
+for _old, _new in {
+    "/triage": "/review/triage",
+    "/attention": "/",
+    "/history": "/activity",
+    "/diagnostics": "/system",
+}.items():
     _add_renamed_page(_old, _new)
 
 

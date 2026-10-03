@@ -1060,7 +1060,7 @@ def observe_attention_items(limit: int = 200) -> list[dict[str, Any]]:
         ):
             continue
         workflow = (
-            "/review#acquisitionPanel"
+            "/review/triage#acquisitionPanel"
             if decoded["subjectKind"] in {"acquisition", "admission"}
             else "/review"
         )

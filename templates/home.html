@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% from "_layout.html" import site_header %}
+{{ site_header("home", "", version) }}
+{% set health = home.health %}
+{% set library = home.library %}
+
+<main class="home">
+  <section class="home-hero">
+    <div class="health-state">
+      <span class="health-dot health-{{ health.level }}" aria-hidden="true"></span>
+      <div>
+        <h1>{{ health.title }}</h1>
+        <p>
+          {% if health.level == 'ok' %}Nothing is blocking normal operation{% else %}{{ health.problems|length }} {{ 'problem' if health.problems|length == 1 else 'problems' }} below{% endif %}
+          · {% if home.decisions %}{{ home.decisions }} {{ 'thing is' if home.decisions == 1 else 'things are' }} waiting for your decision{% else %}nothing is waiting for you{% endif %}
+        </p>
+      </div>
+    </div>
+    <div class="home-hero-actions">
+      <button id="homeScanButton" type="button">Scan library</button>
+      <a class="button-link primary-link" href="/review">Review what needs attention</a>
+    </div>
+  </section>
+
+  {% if health.problems %}
+  <ul class="health-problems">
+    {% for problem in health.problems %}
+      <li class="problem-{{ problem.level }}">
+        {{ problem.text }}
+        {% if problem.href %}<a href="{{ problem.href }}">How to fix</a>{% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <section class="library-strip" aria-label="Library check">
+    <span><b>Library check</b> · {{ library.checked }} {{ 'book' if library.checked == 1 else 'books' }} under review · {{ library.passed }} passed the scan</span>
+    {% set total = library.checked or 1 %}
+    <div class="strip-bar" aria-hidden="true">
+      <span class="seg-verified" style="width:{{ (library.verified / total * 100)|round(1) }}%"></span>
+      <span class="seg-wrong" style="width:{{ (library.wrongFile / total * 100)|round(1) }}%"></span>
+      <span class="seg-damaged" style="width:{{ (library.damaged / total * 100)|round(1) }}%"></span>
+      <span class="seg-details" style="width:{{ (library.details / total * 100)|round(1) }}%"></span>
+    </div>
+    <a href="/review?group=verified"><b class="tone-green">{{ library.verified }}</b> verified</a>
+    <a href="/review?group=move,duplicate,wrong"><b class="tone-amber">{{ library.wrongFile }}</b> wrong file</a>
+    <a href="/review?group=unsafe"><b class="tone-red">{{ library.damaged }}</b> damaged</a>
+    <a href="/review?group=metadata"><b class="tone-blue">{{ library.details }}</b> wrong details</a>
+    <a href="/review?group=undecided"><b>{{ library.undecided }}</b> undecided</a>
+  </section>
+
+  <div class="home-grid">
+    <div class="home-col">
+      <section class="card home-card" aria-labelledby="attentionHeading">
+        <div class="card-head">
+          <h2 id="attentionHeading">Needs your attention {% if home.decisions %}<span class="count-badge">{{ home.decisions }}</span>{% endif %}</h2>
+          <a class="more" href="/review">Open Review →</a>
+        </div>
+        {% for group in home.attention %}
+          <article class="attention-group">
+            <span class="severity tone-bg-{{ group.tone }}" aria-hidden="true"></span>
+            <div class="attention-body">
+              <h3>{{ group.title }}</h3>
+              {% if group.why %}<p class="why">{{ group.why }}</p>{% endif %}
+              <p class="done">{{ group.done }}</p>
+              {% if group['items'] %}
+                <details class="attention-items">
+                  <summary>{{ group['items']|length }} {{ 'item' if group['items']|length == 1 else 'items' }}</summary>
+                  {% for item in group['items'] %}
+                    <div class="attention-item">
+                      <div><strong>{{ item.kindLabel }}</strong>{% if item.id %} #{{ item.id }}{% endif %} · <span class="workflow-state workflow-state-review">{{ item.status|replace('_',' ') }}</span></div>
+                      {% if item.title %}<div>{{ item.title }}{% if item.author %} · {{ item.author }}{% endif %}</div>{% endif %}
+                      <div class="attention-message">{{ item.message }}</div>
+                      {% if item.guidance %}
+                        <div class="operator-guidance compact">
+                          <strong>{{ item.guidance.label }}</strong>
+                          <small><b>Why BookGuard stopped:</b> {{ item.guidance.why }}</small>
+                          <small><b>Next step:</b> {{ item.guidance.nextStep }}</small>
+                        </div>
+                      {% endif %}
+                      <div class="attention-links">
+                        {% if item.updatedAt %}<time data-local datetime="{{ item.updatedAt }}">{{ item.updatedAt[:16]|replace('T', ' ') }}</time>{% endif %}
+                        {% if item.detailHref %}<a class="button-link" href="{{ item.detailHref }}">Audit detail</a>{% endif %}
+                        {% if item.href %}<a class="button-link" href="{{ item.href }}">Open guarded workflow</a>{% endif %}
+                      </div>
+                    </div>
+                  {% endfor %}
+                </details>
+              {% endif %}
+              {% if group.actions %}
+                <div class="attention-actions">
+                  {% for action in group.actions %}
+                    <a class="button-link{% if action.primary %} primary-link{% endif %}" href="{{ action.href }}">{{ action.label }}</a>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </div>
+          </article>
+        {% else %}
+          <p class="all-clear">Nothing needs you right now.</p>
+        {% endfor %}
+      </section>
+
+      <section class="card home-card" aria-labelledby="recentHeading">
+        <div class="card-head">
+          <h2 id="recentHeading">Recent activity</h2>
+          <a class="more" href="/activity">All activity →</a>
+        </div>
+        <div class="recent-totals">
+          <div><b>{{ home.recent.totals.added }}</b>books added to the library</div>
+          <div><b>{{ home.recent.totals.quarantined }}</b>files quarantined</div>
+          <div><b>{{ home.recent.totals.blocked }}</b>automatic steps blocked</div>
+        </div>
+        <small class="muted">Totals for the last {{ home.recent.days }} days.</small>
+        {% if home.recent.events %}
+        <ul class="event-list">
+          {% for event in home.recent.events %}
+            <li>
+              <time data-local datetime="{{ event.timestamp }}">{{ event.timestamp[:16]|replace('T', ' ') }}</time>
+              <span>
+                <a href="{{ event.detailHref }}">{{ event.kindLabel }} · {{ event.status|replace('_', ' ') }}</a>
+                {% if event.title %}<span class="muted"> · {{ event.title }}{% if event.author %}, {{ event.author }}{% endif %}</span>{% endif %}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+          <p class="muted">Nothing has happened yet.</p>
+        {% endif %}
+      </section>
+    </div>
+
+    <div class="home-col">
+      <section class="card home-card" aria-labelledby="nowHeading">
+        <div class="card-head"><h2 id="nowHeading">Right now</h2></div>
+        {% set now = home.now %}
+        <div id="rightNow" data-active="{{ 1 if now.active else 0 }}">
+          <strong>{{ now.label }}</strong>
+          {% if now.active %}
+            <div class="progress-track"><div class="progress-bar" style="width:{{ now.percent }}%"></div></div>
+            <small>{{ now.processed }} of {{ now.total }}{% if now.current %} · now: {{ now.current }}{% endif %}{% if now.etaSeconds %} · about {{ (now.etaSeconds / 60)|round|int }} min left{% endif %}</small>
+          {% elif now.lastScan and now.lastScan.finished_at %}
+            <small>Last library scan finished <time data-local datetime="{{ now.lastScan.finished_at }}">{{ now.lastScan.finished_at[:16]|replace('T', ' ') }}</time>.</small>
+          {% endif %}
+        </div>
+        <small class="muted">Scheduled tasks are not set up yet; scans run when you start them.</small>
+      </section>
+
+      <section class="card home-card" aria-labelledby="automationHeading">
+        <div class="card-head"><h2 id="automationHeading">Automation</h2><a class="more" href="/system">System →</a></div>
+        {% set automation = home.automation %}
+        <div class="mode-display" role="group" aria-label="Automation mode">
+          {% for mode, label in [('manual', 'Manual'), ('observe', 'Observe'), ('automatic', 'Automatic')] %}
+            <span class="{{ 'current' if automation.mode == mode }}"{% if automation.mode == mode %} aria-current="true"{% endif %}>{{ label }}</span>
+          {% endfor %}
+        </div>
+        <p>{{ automation.sentence }}</p>
+        {% if automation.mode == 'automatic' %}<small class="muted">{{ automation.allowed }} {{ 'action is' if automation.allowed == 1 else 'actions are' }} allowed.</small>{% endif %}
+        <small class="muted">
+          {% if automation.lastObserve %}Last observe check <time data-local datetime="{{ automation.lastObserve }}">{{ automation.lastObserve[:16]|replace('T', ' ') }}</time>.{% else %}No observe check has run yet.{% endif %}
+          The mode is set by <code>BOOKGUARD_AUTOMATION_MODE</code> for now.
+        </small>
+        {% if automation.mode == 'observe' %}
+          <div><button id="observeButton" type="button">Run observe check</button></div>
+        {% endif %}
+      </section>
+
+      <section class="card home-card" aria-labelledby="healthHeading">
+        <div class="card-head"><h2 id="healthHeading">System health</h2><a class="more" href="/system">System →</a></div>
+        <dl class="health-list">
+          {% for entry in home.system %}
+            <div>
+              <dt><span class="dot dot-{{ entry.level }}" aria-hidden="true"></span>{{ entry.label }}</dt>
+              <dd>{{ entry.text }}{% if entry.at %} <time data-local datetime="{{ entry.at }}">{{ entry.at[:16]|replace('T', ' ') }}</time>{% endif %}</dd>
+            </div>
+          {% endfor %}
+        </dl>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script src="/static/local-time.js" defer></script>
+<script src="/static/home.js" defer></script>
+</body>
+</html>
