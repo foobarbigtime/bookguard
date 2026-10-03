@@ -429,6 +429,21 @@ def init_local_db() -> None:
             "WHERE replacement_for_quarantine_plan_id IS NOT NULL"
         )
 
+        cleanup_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(cleanup_actions)").fetchall()
+        }
+        # Where a quarantine moved the file, so Put back can undo it exactly.
+        for name, kind in (
+            ("original_path", "TEXT"),
+            ("quarantine_path", "TEXT"),
+            ("sha256", "TEXT"),
+            ("size_bytes", "INTEGER"),
+            ("put_back_of", "INTEGER"),
+        ):
+            if name not in cleanup_columns:
+                conn.execute(f"ALTER TABLE cleanup_actions ADD COLUMN {name} {kind}")
+
         recovery_plan_columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(recovery_plans)").fetchall()
@@ -1041,6 +1056,35 @@ def finish_cleanup_action(cleanup_id: int, status: str, error: str | None = None
             (status, utc_now(), error, cleanup_id),
         )
         conn.commit()
+
+
+def record_cleanup_location(
+    cleanup_id: int,
+    *,
+    original_path: str,
+    quarantine_path: str,
+    sha256: str | None = None,
+    size_bytes: int | None = None,
+    put_back_of: int | None = None,
+) -> None:
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE cleanup_actions
+            SET original_path=?, quarantine_path=?, sha256=?, size_bytes=?, put_back_of=?
+            WHERE id=?
+            """,
+            (original_path, quarantine_path, sha256, size_bytes, put_back_of, cleanup_id),
+        )
+        conn.commit()
+
+
+def cleanup_action_by_id(cleanup_id: int) -> dict | None:
+    with local_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM cleanup_actions WHERE id=?", (int(cleanup_id),)
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def recent_cleanup_actions(limit: int = 100) -> list[dict]:

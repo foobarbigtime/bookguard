@@ -122,6 +122,7 @@ configuration and endpoints.
 - Keeps PDF, MOBI/AZW/AZW3, and other ebook metadata writing disabled for now; those formats remain inspection-only until their write paths are proven safe.
 - Can optionally detach a tracked path using Bindery's API.
 - Can optionally detach and move a single, non-shared tracked path into quarantine.
+- Can put a file quarantined from Triage back where it was: open the quarantine in Activity and choose **Put back**. BookGuard refuses if anything is now at the original path, the quarantined file is missing or changed, or the path is outside the library folders. It then asks Bindery to scan its library so the file is found again. Quarantines made before this version did not record enough to be put back.
 
 BookGuard **never automatically deletes media**.
 

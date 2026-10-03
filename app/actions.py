@@ -175,6 +175,11 @@ def _safe_quarantine_destination(local_path: str) -> str:
 
 
 def quarantine(book_id: int, stored_path: str, local_path: str) -> str:
+    return quarantine_file(book_id, stored_path, local_path)[0]
+
+
+def quarantine_file(book_id: int, stored_path: str, local_path: str) -> tuple[str, Path]:
+    """Quarantine one path; return the quarantine destination and the path it left."""
     api_key = _require_actions()
     if not os.path.exists(local_path):
         raise ActionError("The physical path is already missing.")
@@ -226,4 +231,4 @@ def quarantine(book_id: int, stored_path: str, local_path: str) -> str:
         raise ActionError(
             f"Bindery detach failed after quarantine: {exc.cause}.{rollback_error}"
         ) from exc
-    return destination
+    return destination, mutation_source
