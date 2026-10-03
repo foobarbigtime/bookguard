@@ -440,6 +440,8 @@ def init_local_db() -> None:
             ("sha256", "TEXT"),
             ("size_bytes", "INTEGER"),
             ("put_back_of", "INTEGER"),
+            ("was_monitored", "INTEGER"),
+            ("followup", "TEXT"),
         ):
             if name not in cleanup_columns:
                 conn.execute(f"ALTER TABLE cleanup_actions ADD COLUMN {name} {kind}")
@@ -1066,17 +1068,46 @@ def record_cleanup_location(
     sha256: str | None = None,
     size_bytes: int | None = None,
     put_back_of: int | None = None,
+    was_monitored: bool | None = None,
 ) -> None:
     with local_conn() as conn:
         conn.execute(
             """
             UPDATE cleanup_actions
-            SET original_path=?, quarantine_path=?, sha256=?, size_bytes=?, put_back_of=?
+            SET original_path=?, quarantine_path=?, sha256=?, size_bytes=?, put_back_of=?,
+                was_monitored=?
             WHERE id=?
             """,
-            (original_path, quarantine_path, sha256, size_bytes, put_back_of, cleanup_id),
+            (
+                original_path, quarantine_path, sha256, size_bytes, put_back_of,
+                None if was_monitored is None else int(bool(was_monitored)), cleanup_id,
+            ),
         )
         conn.commit()
+
+
+def set_cleanup_followup(cleanup_id: int, followup: str, status: str | None = None) -> None:
+    """Record what happened after the file work, e.g. Bindery relinking a put-back file."""
+    with local_conn() as conn:
+        if status:
+            conn.execute(
+                "UPDATE cleanup_actions SET followup=?, status=? WHERE id=?",
+                (followup, status, cleanup_id),
+            )
+        else:
+            conn.execute("UPDATE cleanup_actions SET followup=? WHERE id=?", (followup, cleanup_id))
+        conn.commit()
+
+
+def bindery_files_for_book(book_id: int, file_format: str) -> list[dict]:
+    """Every file Bindery tracks for one book in one format."""
+    with bindery_conn() as conn:
+        rows = conn.execute(
+            "SELECT id AS file_id, book_id, format, path AS stored_path FROM book_files "
+            "WHERE book_id=? AND format=? ORDER BY id",
+            (int(book_id), file_format),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def cleanup_action_by_id(cleanup_id: int) -> dict | None:
