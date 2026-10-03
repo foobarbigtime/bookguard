@@ -292,6 +292,39 @@ def _execution_events(conn, limit: int) -> list[dict[str, Any]]:
     return events
 
 
+_IMPORT_OUTCOMES = {
+    "VERIFIED_CORRECT": ("done", "BookGuard verified it is the right book"),
+    "WRONG_CONTENT": ("waiting", "it contains the wrong file"),
+    "WRONG_MEDIA_TYPE": ("waiting", "it is the wrong kind of media"),
+    "UNSAFE_FILE": ("waiting", "it failed the safety checks"),
+    "METADATA_ERROR": ("waiting", "it is the right book with the wrong details"),
+    "INSUFFICIENT_EVIDENCE": ("waiting", "BookGuard could not prove what it is"),
+}
+
+
+def _import_events(conn, limit: int) -> list[dict[str, Any]]:
+    events = []
+    for row in _rows(conn, "import_checks", "SELECT * FROM import_checks ORDER BY id DESC LIMIT ?", limit):
+        title = str(row["title"] or "")
+        lead = f"Bindery imported {_book(title)}"
+        if row["error"]:
+            result, outcome = "failed", "checking it failed"
+        elif row["verdict"]:
+            result, outcome = _IMPORT_OUTCOMES.get(str(row["verdict"]), ("waiting", "it needs a look"))
+        elif row["classification"] == "PASS":
+            result, outcome = "done", "it passed the check"
+        else:
+            result, outcome = "waiting", "the scan flagged it for review"
+        events.append(_event(
+            key=f"import-{row['id']}", kind="import_check", what="checks", who="bookguard", result=result,
+            timestamp=str(row["checked_at"]), sentence=f"{lead}; {outcome}",
+            title=title, author=str(row["author"] or ""), path=str(row["stored_path"] or ""),
+            detail=str(row["error"] or ""),
+            detail_href=f"/review#book-{row['result_id']}" if row["result_id"] and result == "waiting" else "",
+        ))
+    return events
+
+
 def _describe_change(change: dict[str, Any]) -> str:
     label = change["label"]
     if "added" in change:
@@ -356,7 +389,8 @@ def activity_events(limit: int = 1000) -> list[dict[str, Any]]:
               if (event := _from_history(item))]
     events += _verification_days(verifications) + _observe_days(observations)
     with local_conn() as conn:
-        for source in (_scan_events, _move_events, _execution_events, _settings_events, _start_events):
+        for source in (_scan_events, _move_events, _execution_events, _settings_events, _start_events,
+                       _import_events):
             events += source(conn, limit)
     events.sort(key=lambda event: (event["timestamp"], event["key"]), reverse=True)
     return events

@@ -49,6 +49,8 @@
           <label class="check-field"><input name="scan_audiobooks" type="checkbox" {% if settings.scan_audiobooks %}checked{% endif %}><span>Scan audiobooks</span></label>
           <label class="check-field"><input name="scan_ebooks" type="checkbox" {% if settings.scan_ebooks %}checked{% endif %}><span>Scan ebooks</span></label>
           <label class="check-field"><input name="scan_on_start" type="checkbox" {% if settings.scan_on_start %}checked{% endif %}><span>Run a scan on container start</span></label>
+          <label class="check-field"><input name="watch_imports" type="checkbox" {% if settings.watch_imports %}checked{% endif %}><span>Check each new Bindery import</span></label>
+          <label class="field"><span>Look for new imports every (minutes)</span><input name="watch_imports_minutes" type="number" min="1" max="60" value="{{ settings.watch_imports_minutes }}"><small>New files are scanned and verified soon after Bindery imports them.</small></label>
           <label class="field"><span>Audio samples per association</span><input name="sample_files" type="number" min="1" max="50" value="{{ settings.sample_files }}"><small>Samples are spread across the audiobook.</small></label>
           <label class="field"><span>Progress update interval</span><input name="progress_every" type="number" min="1" max="100" value="{{ settings.progress_every }}"></label>
         </div>
@@ -153,7 +155,7 @@ const tikaStatus = document.getElementById("tikaStatus");
 const testMalwareButton = document.getElementById("testMalwareButton");
 const malwareStatus = document.getElementById("malwareStatus");
 const booleanFields = [
-  "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
+  "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks", "watch_imports",
   "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
   "verification_enabled", "verification_use_tika", "verification_file_signatures",
   "verification_archive_safety",
@@ -162,7 +164,7 @@ const booleanFields = [
   "repair_audio_album_artist", "repair_audio_genre", "clear_api_key"
 ];
 const integerFields = [
-  "sample_files", "progress_every", "title_min_shared_words",
+  "sample_files", "progress_every", "watch_imports_minutes", "title_min_shared_words",
   "strong_mismatch_min_samples", "strong_mismatch_consensus_percent",
   "verification_max_text_chars", "verification_pdf_pages",
   "dashboard_poll_ms", "live_results_limit", "dashboard_result_limit"

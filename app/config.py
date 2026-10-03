@@ -247,6 +247,10 @@ class Settings:
     scan_audiobooks: bool = _bool("BOOKGUARD_SCAN_AUDIOBOOKS", True)
     scan_ebooks: bool = _bool("BOOKGUARD_SCAN_EBOOKS", True)
     progress_every: int = _clamp(_int("BOOKGUARD_PROGRESS_EVERY", 10), 1, 100)
+    # Check each file Bindery imports soon after it appears, instead of waiting
+    # for the next full library scan. Reads Bindery's database read-only.
+    watch_imports: bool = _bool("BOOKGUARD_WATCH_IMPORTS", True)
+    watch_imports_minutes: int = _clamp(_int("BOOKGUARD_WATCH_IMPORTS_MINUTES", 5), 1, 60)
 
     # Matching behavior.
     title_min_shared_words: int = _clamp(_int("BOOKGUARD_TITLE_MIN_SHARED_WORDS", 2), 1, 5)
@@ -340,7 +344,7 @@ class Settings:
             "quarantine_root", "repair_audio_genre_value",
         }
         bool_fields = {
-            "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks",
+            "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks", "watch_imports",
             "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
             "verification_enabled", "verification_use_tika",
             "verification_file_signatures", "verification_archive_safety",
@@ -352,6 +356,7 @@ class Settings:
         int_bounds = {
             "sample_files": (1, 50),
             "progress_every": (1, 100),
+            "watch_imports_minutes": (1, 60),
             "title_min_shared_words": (1, 5),
             "strong_mismatch_min_samples": (1, 10),
             "strong_mismatch_consensus_percent": (50, 100),
@@ -411,6 +416,8 @@ class Settings:
             "allow_actions": self.allow_actions,
             "sample_files": self.sample_files,
             "scan_on_start": self.scan_on_start,
+            "watch_imports": self.watch_imports,
+            "watch_imports_minutes": self.watch_imports_minutes,
             "scan_audiobooks": self.scan_audiobooks,
             "scan_ebooks": self.scan_ebooks,
             "progress_every": self.progress_every,

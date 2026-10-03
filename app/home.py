@@ -21,6 +21,7 @@ from .config import ConfigurationError, load_automation_settings, settings
 from .db import latest_counts, latest_scan, local_conn
 from .diagnostics import _malware_report
 from .history import operation_history
+from .import_watch import watcher as import_watcher
 from .library_review import GROUP_LABELS, group_counts, open_review_items
 from .services.dashboard import scan_timing
 from .verifier import verification_job_status
@@ -256,6 +257,19 @@ def _automation() -> tuple[dict[str, Any], dict[str, Any], str | None]:
     )
 
 
+def _import_line() -> dict[str, str]:
+    status = import_watcher.status()
+    if not status["enabled"]:
+        return {"key": "imports", "label": "Import checks", "level": "off", "text": "Off"}
+    if status["lastError"]:
+        return {"key": "imports", "label": "Import checks", "level": "warn", "text": "Could not read Bindery's database"}
+    every = f"every {status['minutes']} min"
+    if status["lastCheckAt"]:
+        return {"key": "imports", "label": "Import checks", "level": "ok", "text": f"On \u00b7 {every} \u00b7 last looked",
+                "at": status["lastCheckAt"]}
+    return {"key": "imports", "label": "Import checks", "level": "ok", "text": f"On \u00b7 {every}"}
+
+
 def _system(malware: dict[str, Any], gates: dict[str, Any], scan: dict | None) -> list[dict[str, str]]:
     revision = os.getenv("BOOKGUARD_BUILD_REVISION", "").strip()
     if malware["configured"] and malware["reachable"]:
@@ -275,6 +289,7 @@ def _system(malware: dict[str, Any], gates: dict[str, Any], scan: dict | None) -
         {"key": "scanner", "label": "Virus scanner", "level": scanner[0], "text": scanner[1]},
         {"key": "bindery", "label": "Bindery", "level": "ok" if bindery_ok else "error",
          "text": f"Database readable · {actions}" if bindery_ok else "Database not found"},
+        _import_line(),
         {"key": "replacements", "label": "Replacements", "level": "ok" if gates.get("replacements") else "off",
          "text": "Set up" if gates.get("replacements") else "Not set up"},
         {"key": "scan", "label": "Library scan", "level": "ok" if last_scan else "off",

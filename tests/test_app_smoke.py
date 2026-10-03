@@ -36,6 +36,8 @@ EXPECTED_ROUTES = {
     ("GET", "/api/status"),
     ("GET", "/api/home"),
     ("GET", "/api/activity"),
+    ("POST", "/api/bindery/webhook"),
+    ("GET", "/api/imports/status"),
     ("GET", "/api/diagnostics"),
     ("GET", "/api/history"),
     ("GET", "/api/history/{kind}/{record_id}"),
