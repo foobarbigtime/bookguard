@@ -196,7 +196,11 @@ def _move_to_own_book(client: BinderyClient, row: dict, owners: list[dict]) -> N
         raise fix_by_hand
     file_format = str(row["format"])
     preview = client.preview_manual_reassignment(row["stored_path"], int(row["book_id"]), file_format=file_format)
-    if preview.get("status") != "move" or not _inside_library(str(preview.get("destination") or ""), file_format):
+    # "noop": the file already sits at that book's templated path; Fix match then
+    # only re-attaches it, exactly as Bindery's own Fix match button allows.
+    if preview.get("status") not in {"move", "noop"} or not _inside_library(
+        str(preview.get("destination") or ""), file_format
+    ):
         raise fix_by_hand
     client.reassign_manual_import(row["stored_path"], int(row["book_id"]), file_format=file_format)
 

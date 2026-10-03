@@ -306,3 +306,24 @@ def test_wrong_match_that_bindery_will_not_move_safely_names_the_book_and_the_bu
     assert message.startswith("Needs you: Bindery's scan put the file on “Mary”.")
     assert "More → Fix match" in message
     assert _row(put_back_id)["status"] == "attention"
+
+
+def test_wrong_match_already_at_the_right_path_is_reattached_in_place(quarantined):
+    FakeBindery.scan_book = 9
+    FakeBindery.preview = {"status": "noop", "destination": "/data/books/Author/Mary.epub"}
+    put_back_id, _ = put_back_module.put_back(quarantined["id"])
+
+    message = put_back_module.relink_in_bindery(put_back_id, _row(quarantined["id"]))
+
+    assert FakeBindery.reassigned == [("/data/books/Author/Mary.epub", 3, "ebook")]
+    assert message == "Bindery is tracking the file again and monitoring the book."
+
+
+def test_wrong_match_with_a_collision_is_left_for_the_user(quarantined):
+    FakeBindery.scan_book = 9
+    FakeBindery.preview = {"status": "collision", "destination": "/data/books/Author/Mary.epub"}
+    put_back_id, _ = put_back_module.put_back(quarantined["id"])
+
+    message = put_back_module.relink_in_bindery(put_back_id, _row(quarantined["id"]))
+
+    assert FakeBindery.reassigned == [] and message.startswith("Needs you")
