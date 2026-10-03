@@ -13,7 +13,7 @@
 {% set shown = items|selectattr('group', 'in', selected)|list if selected else items %}
 {% if language_filter %}{% set shown = shown|selectattr('language.nonEnglish')|list %}{% endif %}
 
-<main class="review">
+<main class="review-page">
   <div class="review-head">
     <h1>Review</h1>
     <p>Books from the latest scan that need a decision. Nothing changes until you choose an action.</p>

@@ -304,7 +304,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .tone-bg-grey { background: #52525b; }
 .primary-link { background: var(--blue); border-color: var(--blue) !important; color: #fff !important; }
 .primary-link:hover { filter: brightness(1.12); }
-.home { display: flex; flex-direction: column; gap: 1.1rem; }
+.home-page { display: flex; flex-direction: column; gap: 1.1rem; }
 .home-hero { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
 .health-state { display: flex; align-items: center; gap: .9rem; }
 .health-state h1 { font-size: 1.5rem; letter-spacing: -.01em; }
@@ -370,7 +370,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 @media (max-width: 500px) { .recent-totals { grid-template-columns: 1fr; } .event-list time { flex-basis: 80px; } }
 
 /* Review (docs/design/ui-redesign.md) */
-.review { display: flex; flex-direction: column; gap: 1rem; }
+.review-page { display: flex; flex-direction: column; gap: 1rem; }
 .review-head h1 { font-size: 1.5rem; letter-spacing: -.01em; }
 .review-head p { margin-top: .25rem; color: var(--muted); font-size: .9rem; }
 .chips { display: flex; flex-wrap: wrap; gap: .45rem; }
