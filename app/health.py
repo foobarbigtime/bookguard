@@ -252,6 +252,14 @@ def health_checks(
     }
 
 
+def _scanner_text(version: str) -> str:
+    """'ClamAV 1.5.4/28142/Sat Oct  3 06:24:16 2026' reads as 'ClamAV 1.5.4 · definitions Oct 3'."""
+    issued = _definitions_date(version)
+    if issued is None:
+        return version or "Answering"
+    return f"{version.split('/')[0].strip()} · definitions {issued:%b} {issued.day}"
+
+
 def system_about(malware: dict[str, Any]) -> list[dict[str, str]]:
     """Version, uptime, last update and the services BookGuard depends on."""
     from . import __version__
@@ -270,7 +278,7 @@ def system_about(malware: dict[str, Any]) -> list[dict[str, str]]:
     except ConfigurationError:
         mode = "Invalid settings"
     revision = current_revision()
-    scanner = (str(malware.get("version") or "Answering") if malware.get("reachable")
+    scanner = (_scanner_text(str(malware.get("version") or "")) if malware.get("reachable")
                else "Not answering" if malware.get("configured") else "Not set up")
     return [
         {"label": "BookGuard", "text": f"v{__version__}" + (f" · {revision[:7]}" if revision != "unknown" else "")},

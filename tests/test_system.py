@@ -211,3 +211,17 @@ def test_system_page_shows_health_tasks_and_about(system, monkeypatch):
         assert client.post("/api/imports/check", json={"confirm": "nope"}).status_code == 400
         assert client.post("/api/imports/check", json={"confirm": "CHECK_IMPORTS"}).status_code == 202
         assert "problems" in client.get("/api/system/health").json()
+
+
+def test_virus_scanner_version_reads_short_in_about():
+    assert health._scanner_text("ClamAV 1.5.4/28142/Sat Oct  3 06:24:16 2026") == "ClamAV 1.5.4 · definitions Oct 3"
+    assert health._scanner_text("ClamAV 1.5.4") == "ClamAV 1.5.4"
+    assert health._scanner_text("") == "Answering"
+
+
+def test_first_import_check_reads_watching_from_now(system, monkeypatch):
+    monkeypatch.setattr("app.import_watch.watcher.status", lambda: {
+        "enabled": True, "minutes": 5, "lastCheckAt": "", "lastChecked": 0, "lastState": "started",
+    })
+    task = next(t for t in scheduler.scheduled_tasks() if t["key"] == "import_check")
+    assert task["last"] == "Watching from now"
