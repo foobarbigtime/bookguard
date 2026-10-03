@@ -52,7 +52,8 @@ def library(tmp_path, monkeypatch):
             "file_id": index, "book_id": 100 + index, "author": "James Patterson", "title": title,
             "format": "ebook", "stored_path": f"/data/media/books/{title}.epub",
             "local_path": f"/books/{title}.epub", "classification": classification,
-            "risk_score": 50 + index, "reason_code": "MISMATCH", "reasons": [f"{title} flagged"], "metadata": {},
+            "risk_score": 50 + index, "reason_code": "MISMATCH", "reasons": [f"{title} flagged"],
+            "metadata": {"language_detection": {"languages": ["swe"] if title == "Kill" else ["en"]}},
         })
     finish_scan(SCAN)
     ids = {}
@@ -168,3 +169,19 @@ def test_home_still_loads_when_the_attention_queue_cannot_be_read(library, monke
     assert summary["health"]["level"] == "error"
     assert "the attention queue: database is locked" in summary["health"]["problems"][-1]["text"]
     assert summary["attention"][0]["key"] == "unsafe"
+
+
+def test_review_shows_the_declared_language_and_filters_books_not_in_english(library):
+    items = {item["title"]: item for item in open_review_items()}
+    assert items["Kill"]["language"] == {"codes": ["sv"], "label": "Swedish", "declared": True, "nonEnglish": True}
+    assert items["Mary, Mary"]["language"]["nonEnglish"] is False
+
+    app = FastAPI()
+    app.include_router(pages_router)
+    with TestClient(app) as client:
+        page = client.get("/review").text
+        assert '<span class="lang-tag">Swedish</span>' in page
+        assert "Not in English <b>1</b>" in page
+        filtered = client.get("/review?language=other").text
+        assert 'data-review-id="%d"' % library["Kill"] in filtered
+        assert 'data-review-id="%d"' % library["Mary, Mary"] not in filtered

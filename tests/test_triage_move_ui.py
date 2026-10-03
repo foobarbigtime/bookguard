@@ -82,3 +82,8 @@ def test_move_history_offers_read_only_recheck_for_unfinished_moves():
 
 def test_move_history_is_hidden_until_a_move_exists():
     assert "Moves to the right book" not in render_triage([])
+
+
+def test_move_preview_warns_when_the_file_is_not_in_english():
+    assert "proof.language.nonEnglish" in CONTROLLER
+    assert "If you only keep English books, quarantine it instead." in CONTROLLER

@@ -217,3 +217,12 @@ def test_a_proof_that_no_longer_holds_stops_the_move(world):
 
     assert client.reassign_calls == 0
     assert catalogue_move.list_moves() == []
+
+
+def test_preview_shows_the_file_language_without_blocking_the_move(world):
+    swedish = {**RESULT, "metadata": {"language_detection": {"languages": ["sv"]}}}
+    preview = move_preview(swedish, proven(), FakeBindery(world))
+    assert preview["eligible"] is True
+    assert preview["language"]["label"] == "Swedish"
+    assert preview["language"]["nonEnglish"] is True
+    assert move_preview(RESULT, proven(), FakeBindery(world))["language"]["declared"] is False

@@ -35,6 +35,7 @@ from .catalogue_relationship import library_path
 from .config import settings
 from .db import bindery_conn, local_conn
 from .file_safety import sha256_file
+from .language_detection import declared_language
 
 CONFIRMATION = "MOVE_TO_CORRECT_BOOK"
 CONFIRM_TIMEOUT_SECONDS = 120
@@ -116,6 +117,9 @@ def move_preview(
         "targetTitle": str(catalogue.get("title") or ""),
         "sha256": _verified_sha256(verification),
         "destination": "",
+        # Not a blocker: a translation can be exactly the book it says it is.
+        # Shown so the operator can decide whether they want it at all.
+        "language": declared_language(result),
     }
 
     if result.get("format") != "ebook":

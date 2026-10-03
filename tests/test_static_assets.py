@@ -40,3 +40,19 @@ def test_static_responses_tell_browsers_to_revalidate():
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-cache"
         assert "--accent" in response.text
+
+
+def test_page_layout_classes_do_not_collide_with_status_classes():
+    # .review once matched the REVIEW count card and "review" status pills too.
+    css = Path("static/style.css").read_text(encoding="utf-8")
+    for status in ("pass", "review", "reject", "missing", "home"):
+        assert not re.search(rf"(^|\}}|,)\s*\.{status}\s*\{{", css, re.M), status
+
+
+def test_every_page_shares_one_type_scale():
+    # Older pages set no sizes of their own and fell back to browser defaults
+    # (16px text, 24px section headings), unlike Home and Review.
+    css = Path("static/style.css").read_text(encoding="utf-8")
+    assert re.search(r"^body \{[^}]*font-size: \.875rem;", css, re.M)
+    assert re.search(r"^h1 \{ font-size: 1\.5rem;", css, re.M)
+    assert re.search(r"^h2 \{ font-size: 1rem;", css, re.M)
