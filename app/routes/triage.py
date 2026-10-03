@@ -13,6 +13,7 @@ from ..catalogue_move import (
 )
 from ..db import latest_results, latest_scan, result_by_id
 from ..put_back import put_back
+from ..replace import triage_replace
 from ..scanner import start_scan
 from ..services.dashboard import latest_missing_cleanup
 from ..verifier import verify_result
@@ -162,6 +163,18 @@ async def api_triage_quarantine(result_id: int, request: Request):
         "destination": destination,
         "message": f"Item detached from Bindery and moved to {destination}",
     }
+
+
+@router.post("/triage/{result_id}/replace")
+def api_triage_replace(result_id: int, payload: ConfirmationRequest):
+    """Quarantine one file and have Bindery blocklist its release and fetch a new copy."""
+    require_confirmation(payload, "REPLACE")
+    item = _triage_item(result_id)
+    try:
+        cleanup_id, message = triage_replace(item)
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True, "cleanup_id": cleanup_id, "message": message}
 
 
 @router.post("/quarantine/{cleanup_id}/put-back")

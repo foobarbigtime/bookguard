@@ -133,10 +133,18 @@ def _from_history(item: dict[str, Any]) -> dict[str, Any] | None:
     if kind == "triage":
         return _event(**base, what="decisions", who="you", result="done",
                       sentence=f"You marked {_book(title)} reviewed")
+    followup = str(item.get("message") or "")
     if kind in {"cleanup", "repair"} and status in {"applied", "undone"}:
         base["detail"] = ""  # only the internal action name; errors are kept
     if kind == "cleanup":
         result = _status_result(status, done={"applied"}, waiting={"attention"})
+        if label == "Quarantine" and result == "done" and followup.startswith("Replacement requested"):
+            return _event(**base, what="decisions", who="you", result="done",
+                          sentence=f"You replaced {_book(title)}; Bindery is getting a new copy")
+        if label == "Quarantine" and result == "done" and followup.startswith("Needs you"):
+            base["detail"] = followup
+            return _event(**base, what="decisions", who="you", result="waiting",
+                          sentence=f"You quarantined {_book(title)}; Bindery needs you to start the replacement")
         verb = {"Quarantine": "quarantined", "Detach": "detached from Bindery",
                 "Put back": "put back"}.get(label, "cleaned up")
         if result == "done":

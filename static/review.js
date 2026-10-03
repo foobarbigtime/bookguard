@@ -134,6 +134,19 @@
     }), "danger");
   }
 
+  function replaceAction(item) {
+    return button("Replace…", (node) => run(node, async () => {
+      const preview = await request(`/api/triage/${item.id}/action-preview?action=quarantine`);
+      if (!preview.safe) throw new Error(preview.reason || "The safety check failed.");
+      const text = `Replace this file?\n\n${preview.local_path}\n\nBookGuard moves it to quarantine (nothing is deleted). ` +
+        "Bindery then blocklists the download it came from, searches for a new copy and imports it.";
+      if (!window.confirm(text)) return;
+      const result = await post(`/api/triage/${item.id}/replace`, "REPLACE");
+      window.alert(result.message || "Done.");
+      window.location.reload();
+    }), "danger");
+  }
+
   function primaryActions(item) {
     const actions = [];
     const move = latestMove[item.id];
@@ -201,8 +214,8 @@
     if (data.allowActions) {
       parts.push(el("section", { class: "detail-section danger-zone" },
         el("h3", { text: "Danger zone" }),
-        el("p", { class: "muted", text: "Detach removes only Bindery's record; the file stays. Quarantine also moves the file out of the library. Nothing is ever deleted." }),
-        el("div", { class: "detail-actions" }, guardedAction(item, "detach"), guardedAction(item, "quarantine"))));
+        el("p", { class: "muted", text: "Detach removes only Bindery's record; the file stays. Quarantine also moves the file out of the library. Replace quarantines it and has Bindery fetch a new copy. Nothing is ever deleted." }),
+        el("div", { class: "detail-actions" }, guardedAction(item, "detach"), guardedAction(item, "quarantine"), replaceAction(item))));
     } else {
       parts.push(el("p", { class: "muted small-print", text: "Detach and quarantine appear here when Bindery actions are enabled in Settings." }));
     }
