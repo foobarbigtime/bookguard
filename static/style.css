@@ -19,8 +19,13 @@
   --red: #ef4444;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: .875rem; line-height: 1.45; }
 h1, h2, h3, p { margin: 0; }
+/* One type scale for every page (the mockups): 24px page titles, 16px card
+   headings, 14px text. Pages that set their own sizes in rem are unaffected. */
+h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -.01em; line-height: 1.25; }
+h2 { font-size: 1rem; font-weight: 600; line-height: 1.35; }
+h3 { font-size: .95rem; font-weight: 600; }
 a { color: inherit; }
 code { background: var(--inset); border: 1px solid var(--border); border-radius: .35rem; padding: .1rem .35rem; }
 .topbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem 2rem; min-height: 64px; padding: .6rem clamp(1rem, 4vw, 5rem); border-bottom: 1px solid var(--border); background: var(--bg); position: sticky; top: 0; z-index: 10; }
@@ -124,7 +129,7 @@ td { font-size: .86rem; }
 .empty { padding: 2rem; color: var(--muted); text-align: center; }
 
 /* Supervised ebook replacement */
-.acquisition-panel { margin-bottom: 1rem; border-color: rgba(69,160,230,.38); }
+.acquisition-panel { margin-bottom: 1rem; }
 .acquisition-body, .replacement-body { padding: 0 1rem 1rem; }
 .workflow-state { display: inline-flex; align-items: center; border-radius: 999px; padding: .28rem .58rem; font-size: .74rem; font-weight: 750; white-space: nowrap; }
 .workflow-state-loading, .workflow-state-idle, .workflow-state-disabled { background: rgba(130,140,155,.16); color: #c4ccd6; }
@@ -193,6 +198,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .path-state.bad { color: #f18b8b; }
 .notice { margin: 1rem 1.2rem 1.2rem; border: 1px solid var(--border); border-radius: .6rem; padding: .75rem .9rem; font-size: .9rem; }
 .notice.info { background: rgba(40,103,178,.1); border-color: rgba(57,120,195,.45); color: #bad8f6; }
+main > .notice { margin: 0 0 1rem; }
 .notice.warning { margin: 0 0 1rem; background: rgba(214,163,59,.1); border-color: rgba(214,163,59,.45); color: #edc66e; }
 .safety-section { border-color: rgba(224,93,93,.35); }
 .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.1rem; }
