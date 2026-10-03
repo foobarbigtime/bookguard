@@ -13,13 +13,25 @@ from __future__ import annotations
 from .actions import ActionError, resolve_bindery_api_key
 from .automatic import _history_items, _source_grab_event
 from .bindery_client import BinderyClient, BinderyClientError
-from .db import set_cleanup_followup
+from .db import bindery_files_for_book, set_cleanup_followup
 from .triage import triage_quarantine
 
 
 def triage_replace(result: dict) -> tuple[int, str]:
     """Quarantine one Review/Reject file, then have Bindery replace it."""
     book_id = int(result["book_id"])
+    try:
+        others = [
+            item for item in bindery_files_for_book(book_id, str(result["format"]))
+            if item["stored_path"] != result["stored_path"]
+        ]
+    except Exception as exc:
+        raise ActionError(f"Could not read Bindery's database, so nothing was moved: {exc}") from exc
+    if others:
+        raise ActionError(
+            "Bindery already has another copy of this book, so there is nothing to replace. "
+            "Use Quarantine to take this file out of the library."
+        )
     client = BinderyClient(api_key=resolve_bindery_api_key(), timeout=30)
     try:
         grab = _source_grab_event(_history_items(client.list_history(book_id, limit=100)))
@@ -47,6 +59,8 @@ def triage_replace(result: dict) -> tuple[int, str]:
             f"Needs you: the file is in quarantine, but Bindery's automatic search did not start ({exc}). "
             "In Bindery, open the book and click Automatic search, or pick a release by hand."
         )
+        if problems:
+            message += " Note: " + "; ".join(problems) + "."
         set_cleanup_followup(cleanup_id, message[:1000])
         return cleanup_id, message
 

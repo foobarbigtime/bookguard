@@ -19,7 +19,7 @@ import json
 from pathlib import PurePosixPath
 from typing import Any, Iterable
 
-from .db import local_conn
+from .db import associations_inside_path, local_conn
 from .history import operation_history
 
 WHO = {"you": "You", "bookguard": "BookGuard", "automatic": "Automatic", "system": "System"}
@@ -140,7 +140,7 @@ def _from_history(item: dict[str, Any]) -> dict[str, Any] | None:
         result = _status_result(status, done={"applied"}, waiting={"attention"})
         if label == "Quarantine" and result == "done" and followup.startswith("Replacement requested"):
             return _event(**base, what="decisions", who="you", result="done",
-                          sentence=f"You replaced {_book(title)}; Bindery is getting a new copy")
+                          sentence=f"You replaced {_book(title)}")
         if label == "Quarantine" and result == "done" and followup.startswith("Needs you"):
             base["detail"] = followup
             return _event(**base, what="decisions", who="you", result="waiting",
@@ -313,6 +313,16 @@ _IMPORT_OUTCOMES = {
 }
 
 
+def _no_longer_in_bindery(stored_path: str) -> bool:
+    """Read-only: Bindery no longer tracks this imported path (moved, fixed or removed)."""
+    if not stored_path:
+        return False
+    try:
+        return not associations_inside_path(stored_path)
+    except Exception:
+        return False  # Bindery's database unreadable: keep the entry as it was
+
+
 def _import_events(conn, limit: int) -> list[dict[str, Any]]:
     events = []
     for row in _rows(conn, "import_checks", "SELECT * FROM import_checks ORDER BY id DESC LIMIT ?", limit):
@@ -326,6 +336,8 @@ def _import_events(conn, limit: int) -> list[dict[str, Any]]:
             result, outcome = "done", "it passed the check"
         else:
             result, outcome = "waiting", "the scan flagged it for review"
+        if result == "waiting" and _no_longer_in_bindery(str(row["stored_path"] or "")):
+            result, outcome = "done", f"{outcome}, and it has since been fixed or removed"
         events.append(_event(
             key=f"import-{row['id']}", kind="import_check", what="checks", who="bookguard", result=result,
             timestamp=str(row["checked_at"]), sentence=f"{lead}; {outcome}",
