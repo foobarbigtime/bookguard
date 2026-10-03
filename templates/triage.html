@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>BookGuard Triage</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
   <style>
     .triage-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:.8rem; margin-bottom:1rem; }
     .triage-summary a { text-decoration:none; }
@@ -561,8 +561,8 @@ async function triageAction(id, action) {
 loadCachedVerifications();
 pollVerificationJob();
 </script>
-<script src="/static/triage-acquisition.js" defer></script>
-<script src="/static/triage-hardlinks.js" defer></script>
-<script src="/static/triage-move.js" defer></script>
+<script src="{{ static_url('triage-acquisition.js') }}" defer></script>
+<script src="{{ static_url('triage-hardlinks.js') }}" defer></script>
+<script src="{{ static_url('triage-move.js') }}" defer></script>
 </body>
 </html>

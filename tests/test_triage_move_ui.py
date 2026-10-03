@@ -3,6 +3,8 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
+from app.static_assets import static_url
+
 from app.catalogue_move import CONFIRMATION
 
 
@@ -13,6 +15,7 @@ MOVE_MODULE = Path("app/catalogue_move.py").read_text(encoding="utf-8")
 
 def render_triage(moves):
     env = Environment(loader=FileSystemLoader("templates"))
+    env.globals["static_url"] = static_url
     counts = {"open": 0, "total": 0, "resolved": 0}
     return env.get_template("triage.html").render(
         classification="REJECT",
@@ -39,7 +42,7 @@ def move(move_id, result_id, status):
 
 
 def test_triage_loads_move_controller_and_panel():
-    assert 'src="/static/triage-move.js"' in TEMPLATE
+    assert "src=\"{{ static_url('triage-move.js') }}\"" in TEMPLATE
     assert 'id="movePanel"' in TEMPLATE
     assert 'data-move-result="${id}"' in TEMPLATE
 
