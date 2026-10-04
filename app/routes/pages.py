@@ -58,7 +58,7 @@ def home_page(request: Request):
 @router.get("/review/unmatched", response_class=HTMLResponse)
 def unmatched_page(request: Request):
     items = stored_checks()
-    order = ["JUNK", "BELONGS", "NOT_IN_LIBRARY", "UNSURE"]
+    order = ["JUNK", "BELONGS", "DUPLICATE", "OTHER_LANGUAGE", "NOT_IN_LIBRARY", "UNSURE"]
     groups = [(key, VERDICTS[key], [i for i in items if i["verdict"] == key]) for key in order]
     return templates.TemplateResponse(
         request=request,

@@ -295,3 +295,170 @@ def test_overlapping_library_prefixes_use_the_most_specific_one(lib, monkeypatch
     monkeypatch.setattr(settings, "audiobook_bindery_prefix", "/data/books")  # identical: the row's format decides
     assert unmatched._local_path("/data/books/A/B.epub", "ebook") == str(lib["root"] / "A/B.epub")
     assert unmatched._local_path("/data/books/A/B.mp3", "audiobook") == str(lib["audio"] / "A/B.mp3")
+
+
+# ---- cases from a real library ---------------------------------------------------
+
+@pytest.mark.parametrize("left, right", [
+    ("05 - Nemesis Games", "Nemesis Games"),
+    ("04 Cibola Burn", "Cibola Burn (Unabridged)"),
+    ("Book 4 - Cibola Burn", "Cibola Burn: The Expanse, Book 4 (Unabridged)"),
+    ("TDT 0.5 The Little Sisters of Eluria", "The Little Sisters of Eluria"),
+    ("WMC 01 - 1st to Die", "1st to Die"),
+    ("1993 - The Client", "The Client"),
+    ("Maximum Ride 03 - Saving the World", "MR 3 - Saving the World"),
+    ("James S. A. Corey - The Expanse - 2.0 - Caliban's War", "Calibans War"),
+    ("Part 2 - Summer of Corruption - Apt Pupil", "Apt Pupil"),
+    ("The Christmas Pig_UK", "Christmas Pig"),
+    ("[Alex Cross 23] - Cross Justice", "Cross Justice"),
+])
+def test_titles_match_through_series_and_number_prefixes(left, right):
+    assert unmatched._title_keys(left) & unmatched._title_keys(right)
+
+
+@pytest.mark.parametrize("left, right", [
+    ("1st to Die", "2nd Chance"), ("11/22/63", "Joyland"), ("Die 6. Geisel", "Geisel"), ("The Client", "The Firm"),
+])
+def test_different_titles_still_differ(left, right):
+    assert not unmatched._title_keys(left) & unmatched._title_keys(right)
+
+
+@pytest.mark.parametrize("name, surname", [
+    ("J.K. Rowling", "rowling"), ("Rowling J.K.", "rowling"), ("Corey, James S.A.", "corey"),
+    ("Patterson, James", "patterson"), ("James Patterson, Maxine Paetro", "patterson"),
+    ("Author's", ""), ("unknown author", ""), ("05", ""), ("Martin Luther King Jr.", "king"),
+])
+def test_author_surnames_in_any_order(name, surname):
+    assert unmatched._surname(name) == surname
+
+
+def _audio(lib, monkeypatch, rel, tags, names=("01.mp3", "02.mp3")):
+    folder = lib["audio"] / rel
+    folder.mkdir(parents=True)
+    for name in names:
+        (folder / name).write_bytes(b"ID3")
+    probe = {"audio_stream_count": 1, "duration_seconds": 3600, **tags}
+    monkeypatch.setattr(unmatched, "cached_or_probe_audio_file", lambda path: ({"path": path, **probe}, False))
+    monkeypatch.setattr(unmatched, "_silent", lambda path: False)
+    return {"id": 9, "kind": "folder", "format": "audiobook", "rootPath": "/data/audiobooks", "relPath": rel,
+            "authorFolder": rel.split("/")[0], "members": list(names)}
+
+
+def _library(*books):
+    return unmatched.Library([{"id": n, "title": t, "author": a, **extra}
+                              for n, (t, a, extra) in enumerate(books, start=1)])
+
+
+def test_a_numbered_audiobook_belongs_to_its_book_not_outside_the_library(lib, monkeypatch):
+    library = _library(("Nemesis Games", "James S. A. Corey", {}))
+    item = _audio(lib, monkeypatch, "James S. A. Corey/Nemesis Games/Recovered - Gods of Risk folder/05 Nemesis Games",
+                  {"album": "05 - Nemesis Games", "artist": "James S. A. Corey"})
+
+    outcome = unmatched.check_item(item, library, None)
+
+    assert (outcome["verdict"], outcome["bookId"]) == ("BELONGS", 1)
+
+
+def test_tags_without_an_author_take_it_from_the_folder_and_generic_folders_are_skipped(lib, monkeypatch):
+    library = _library(("The Client", "John Grisham", {}))
+    item = _audio(lib, monkeypatch, "John Grisham/The Client (1993)/Edition 1",
+                  {"album": "1993 - The Client", "artist": "Author's"})
+
+    outcome = unmatched.check_item(item, library, None)
+
+    assert (outcome["verdict"], outcome["bookId"]) == ("BELONGS", 1)
+    assert "Audio tags + Folder names" in outcome["reason"]
+
+
+def test_a_book_that_already_has_a_file_is_an_extra_copy_without_attach(lib, monkeypatch):
+    library = _library(("Caliban's War", "James S. A. Corey", {}))
+    monkeypatch.setattr(unmatched, "bindery_files_for_book", lambda book_id, fmt: [{"stored_path": "/elsewhere.m4b"}])
+    item = _audio(lib, monkeypatch, "James S. A. Corey/Caliban's War/Book 2 - Calibans War",
+                  {"album": "Caliban's War", "artist": "James S. A. Corey"})
+
+    outcome = unmatched.check_item(item, library, None)
+
+    assert outcome["verdict"] == "DUPLICATE" and "extra copy" in outcome["reason"]
+
+
+def test_a_pen_name_for_the_folder_authors_book_is_unsure_not_outside_the_library(lib, monkeypatch):
+    library = _library(("The Regulators", "Stephen King", {}))
+    item = _audio(lib, monkeypatch, "Stephen King/The Regulators (1996)/The Regulators",
+                  {"album": "The Regulators", "artist": "Richard Bachman"},
+                  names=("Richard Bachman - The Regulators 01 of 67.mp3", "Richard Bachman - The Regulators 02 of 67.mp3"))
+
+    outcome = unmatched.check_item(item, library, None)
+
+    assert outcome["verdict"] == "UNSURE" and "pen name" in outcome["reason"]
+
+
+def test_a_music_album_in_the_audiobooks_folder_is_junk(lib, monkeypatch):
+    item = _audio(lib, monkeypatch, "Emily Giffin/Something Borrowed (2012)",
+                  {"album": "Something Borrowed, Something New", "artist": "John Prine", "genre": "Country"})
+
+    outcome = unmatched.check_item(item, _library(), None)
+
+    assert outcome["verdict"] == "JUNK" and "music" in outcome["reason"]
+
+
+def test_science_fiction_is_not_a_music_genre():
+    assert not unmatched._music_genre("Science Fiction & Fantasy")
+    assert not unmatched._music_genre("Audiobook")
+    assert unmatched._music_genre("Folk/Country")
+
+
+GERMAN = " ".join(["der mann und die frau ist nicht mit ein zu auf das haus ich sie"] * 60)
+
+
+class IsbnClient(FakeClient):
+    def lookup_isbn(self, isbn):
+        return {"title": "Leviathan Wakes", "author": {"authorName": "James S. A. Corey"}}
+
+
+def test_a_translation_is_another_language_edition_not_attach(lib, monkeypatch):
+    monkeypatch.setattr(unmatched, "file_isbns", lambda identifiers: ["9783641076313"])
+    library = _library(("Leviathan Wakes", "James S. A. Corey", {"language": "eng"}))
+    make_epub(lib["root"] / "James S. A. Corey/Cibola brennt (2015)/eBook/Leviathan erwacht.epub",
+              title="Expanse 01 - Leviathan erwacht", author="Corey, James S.A.",
+              body="Leviathan Wakes James S. A. Corey " + GERMAN)
+
+    outcome = unmatched.check_item(row("James S. A. Corey/Cibola brennt (2015)/eBook/Leviathan erwacht.epub"),
+                                   library, IsbnClient([]))
+
+    assert outcome["verdict"] == "OTHER_LANGUAGE" and "German edition" in outcome["reason"]
+
+    unknown = _library(("Leviathan Wakes", "James S. A. Corey", {"language": ""}))  # Bindery doesn't say
+    again = unmatched.check_item(row("James S. A. Corey/Cibola brennt (2015)/eBook/Leviathan erwacht.epub"),
+                                 unknown, IsbnClient([]))
+    assert again["verdict"] == "OTHER_LANGUAGE"
+
+
+def test_author_name_order_does_not_hide_a_library_book(lib):
+    library = _library(("Christmas Pig", "J. K. Rowling", {}))
+    make_epub(lib["root"] / "J. K. Rowling/Christmas Pig ()/UK/The Christmas Pig_UK.epub",
+              title="The Christmas Pig", author="Rowling J.K.")
+
+    outcome = unmatched.check_item(row("J. K. Rowling/Christmas Pig ()/UK/The Christmas Pig_UK.epub"), library, None)
+
+    assert (outcome["verdict"], outcome["bookId"]) == ("BELONGS", 1)
+    assert not any(e["check"] == "Folder" for e in outcome["evidence"])
+
+
+def test_files_numbered_part_of_total_are_not_missing_tracks():
+    from app.audiobook_verification import disc_track_sequence_warnings
+
+    def probes(numbers, total=35):
+        return [{"path": f"/a/James S. A. Corey - Caliban's War {n:02}-{total}.mp3"} for n in numbers]
+
+    assert disc_track_sequence_warnings(probes(range(1, 36))) == []
+    assert disc_track_sequence_warnings(probes([1, 2, 4], total=10)) == ["Parts 3, 5, 6, 7, 8, 9, 10 of 10 are missing."]
+
+
+def test_a_shortened_title_never_picks_between_two_books_of_one_author():
+    library = _library(("Chronicles: First", "Ann Author", {}), ("Chronicles: Second", "Ann Author", {}),
+                       ("Nemesis Games", "James S. A. Corey", {}))
+
+    assert library.match("Chronicles: Second", "Ann Author")["id"] == 2  # the exact title wins
+    assert library.match("Chronicles: First", "Ann Author")["id"] == 1
+    assert library.match("Chronicles", "Ann Author") is None  # fits both: no guess
+    assert library.match("05 - Nemesis Games", "James S. A. Corey")["id"] == 3  # one fit: fine
