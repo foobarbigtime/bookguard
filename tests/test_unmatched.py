@@ -272,3 +272,26 @@ def test_attach_rechecks_and_refuses_when_the_file_changed_or_is_gone(lib, monke
     with pytest.raises(unmatched.ActionError, match="no longer lists"):
         unmatched.attach(11)
     assert client.adopted == [] and unmatched.stored_checks() == []
+
+
+def test_an_ebook_type_file_inside_the_audiobooks_folder_is_found_and_judged(lib):
+    folder = lib["audio"] / "James Patterson/Die 6. Geisel ()"
+    folder.mkdir(parents=True)
+    (folder / "Die 6. Geisel.txt").write_bytes(b"x" * 1008)
+    item = {"id": 60, "kind": "file", "format": "ebook", "rootPath": "/data/audiobooks",
+            "relPath": "James Patterson/Die 6. Geisel ()/Die 6. Geisel.txt", "members": ["Die 6. Geisel.txt"]}
+
+    outcome = unmatched.check_item(item, lib["library"], None)
+
+    assert outcome["verdict"] == "JUNK" and "1008 bytes" in outcome["reason"]
+
+
+def test_overlapping_library_prefixes_use_the_most_specific_one(lib, monkeypatch):
+    monkeypatch.setattr(settings, "audiobook_bindery_prefix", "/data")
+    monkeypatch.setattr(settings, "ebook_bindery_prefix", "/data/books")
+    assert unmatched._local_path("/data/books/A/B.epub", "ebook") == str(lib["root"] / "A/B.epub")
+    assert unmatched._local_path("/data/audio/A/B.mp3", "audiobook") == str(lib["audio"] / "audio/A/B.mp3")
+
+    monkeypatch.setattr(settings, "audiobook_bindery_prefix", "/data/books")  # identical: the row's format decides
+    assert unmatched._local_path("/data/books/A/B.epub", "ebook") == str(lib["root"] / "A/B.epub")
+    assert unmatched._local_path("/data/books/A/B.mp3", "audiobook") == str(lib["audio"] / "A/B.mp3")
