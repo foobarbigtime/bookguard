@@ -325,29 +325,53 @@ verify_current_deployment() {
 }
 
 prune_rollback_tags() {
-  if ! [[ "$rollback_keep" =~ ^[0-9]+$ ]] || ((rollback_keep < 1)); then
+  if ! [[ "$rollback_keep" =~ ^[0-9]+$ ]] || ((10#$rollback_keep < 1)); then
     echo "Skipping rollback tag cleanup: BOOKGUARD_ROLLBACK_KEEP must be a whole number of 1 or more." >&2
     return 0
   fi
+  local keep=$((10#$rollback_keep))
 
-  # Timestamped tags sort oldest first; keep the newest $rollback_keep.
+  # The tag this upgrade just made is always kept and counts towards $keep.
+  # Of the others, timestamped tags sort oldest first; keep the newest.
   local tags tag
   mapfile -t tags < <(
     docker image ls --format '{{.Repository}}:{{.Tag}}' |
-      grep -E '^bookguard-bookguard:rollback-pre-upgrade-[0-9]{8}T[0-9]{6}Z$' | sort
+      grep -E '^bookguard-bookguard:rollback-pre-upgrade-[0-9]{8}T[0-9]{6}Z$' |
+      grep -vxF -- "$rollback_tag" | sort
   )
-  if ((${#tags[@]} <= rollback_keep)); then
+  local remove_count=$((${#tags[@]} - (keep - 1)))
+  if ((remove_count <= 0)); then
     return 0
+  fi
+
+  # Image IDs used by any container, running or stopped. Untagging an image
+  # that has another tag succeeds even while a container uses it, so check
+  # explicitly instead of relying on `docker image rm` refusing.
+  local in_use container_ids
+  mapfile -t container_ids < <(docker ps -aq)
+  in_use=""
+  if ((${#container_ids[@]} > 0)); then
+    in_use="$(docker inspect --format '{{.Image}}' "${container_ids[@]}" 2>/dev/null || true)"
   fi
 
   echo
   echo "===== ROLLBACK TAG CLEANUP ====="
-  for tag in "${tags[@]:0:${#tags[@]}-rollback_keep}"; do
-    # No --force: Docker refuses to remove an image a container still uses.
+  local image_id
+  for tag in "${tags[@]:0:remove_count}"; do
+    image_id="$(docker image inspect --format '{{.Id}}' "$tag" 2>/dev/null || true)"
+    if [[ -z "$image_id" ]]; then
+      echo "Kept rollback image (could not inspect it): $tag"
+      continue
+    fi
+    if grep -qxF -- "$image_id" <<<"$in_use"; then
+      echo "Kept rollback image (used by a container): $tag"
+      continue
+    fi
+    # No --force: Docker refuses anything it still considers in use.
     if docker image rm "$tag" >/dev/null 2>&1; then
       echo "Removed old rollback image: $tag"
     else
-      echo "Kept rollback image (still in use or not removable): $tag"
+      echo "Kept rollback image (Docker refused removal): $tag"
     fi
   done
 }
