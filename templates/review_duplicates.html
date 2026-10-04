@@ -29,6 +29,14 @@
       </small>
     </div>
   </div>
+  {% if status.problems %}
+  <section class="table-card unmatched-group">
+    <div class="section-title"><h2>Left alone in the last run <span class="muted">{{ status.problems|length }}</span></h2></div>
+    <ul class="unmatched-evidence">
+      {% for problem in status.problems %}<li class="evidence-warn">{{ problem }}</li>{% endfor %}
+    </ul>
+  </section>
+  {% endif %}
 
   {% for key, label, items in groups if items %}
   <section class="table-card unmatched-group duplicates-{{ key|lower }}">
@@ -41,7 +49,7 @@
       <ul class="unmatched-evidence">
         {% for entry in group.entries %}
         <li>
-          <b>“{{ entry.title }}”</b>{% if entry.year %} ({{ entry.year }}){% endif %} · Bindery book {{ entry.id }} ·
+          <b>“{{ entry.title }}”</b>{% if entry.year %} ({{ entry.year }}){% endif %}{% if entry.language %} · {{ entry.language }}{% endif %} · Bindery book {{ entry.id }} ·
           {% if entry.ebooks or entry.audiobooks or entry.other %}
             {% if entry.ebooks %}ebook: {{ entry.ebooks|join(', ') }}{% endif %}
             {% if entry.audiobooks %}{% if entry.ebooks %}; {% endif %}audiobook: {{ entry.audiobooks|join(', ') }}{% endif %}

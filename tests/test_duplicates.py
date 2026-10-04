@@ -28,7 +28,7 @@ BOOKS = [
     (13, 6, "战争 1", "", "/b/war.epub", "", 0, ""),
     (14, 6, "和平 1", "", "", "", 0, ""),
     (15, 7, "Order", "", "/b/Order.epub", "", 0, "eng"),
-    (16, 7, "The Order", "", "", "", 0, "ger"),  # another language: maybe a translation
+    (16, 7, "The Order", "", "", "", 0, "ger"),  # Bindery's label says German; the title says one book
     (17, 8, "Patron Saint of Liars", "2025", "/b/Patron.epub", "", 0, ""),
     (18, 8, "The Patron Saint of Liars", "1992", "", "", 0, ""),  # wrong year, but the same ISBN
     (19, 9, "Fang", "", "/b/Fang.epub", "", 0, ""),
@@ -38,7 +38,7 @@ BOOKS = [
     (24, 11, "The Witness", "2000", "", "", 0, ""),  # shares an ISBN with 23
     (25, 11, "Witness!", "2020", "", "", 0, ""),  # nothing ties it to 23 but the title
     (26, 12, "Gioco", "", "/b/Gioco.epub", "", 0, "ita"),
-    (27, 12, "The Gioco", "", "", "", 0, "por"),  # languages outside the short list still differ
+    (27, 12, "The Gioco", "", "", "", 0, "und"),
     (22, 10, "The Dark", "", "", "", 1, ""),  # already excluded: Bindery doesn't show it
 ]
 
@@ -119,11 +119,14 @@ def test_each_pair_is_proven_or_left_with_the_reason(bindery):
     assert found["Time to Kill"]["kind"] == "TWO_COPIES" and not found["Time to Kill"]["moves"]
     assert found["Patron Saint of Liars"]["hideable"] == [18]  # the shared ISBN outweighs the wrong year
     assert found["Patron Saint of Liars"]["proof"] == "the same ISBN or ASIN"
-    assert "the year 2014" in found["Lost"]["blocked"] and not found["Lost"]["hideable"]
-    assert "different languages" in found["Order"]["blocked"]
-    assert "different numbers (6 and 8)" in found["Fang"]["blocked"]
-    assert found["Witness"]["hideable"] == [24] and "Witness!" in found["Witness"]["blocked"]
-    assert "different languages" in found["Gioco"]["blocked"] and not found["Gioco"]["hideable"]
+    # Bindery's years and language labels are too often wrong to keep a matching title apart
+    assert (found["Lost"]["hideable"], found["Lost"]["blocked"]) == ([10], "")
+    assert (found["Order"]["hideable"], found["Order"]["blocked"]) == ([16], "")
+    assert found["Witness"]["hideable"] == [24, 25]
+    assert found["Gioco"]["hideable"] == [27]
+    assert found["Witness"]["proven"] == {24: "the same ISBN or ASIN", 25: "the same title and author"}
+    # Bindery's series places still keep two books apart
+    assert "different numbers (6 and 8)" in found["Fang"]["blocked"] and not found["Fang"]["hideable"]
 
 
 def test_an_older_editions_table_without_asin_still_works(bindery):
@@ -143,7 +146,7 @@ def test_hiding_excludes_only_a_proven_empty_entry_and_records_it(bindery):
     assert client.excluded == [2]
     action = recent_cleanup_actions(1)[0]
     assert (action["action_kind"], action["status"], action["book_id"]) == ("HIDE_DUPLICATE", "applied", 2)
-    for book_id in (1, 10, 16, 20):  # the kept entry; years apart; another language; another series place
+    for book_id in (1, 20):  # the kept entry; another place in the same series
         with pytest.raises(ActionError):
             duplicates.hide_empty(book_id, client)
     assert client.excluded == [2]
@@ -193,8 +196,8 @@ def test_fix_all_hides_and_joins_every_proven_pair_and_nothing_else(bindery):
 
     done = duplicates.fix_all(client, auto=True, poll_seconds=0)
 
-    assert done == {"hidden": 4, "merged": 1, "problems": []}
-    assert sorted(client.excluded) == [2, 4, 8, 18, 24]
+    assert done == {"hidden": 8, "merged": 1, "problems": []}
+    assert sorted(client.excluded) == [2, 4, 8, 10, 16, 18, 24, 25, 27]
     action = recent_cleanup_actions(1)[0]
     assert action["followup"].startswith("Automatically")
 
@@ -248,7 +251,7 @@ def test_duplicates_page_shows_what_is_kept_and_what_is_left_for_you(bindery):
 
     assert "data-duplicates-fix" in page and "Fixed automatically every hour" in page
     assert "will be hidden" in page and "kept" in page
-    assert "Left for you: they are in different languages" in page
+    assert "Left for you: they are different numbers (6 and 8) in the same series" in page
 
 
 def test_fixes_read_plainly_in_activity(bindery):
@@ -261,3 +264,23 @@ def test_fixes_read_plainly_in_activity(bindery):
     assert "You hid the empty extra Bindery entry" in activity
     assert "BookGuard joined" in activity and "BookGuard hid the empty extra Bindery entry" in activity
     assert client.get(f"/activity/cleanup/{action_id}").status_code == 200
+
+
+def test_bindery_language_labels_are_shown_but_never_block(bindery):
+    found = _by_title(duplicates.find_duplicates())
+    order = {e["id"]: e["language"] for e in found["Order"]["entries"]}
+    gioco = {e["id"]: e["language"] for e in found["Gioco"]["entries"]}
+
+    assert order == {15: "en", 16: "de"} and gioco == {26: "ita", 27: ""}  # "und" is unknown
+    page = _app().get("/review/duplicates").text
+    assert " · de · Bindery book 16" in page
+
+
+def test_what_the_last_run_left_alone_is_listed_with_the_reason(bindery, monkeypatch):
+    monkeypatch.setitem(duplicates.STATUS, "finishedAt", "2026-10-04T07:25:00+00:00")
+    monkeypatch.setitem(duplicates.STATUS, "problems", ["“Appeal” can't be hidden safely (no reason)."])
+
+    page = _app().get("/review/duplicates").text
+
+    assert "Left alone in the last run" in page
+    assert "“Appeal” can&#39;t be hidden safely" in page
