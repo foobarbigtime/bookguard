@@ -16,6 +16,7 @@ PAGES = {
     "index.html": ("review", "scan-results"),
     "triage.html": ("review", "triage"),
     "repairs.html": ("review", "repairs"),
+    "review_unmatched.html": ("review", "unmatched"),
     "activity.html": ("activity", ""),
     "history_detail.html": ("activity", ""),
     "system.html": ("system", "status"),
@@ -56,7 +57,7 @@ def test_settings_page_marks_only_the_gear_as_current():
 def test_older_review_pages_stay_reachable_as_tabs_until_replaced():
     review = header("review", "books")
     tabs = re.findall(r'<nav class="tabs".*?</nav>', review, re.S)[0]
-    assert re.findall(r'href="([^"]+)"', tabs) == ["/review", "/review/triage", "/repairs", "/review/scan-results"]
+    assert re.findall(r'href="([^"]+)"', tabs) == ["/review", "/review/triage", "/repairs", "/review/unmatched", "/review/scan-results"]
     assert 'href="/review" class="active" aria-current="page"' in review
     assert 'class="subbar"' not in header("home")
     assert 'class="subbar"' not in header("activity")

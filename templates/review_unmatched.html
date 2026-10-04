@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard Unmatched</title>
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
+</head>
+<body>
+{% from "_layout.html" import site_header %}
+{{ site_header("review", "unmatched", version) }}
+
+<main class="unmatched-main">
+  <div class="unmatched-header">
+    <div>
+      <h1>Unmatched in Bindery</h1>
+      <p class="muted">Files in your library folders that Bindery could not place. BookGuard checks each one and says what it is. Nothing moves unless you choose an action.</p>
+    </div>
+    <div class="unmatched-run">
+      <button type="button" class="primary" data-unmatched-check{% if status.running %} disabled{% endif %}>{{ 'Checking…' if status.running else 'Check now' }}</button>
+      <small class="muted">
+        {% if status.running %}{{ status.checked }} of {{ status.total }} checked
+        {% elif status.error %}Last check failed: {{ status.error }}
+        {% elif total %}{{ total }} files checked{% else %}Not checked yet{% endif %}
+      </small>
+    </div>
+  </div>
+
+  {% for key, label, items in groups if items %}
+  <section class="table-card unmatched-group unmatched-{{ key|lower }}">
+    <div class="section-title"><h2>{{ label }} <span class="muted">{{ items|length }}</span></h2></div>
+    {% for item in items %}
+    <article class="unmatched-item">
+      <div class="unmatched-item-head">
+        <div>
+          <strong>{{ item.name }}</strong>
+          <small class="muted">{{ item.format }} · {{ item.rel_path }}</small>
+        </div>
+        {% if item.verdict == 'BELONGS' and allow_actions %}
+          <button type="button" class="primary" data-unmatched-attach="{{ item.row_id }}" data-book="{{ item.book_title }}">Attach to “{{ item.book_title }}”</button>
+        {% endif %}
+      </div>
+      <p>{{ item.reason }}</p>
+      {% if item.evidence %}
+      <details>
+        <summary>How BookGuard knows</summary>
+        <ul class="unmatched-evidence">
+          {% for line in item.evidence %}
+          <li class="evidence-{{ line.result }}"><b>{{ line.check }}:</b> {{ line.detail }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </section>
+  {% endfor %}
+  {% if not total %}<p class="empty">Nothing checked yet. Click “Check now”.</p>{% endif %}
+</main>
+<script src="{{ static_url('unmatched.js') }}" defer></script>
+</body>
+</html>

@@ -165,14 +165,20 @@ class BinderyClient:
         """Turn Bindery's monitoring of one book on or off; nothing else changes."""
         return self._request("PUT", f"/book/{int(book_id)}", json={"monitored": bool(monitored)})
 
-    def list_unmatched(self, *, search: str = "", file_format: str | None = None) -> dict[str, Any]:
+    def list_unmatched(
+        self, *, search: str = "", file_format: str | None = None, offset: int = 0
+    ) -> dict[str, Any]:
         """Files Bindery's library scan found but could not match to a book."""
-        params: dict[str, Any] = {"limit": 250}
+        params: dict[str, Any] = {"limit": 250, "offset": int(offset)}
         if search:
             params["search"] = search
         if file_format:
             params["format"] = file_format
         return self._request("GET", "/library/unmatched", params=params)
+
+    def lookup_isbn(self, isbn: str) -> dict[str, Any]:
+        """Bindery's metadata lookup for one ISBN (title, author, and libraryBookId when owned)."""
+        return self._request("GET", "/book/lookup", params={"isbn": str(isbn)})
 
     def adopt_unmatched(self, row_id: int, book_id: int) -> dict[str, Any]:
         """Register one unmatched row's files in place against an existing book."""

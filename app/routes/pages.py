@@ -17,6 +17,7 @@ from ..library_review import GROUPS, group_counts, open_review_items
 from ..activity import RESULTS, WHAT, WHO, activity_events, activity_totals, filter_events
 from ..history import operation_detail
 from ..put_back import put_back_preview
+from ..unmatched import VERDICTS, check_status, stored_checks
 from ..db import (
     latest_counts,
     latest_reason_counts,
@@ -51,6 +52,24 @@ def home_page(request: Request):
         request=request,
         name="home.html",
         context={"home": home_summary(), "version": __version__},
+    )
+
+
+@router.get("/review/unmatched", response_class=HTMLResponse)
+def unmatched_page(request: Request):
+    items = stored_checks()
+    order = ["JUNK", "BELONGS", "NOT_IN_LIBRARY", "UNSURE"]
+    groups = [(key, VERDICTS[key], [i for i in items if i["verdict"] == key]) for key in order]
+    return templates.TemplateResponse(
+        request=request,
+        name="review_unmatched.html",
+        context={
+            "groups": groups,
+            "total": len(items),
+            "status": check_status(),
+            "allow_actions": settings.allow_actions,
+            "version": __version__,
+        },
     )
 
 
