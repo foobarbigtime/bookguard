@@ -107,7 +107,7 @@ def _minimal_home(attention_groups):
         "now": {"active": False, "label": "Nothing is running", "lastScan": None},
         "automation": {"mode": "manual", "sentence": "", "allowed": 0, "lastObserve": ""},
         "system": [],
-        "recent": {"days": 7, "totals": {"added": 0, "quarantined": 0, "blocked": 0}, "events": []},
+        "recent": {"days": 7, "totals": {"imports": 0, "quarantined": 0, "duplicates": 0}, "events": []},
     }
 
 

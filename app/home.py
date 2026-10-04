@@ -294,16 +294,31 @@ def _system(malware: dict[str, Any], gates: dict[str, Any], scan: dict | None) -
     ]
 
 
+def _imports_checked_since(since: str) -> int:
+    """New Bindery imports BookGuard checked in the window (none before the table exists)."""
+    with local_conn() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_checks'"
+        ).fetchone()
+        if not exists:
+            return 0
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM import_checks WHERE checked_at >= ?", (since,)
+        ).fetchone()[0])
+
+
 def _recent() -> dict[str, Any]:
     events = operation_history(500)["items"]
     since = (datetime.now(timezone.utc) - timedelta(days=RECENT_DAYS)).isoformat()
     window = [event for event in events if str(event.get("timestamp") or "") >= since]
     totals = {
-        "added": sum(1 for e in window if e["kind"] == "admission" and e["status"] == "registered"),
+        "imports": _imports_checked_since(since),
         "quarantined": sum(
             1 for e in window if e["kind"] == "cleanup" and e["kindLabel"] == "Quarantine" and e["status"] == "applied"
         ),
-        "blocked": sum(1 for e in window if e["kind"] == "recovery_plan" and e["status"] == "blocked"),
+        "duplicates": sum(
+            1 for e in window if e["kind"] == "cleanup" and e["kindLabel"] == "Hide duplicate" and e["status"] == "applied"
+        ),
     }
     return {
         "days": RECENT_DAYS,
