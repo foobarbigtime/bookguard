@@ -21,7 +21,6 @@ from .config import ConfigurationError, load_automation_settings, settings
 from .db import latest_counts, latest_scan, local_conn
 from .diagnostics import _malware_report
 from .health import health_checks
-from .history import operation_history
 from .scanner import scan_is_running
 from .import_watch import watcher as import_watcher
 from .library_review import GROUP_LABELS, group_counts, open_review_items
@@ -307,18 +306,31 @@ def _imports_checked_since(since: str) -> int:
         ).fetchone()[0])
 
 
+def _cleanups_applied_since(since: str) -> dict[str, int]:
+    """Applied quarantines and hidden duplicate entries in the window."""
+    with local_conn() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cleanup_actions'"
+        ).fetchone()
+        if not exists:
+            return {"quarantined": 0, "duplicates": 0}
+        row = conn.execute(
+            """SELECT
+                 SUM(CASE WHEN UPPER(action_kind) LIKE '%QUARANTINE%' THEN 1 ELSE 0 END),
+                 SUM(CASE WHEN UPPER(action_kind) = 'HIDE_DUPLICATE' THEN 1 ELSE 0 END)
+               FROM cleanup_actions
+               WHERE status = 'applied' AND COALESCE(completed_at, created_at) >= ?""",
+            (since,),
+        ).fetchone()
+    return {"quarantined": int(row[0] or 0), "duplicates": int(row[1] or 0)}
+
+
 def _recent() -> dict[str, Any]:
-    events = operation_history(500)["items"]
     since = (datetime.now(timezone.utc) - timedelta(days=RECENT_DAYS)).isoformat()
-    window = [event for event in events if str(event.get("timestamp") or "") >= since]
+    # Counted straight from the journals so a busy week is never cut off by a feed limit.
     totals = {
         "imports": _imports_checked_since(since),
-        "quarantined": sum(
-            1 for e in window if e["kind"] == "cleanup" and e["kindLabel"] == "Quarantine" and e["status"] == "applied"
-        ),
-        "duplicates": sum(
-            1 for e in window if e["kind"] == "cleanup" and e["kindLabel"] == "Hide duplicate" and e["status"] == "applied"
-        ),
+        **_cleanups_applied_since(since),
     }
     return {
         "days": RECENT_DAYS,
@@ -352,7 +364,7 @@ def home_summary() -> dict[str, Any]:
         + _missing_group()
         + _undecided_group(counts, unverified)
     )
-    recent = _safely(_recent, {"days": RECENT_DAYS, "totals": {"added": 0, "quarantined": 0, "blocked": 0}, "events": []},
+    recent = _safely(_recent, {"days": RECENT_DAYS, "totals": {"imports": 0, "quarantined": 0, "duplicates": 0}, "events": []},
                      failures, "the activity history")
     health = _health(scan, malware, automation_error)
     if failures:

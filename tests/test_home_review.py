@@ -330,3 +330,21 @@ def test_home_has_no_tiles_for_removed_features():
     page = Path("templates/home.html").read_text(encoding="utf-8")
     assert "automatic steps blocked" not in page
     assert "books added to the library" not in page
+
+
+def test_recent_duplicate_count_is_not_cut_off_by_a_busy_week(library):
+    row = result_by_id(library["Reviewed already"])
+    finish_cleanup_action(create_cleanup_action(row, "HIDE_DUPLICATE"), "applied")
+    for _ in range(510):  # newer records than the 500-item activity feed holds
+        finish_cleanup_action(create_cleanup_action(row, "TRIAGE_DETACH"), "applied")
+
+    assert home._recent()["totals"]["duplicates"] == 1
+
+
+def test_recent_fallback_has_the_same_tiles(library, monkeypatch):
+    def broken():
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(home, "_recent", broken)
+
+    assert set(home.home_summary()["recent"]["totals"]) == {"imports", "quarantined", "duplicates"}
