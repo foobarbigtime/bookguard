@@ -14,6 +14,7 @@ from ..catalogue_move import (
 from ..db import latest_results, latest_scan, result_by_id
 from ..put_back import put_back
 from ..replace import triage_replace
+from ..unmatched import attach as attach_unmatched, check_status, start_check
 from ..scanner import start_scan
 from ..services.dashboard import latest_missing_cleanup
 from ..verifier import verify_result
@@ -163,6 +164,26 @@ async def api_triage_quarantine(result_id: int, request: Request):
         "destination": destination,
         "message": f"Item detached from Bindery and moved to {destination}",
     }
+
+
+@router.post("/unmatched/check", status_code=202)
+def api_unmatched_check(payload: ConfirmationRequest):
+    """Check Bindery's unmatched files in the background (read-only)."""
+    require_confirmation(payload, "CHECK_UNMATCHED")
+    started = start_check()
+    return {"ok": True, "started": started, "status": check_status(),
+            "message": "Checking Bindery's unmatched files." if started else "A check is already running."}
+
+
+@router.post("/unmatched/{row_id}/attach")
+def api_unmatched_attach(row_id: int, payload: ConfirmationRequest):
+    """Adopt one proven unmatched file to its book through Bindery."""
+    require_confirmation(payload, "ATTACH")
+    try:
+        message = attach_unmatched(row_id)
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True, "message": message}
 
 
 @router.post("/triage/{result_id}/replace")

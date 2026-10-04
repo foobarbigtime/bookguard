@@ -481,3 +481,12 @@ main > .notice { margin: 0 0 1rem; }
 @media (max-width: 950px) { .system-layout { grid-template-columns: 1fr; } }
 .card .task-table td strong { font-size: .92rem; margin: 0; }
 .task-table td button { white-space: nowrap; }
+.unmatched-main { max-width: 1100px; margin: 0 auto; padding: 1rem 16px 3rem; display: grid; gap: 1rem; }
+.unmatched-header { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: flex-start; }
+.unmatched-run { display: grid; gap: .3rem; justify-items: end; }
+.unmatched-item { padding: .8rem 1.1rem; border-top: 1px solid var(--border); display: grid; gap: .35rem; }
+.unmatched-item-head { display: flex; flex-wrap: wrap; gap: .6rem; justify-content: space-between; align-items: flex-start; }
+.unmatched-item-head small { display: block; overflow-wrap: anywhere; }
+.unmatched-evidence { margin: .4rem 0 0 1.1rem; display: grid; gap: .2rem; font-size: .88rem; }
+.unmatched-evidence .evidence-fail { color: #fca5a5; }
+.unmatched-evidence .evidence-warn { color: #fcd34d; }
