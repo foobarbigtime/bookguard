@@ -178,16 +178,22 @@ def _legacy_db(tmp_path, monkeypatch):
 
 def test_a_grab_bindery_refused_left_nothing_and_is_not_attention(tmp_path, monkeypatch):
     conn = _legacy_db(tmp_path, monkeypatch)
+    refused = 'Bindery grab failed: Bindery POST /queue/grab returned HTTP 409: {"error":"already grabbed"}'
     conn.executemany(
         "INSERT INTO ebook_acquisitions(id, result_id, status, queue_id, staged_relative_path, admission_id, error, created_at, updated_at) "
-        "VALUES (?, NULL, 'failed', ?, NULL, NULL, 'Bindery grab failed: HTTP 409', 't', 't')",
-        [(1, None), (2, 55)],
+        "VALUES (?, NULL, 'failed', ?, NULL, NULL, ?, 't', 't')",
+        [
+            (1, None, refused),
+            (2, 55, refused),  # Bindery queued it: a download may be left
+            (3, None, "Bindery grab failed: Bindery request failed: read timed out"),  # may have reached Bindery
+            (4, None, "Bindery grab failed: Bindery POST /queue/grab returned HTTP 502: bad gateway"),
+        ],
     )
     conn.commit()
 
     ids = {item["id"] for item in attention.attention_snapshot()["items"] if item["kind"] == "acquisition"}
 
-    assert ids == {2}  # the one Bindery queued may have left a download behind
+    assert ids == {2, 3, 4}
 
 
 def test_a_failed_admission_counts_only_while_its_library_file_exists(tmp_path, monkeypatch):
@@ -206,7 +212,10 @@ def test_a_failed_admission_counts_only_while_its_library_file_exists(tmp_path, 
     def shown():
         return [item["id"] for item in attention.attention_snapshot()["items"] if item["kind"] == "admission"]
 
-    assert shown() == []  # no file at the path
+    assert shown() == [1]  # the library is empty, as if its mount were missing: prove nothing
+
+    (tmp_path / "books" / "Other Author").mkdir()
+    assert shown() == []  # the library is there and has no file at the path
 
     local = tmp_path / "books" / "Stephen King" / "Sometimes They Come Back (1974)" / "Sometimes They Come Back - Stephen King.epub"
     local.parent.mkdir(parents=True)

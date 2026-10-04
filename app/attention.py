@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter
+import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +65,18 @@ _LEGACY_ATTENTION = {
 }
 
 
+_REFUSED_GRAB = re.compile(r"Bindery grab failed: Bindery POST /queue/grab returned HTTP 4\d\d\b")
+
+
+def _library_readable() -> bool:
+    """A missing file is evidence only when the ebook library itself is there."""
+    try:
+        with os.scandir(settings.ebook_root) as entries:
+            return next(entries, None) is not None
+    except OSError:
+        return False
+
+
 def _column(row, name: str):
     return row[name] if name in row.keys() else None
 
@@ -70,16 +84,19 @@ def _column(row, name: str):
 def _left_nothing_behind(kind: str, row) -> bool:
     """True only when the record proves the failed step changed nothing.
 
-    A grab Bindery refused has no queue item, staged file or admission. An
-    admission that never recorded a publication left nothing only if the
-    library has no file at its path, or the file there is not the copy it
-    verified (Bindery or a person put it there). Anything else stays visible.
+    A grab counts only when Bindery answered with a refusal (HTTP 4xx) and
+    nothing was queued, staged or admitted; a timeout or lost reply may still
+    have queued a download. An admission that never recorded a publication
+    left nothing only if the library is readable and has no file at its path,
+    or the file there is not the copy it verified (Bindery or a person put it
+    there). Anything else stays visible.
     """
     if str(row["status"] or "").casefold() != "failed":
         return False
     if kind == "acquisition":
         return (
-            _column(row, "queue_id") is None
+            bool(_REFUSED_GRAB.search(str(_column(row, "error") or "")))
+            and _column(row, "queue_id") is None
             and not _column(row, "staged_relative_path")
             and _column(row, "admission_id") is None
         )
@@ -93,7 +110,7 @@ def _left_nothing_behind(kind: str, row) -> bool:
             return False
         local = Path(settings.ebook_root) / relative
         if not (local.exists() or local.is_symlink()):
-            return True
+            return _library_readable()
         verified = str(_column(row, "staged_sha256") or "")
         if not verified or local.is_symlink() or not local.is_file():
             return False
