@@ -2,6 +2,11 @@
 
 Status: design, not yet implemented.
 
+The native MOBI/AZW3 reader and ISBN evidence prerequisites described below
+are implemented. Propose mode, its optional reasoning layer, and the autonomy
+scorecard remain a design proposal. See the [user guide](../user-guide.md) and
+[architecture guide](../architecture.md) for current behavior.
+
 ## Goal
 
 BookGuard should work out what to do about each problem it finds, explain
@@ -46,7 +51,8 @@ read yet.
 
 ### 1. Better evidence first
 
-Propose mode is only as good as its inputs. Two evidence PRs come first:
+Propose mode is only as good as its inputs. The two evidence prerequisites
+originally planned here have shipped:
 
 - **Native MOBI/AZW3 reading:** EXTH metadata (title, author, ISBN,
   language, publisher) plus PalmDOC and HUFF/CDIC text decoding, with the
