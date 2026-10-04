@@ -517,18 +517,49 @@ def test_more_real_folder_and_tag_shapes_belong_to_their_book(lib, monkeypatch, 
     assert (outcome["verdict"], outcome.get("bookId")) == ("BELONGS", 1), outcome["reason"]
 
 
-def test_a_series_name_and_number_is_not_a_book_title(lib, monkeypatch):
+def test_a_series_name_and_number_finds_the_book_at_that_place(lib, monkeypatch):
     item = _audio(lib, monkeypatch, "Martha Wells/Murderbot Diaries ()/Murderbot Diaries 05",
                   {"album": "Murderbot Diaries 05", "artist": "Martha Wells"})
+    placed = _library(("Network Effect", "Martha Wells", {"series": [("murderbot diaries", "5")]}),
+                      ("All Systems Red", "Martha Wells", {"series": [("murderbot diaries", "1")]}))
+    unplaced = _library(("Network Effect", "Martha Wells", {"series": [("murderbot diaries", "")]}))
 
-    outcome = unmatched.check_item(item, _library(("Network Effect", "Martha Wells", {})), None)
+    assert unmatched.check_item(item, placed, None)["bookId"] == 1
+    unsure = unmatched.check_item(item, unplaced, None)
+    assert unsure["verdict"] == "UNSURE" and "series name and number" in unsure["reason"]
 
-    assert outcome["verdict"] == "UNSURE" and "series name and number" in outcome["reason"]
+
+def test_a_title_ending_in_a_number_is_not_a_series_unless_bindery_says_so(lib, monkeypatch):
+    item = _audio(lib, monkeypatch, "Colleen Hoover/November 9", {"album": "November 9", "artist": "Colleen Hoover"})
+
+    outcome = unmatched.check_item(item, _library(("Ugly Love", "Colleen Hoover", {})), None)
+
+    assert outcome["verdict"] == "NOT_IN_LIBRARY"
+
+
+def test_a_trailing_number_never_makes_a_title_another_book():
+    library = _library(("Alpha", "Ann Author", {}))
+    assert library.match("Alpha 2", "Ann Author") is None
+
+
+def test_an_author_inside_a_folder_title_is_kept(lib):
+    item = {"kind": "folder", "relPath": "Mark Twain/Autobiography of Mark Twain"}
+    assert unmatched._folder_title(item, "Mark Twain") == "Autobiography of Mark Twain"
+    item = {"kind": "folder", "relPath": "Cressida Cowell/Never and Forever - Cressida Cowell"}
+    assert unmatched._folder_title(item, "Cressida Cowell") == "Never and Forever"
+
+
+def test_ebook_metadata_against_the_folder_is_not_called_a_narrator(lib):
+    make_epub(lib["root"] / "James Patterson/X/Redemption Road.epub", title="Redemption Road", author="John Hart")
+
+    outcome = unmatched.check_item(row("James Patterson/X/Redemption Road.epub"), _library(), None)
+
+    assert outcome["verdict"] == "NOT_IN_LIBRARY" and "narrator" not in outcome["reason"]
 
 
 @pytest.mark.parametrize("genre, music", [
-    ("Progressive Rock", True), ("Classic Country", True), ("Folk Tales", False), ("Pop Culture History", False),
-    ("Young Adult/Fantasy", False), ("Speech", False),
+    ("Progressive Rock", True), ("Classic Country", True), ("Folk Tales", False), ("Folk Horror", False),
+    ("Rock Climbing", False), ("Pop Psychology", False), ("Young Adult/Fantasy", False), ("Speech", False),
 ])
 def test_music_genres_by_their_words(genre, music):
     assert unmatched._music_genre(genre) is music
