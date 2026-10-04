@@ -8,7 +8,7 @@ import uuid
 from .audiobook_verification import AudiobookVerificationCancelled, verify_audiobook
 from .config import settings
 from .db import add_result, create_scan, finish_scan, load_bindery_files, update_scan_progress
-from .language_detection import ebook_languages, explicit_non_english, normalize_language
+from .language_detection import LANGUAGE_NAMES, ebook_languages, normalize_language, outside_library_languages
 from .matcher import classify_audio, classify_ebook
 from .media_discovery import representative_items, resolve_ebook_target
 from .metadata import audio_metadata_summary, ebook_metadata
@@ -78,14 +78,14 @@ def _raise_if_immediate_stop() -> None:
 
 
 def _language_override(base: dict, language_result: dict) -> dict:
-    non_english = explicit_non_english(language_result)
-    if not non_english:
+    other = outside_library_languages(language_result)
+    if not other:
         return base
 
-    labels = ", ".join(non_english)
+    labels = ", ".join(LANGUAGE_NAMES.get(code, code) for code in other)
     message = (
-        f"Embedded metadata explicitly identifies non-English language: {labels}. "
-        "Flagged for review/removal."
+        f"The file declares {labels}, which is not one of your library languages "
+        "(Settings → Scanning). Flagged for removal."
     )
     metadata = dict(base.get("metadata") or {})
     policy_flags = {

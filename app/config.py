@@ -123,6 +123,13 @@ def _lines_env(name: str, default: list[str]) -> list[str]:
     return [line.strip() for line in raw.splitlines() if line.strip()]
 
 
+def _language_list(raw: object) -> list[str]:
+    """Normalised language codes; an entry that names no language is dropped."""
+    from .language_detection import parse_language_list
+
+    return parse_language_list(raw)[0]
+
+
 def _clean_lines(raw: object) -> list[str]:
     if isinstance(raw, str):
         parts = raw.replace("\r", "\n").split("\n")
@@ -342,6 +349,12 @@ class Settings:
         2 * 1024 * 1024 * 1024,
     )
 
+    # Languages kept in the library. A file declaring any other language is
+    # flagged for removal; an empty list keeps every language.
+    library_languages: list[str] = field(
+        default_factory=lambda: _language_list(os.getenv("BOOKGUARD_LIBRARY_LANGUAGES", "en"))
+    )
+
     # Metadata repair. Preview is intentionally the default; it never writes files.
     metadata_repair_mode: str = field(
         default_factory=lambda: _repair_mode(os.getenv("BOOKGUARD_METADATA_REPAIR_MODE", "preview"))
@@ -428,6 +441,14 @@ class Settings:
                 raw = raw.replace(",", "\n")
             self.music_genres = _clean_lines(raw)
 
+        if "library_languages" in values:
+            from .language_detection import parse_language_list
+
+            codes, unknown = parse_language_list(values["library_languages"])
+            # A typo must never turn into "keep every language": keep the old value.
+            if not unknown:
+                self.library_languages = codes
+
         if "author_aliases" in values:
             self.author_aliases = _clean_lines(values["author_aliases"])
 
@@ -461,6 +482,7 @@ class Settings:
             "strong_mismatch_consensus_percent": self.strong_mismatch_consensus_percent,
             "music_genres": list(self.music_genres),
             "author_aliases": list(self.author_aliases),
+            "library_languages": list(self.library_languages),
             "verification_enabled": self.verification_enabled,
             "verification_max_text_chars": self.verification_max_text_chars,
             "verification_pdf_pages": self.verification_pdf_pages,

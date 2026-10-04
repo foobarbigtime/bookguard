@@ -16,6 +16,7 @@
     wrong: (item) => item.contains
       ? `This file contains ${item.contains}, not “${item.title}”.`
       : `This file is not “${item.title}”.`,
+    language: (item) => `This copy is in ${item.language.label}, which is not one of your library languages.`,
     metadata: () => "This is the right book, but the title or author stored inside the file is wrong.",
     verified: () => "This file is the right book.",
     undecided: (item) => item.verified
@@ -162,6 +163,7 @@
     const more = [];
     if (item.group === "move") main.push(moveAction(item), quarantine);
     else if (item.group === "wrong") main.push(guarded ? replaceAction(item) : null, quarantine);
+    else if (item.group === "language") main.push(guarded ? replaceAction(item) : null, quarantine);
     else if (item.group === "duplicate" || item.group === "unsafe") main.push(quarantine);
     else if (item.group === "metadata") { main.push(metadataFix(item)); more.push(quarantine); }
     else more.push(quarantine);
@@ -211,7 +213,7 @@
       section("What's wrong", el("p", { text: (WHAT_IS_WRONG[item.group] || WHAT_IS_WRONG.undecided)(item) })),
       section("How BookGuard knows", evidence),
       section("Suggestion",
-        language.nonEnglish ? el("p", { class: "lang-warning", text: `This book is in ${language.label}. If you only keep English books, quarantine it instead of keeping or moving it.` }) : null,
+        language.otherLanguage && item.group !== "language" ? el("p", { class: "lang-warning", text: `This book is in ${language.label}, which is not one of your library languages.` }) : null,
         el("p", { text: item.suggestion }),
         el("div", { class: "detail-actions" }, ...actions.main),
         actions.more.length ? el("details", { class: "detail-section more-actions" },

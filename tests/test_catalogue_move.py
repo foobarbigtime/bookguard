@@ -224,5 +224,5 @@ def test_preview_shows_the_file_language_without_blocking_the_move(world):
     preview = move_preview(swedish, proven(), FakeBindery(world))
     assert preview["eligible"] is True
     assert preview["language"]["label"] == "Swedish"
-    assert preview["language"]["nonEnglish"] is True
+    assert preview["language"]["otherLanguage"] is True
     assert move_preview(RESULT, proven(), FakeBindery(world))["language"]["declared"] is False

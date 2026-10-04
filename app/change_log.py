@@ -20,6 +20,7 @@ from .db import local_conn, utc_now
 SETTING_LABELS = {
     "allow_actions": "Bindery actions",
     "author_aliases": "Pen names",
+    "library_languages": "Library languages",
     "bindery_api_key_set": "Bindery API key",
     "bindery_db": "Bindery database path",
     "bindery_url": "Bindery URL",

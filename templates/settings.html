@@ -63,6 +63,8 @@
           <h4 class="settings-group">New imports</h4>
           <label class="check-field"><input name="watch_imports" type="checkbox" {% if settings.watch_imports %}checked{% endif %}><span>Check each new Bindery import</span></label>
           <label class="field"><span>Look for new imports every (minutes)</span><input name="watch_imports_minutes" type="number" min="1" max="60" value="{{ settings.watch_imports_minutes }}"><small>New files are scanned and verified soon after Bindery imports them.</small></label>
+          <h4 class="settings-group">Languages</h4>
+          <label class="field span-2"><span>Library languages</span><input name="library_languages" type="text" value="{{ settings.library_languages|join(', ') }}" placeholder="Leave empty to keep every language"><small>Books whose file declares any other language are flagged for removal and offered Replace. Separate with commas, as names or codes: <code>English</code> or <code>en, nl</code>. Leave empty to keep every language. Takes effect in Review now; run a scan to flag books that passed before.</small></label>
           <h4 class="settings-group">Advanced</h4>
           <label class="field"><span>Audio samples per association</span><input name="sample_files" type="number" min="1" max="50" value="{{ settings.sample_files }}"><small>Samples are spread across the audiobook.</small></label>
           <label class="field"><span>Progress update interval</span><input name="progress_every" type="number" min="1" max="100" value="{{ settings.progress_every }}"></label>

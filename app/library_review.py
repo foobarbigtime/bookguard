@@ -26,6 +26,7 @@ GROUPS: list[tuple[str, str, str]] = [
     ("move", "Filed under the wrong book", "amber"),
     ("duplicate", "Copies of other books", "amber"),
     ("wrong", "Contain the wrong file", "amber"),
+    ("language", "Not in your library languages", "amber"),
     ("metadata", "Right book, wrong details", "blue"),
     ("undecided", "Undecided", "grey"),
     ("verified", "Checked and correct", "green"),
@@ -124,7 +125,7 @@ def _contains(row: dict, verification: dict | None) -> str:
     return f"{title}{_by(author)}" if title else ""
 
 
-def _suggestion(group: str, verification: dict | None) -> str:
+def _suggestion(group: str, verification: dict | None, language: dict | None = None) -> str:
     evidence = (verification or {}).get("evidence") or {}
     catalogue = evidence.get("catalogue") or {}
     other = str(catalogue.get("title") or "the other book")
@@ -143,6 +144,12 @@ def _suggestion(group: str, verification: dict | None) -> str:
         if (verification or {}).get("verdict") == "WRONG_MEDIA_TYPE":
             return "The file is the wrong kind of media for this entry. Replace it with the right book."
         return "Replace it with the right book."
+    if group == "language":
+        label = str((language or {}).get("label") or "another language")
+        return (f"This copy is in {label}, which is not one of your library languages. "
+                "Replace it: BookGuard quarantines it (nothing is deleted) and Bindery searches for another copy, "
+                "so set Bindery's preferred language too. If the book's own title in Bindery is the "
+                f"{label} title, it is a {label} edition: remove it in Bindery instead.")
     if group == "metadata":
         return "Fix the book’s details. BookGuard checks the file again before writing anything."
     if group == "verified":
@@ -154,6 +161,11 @@ def _suggestion(group: str, verification: dict | None) -> str:
 
 def review_item(row: dict, verification: dict | None) -> dict[str, Any]:
     group = _group_for(verification)
+    language = declared_language(row)
+    # A file in a language the user does not keep is flagged for removal, unless
+    # it already has a more specific problem (unsafe, wrong book, copy, misfiled).
+    if language["otherLanguage"] and group in {"verified", "metadata", "undecided"}:
+        group = "language"
     evidence = (verification or {}).get("evidence") or {}
     return {
         "id": int(row["id"]),
@@ -165,12 +177,12 @@ def review_item(row: dict, verification: dict | None) -> dict[str, Any]:
         "reasonCode": str(row.get("reason_code") or "UNKNOWN"),
         "riskScore": int(row.get("risk_score") or 0),
         "storedPath": str(row.get("stored_path") or ""),
-        "language": declared_language(row),
+        "language": language,
         "scanReasons": list(row.get("reasons") or []),
         "group": group,
         "groupLabel": GROUP_LABELS[group],
         "contains": _contains(row, verification),
-        "suggestion": _suggestion(group, verification),
+        "suggestion": _suggestion(group, verification, language),
         "verified": verification is not None,
         "verificationId": int((verification or {}).get("id") or 0),
         "verdict": str((verification or {}).get("verdict") or ""),

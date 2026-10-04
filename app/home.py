@@ -61,6 +61,11 @@ _VERIFICATION_COPY: dict[str, dict[str, Any]] = {
         "done": "verified each file. They can be replaced with the right book.",
         "action": "Review the list",
     },
+    "language": {
+        "title": ("1 book is not in your library languages", "{n} books are not in your library languages"),
+        "done": "read the language each file declares. You can change your languages in Settings → Scanning.",
+        "action": "Review the list",
+    },
     "metadata": {
         "title": ("1 book has the right file but wrong details", "{n} books have the right file but wrong details"),
         "done": "confirmed each file is the right book. Only the title or author stored in the file is wrong.",

@@ -103,3 +103,18 @@ def test_save_settings_never_stores_tika_url(tmp_path, monkeypatch):
     persisted = load_persisted_settings()
     assert persisted["bindery_url"] == "http://bindery:8787"
     assert "verification_tika_url" not in persisted
+
+
+def test_library_languages_save_and_reload(tmp_path, monkeypatch):
+    from app.config import Settings, settings
+    from app.db import init_local_db, load_persisted_settings, save_persisted_settings
+
+    monkeypatch.setattr(settings, "config_dir", str(tmp_path))
+    init_local_db()
+    configured = Settings()
+    configured.apply({"library_languages": "English, Dutch"})
+    save_persisted_settings(configured.persistable_dict())
+
+    reloaded = Settings()
+    reloaded.apply(load_persisted_settings())
+    assert reloaded.library_languages == ["en", "nl"]
