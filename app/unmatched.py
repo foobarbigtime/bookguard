@@ -87,6 +87,8 @@ MUSIC_GENRES = {
     "r b", "rnb", "soul", "metal", "punk", "electronic", "dance", "reggae", "alternative", "indie", "americana",
     "bluegrass", "gospel", "singer songwriter", "latin", "disco", "funk", "house", "techno", "ambient",
     "new age", "easy listening", "oldies", "alt country", "country folk", "folk rock", "soft rock",
+    "progressive rock", "classic rock", "hard rock", "pop rock", "indie rock", "country rock", "punk rock",
+    "classic country", "rock n roll", "rock and roll", "heavy metal", "smooth jazz", "rhythm and blues",
 }
 
 _LOCK = threading.Lock()
@@ -180,7 +182,7 @@ def _name_words(name: str) -> list[str]:
 def _surname(author: str) -> str:
     """The first author's family name, in any of the usual orders:
     "J.K. Rowling", "Rowling J.K.", "Corey, James S.A." and "Patterson, James"."""
-    first = re.split(r";|&| and ", str(author or ""))[0]
+    first = re.split(r";|&|/| and ", str(author or ""))[0]
     parts = [p for p in first.split(",") if p.strip()]
     if not parts:
         return ""
@@ -189,8 +191,9 @@ def _surname(author: str) -> str:
 
 
 GENERIC_FOLDER = re.compile(
-    r"^(e-?books?|audio-?books?|audio|m4b|mp3|epub|pdf|mobi|us|uk|au|ca|unabridged|abridged|edition\s*\d*"
-    r"|(cd|dis[ck]|part)\s*\d+|.*\brecovered\b.*|alternate edition.*)$",
+    r"^(e-?books?|audio-?books?|_?audio|m4b|mp3|epub|pdf|mobi|us|uk|au|ca|unabridged|abridged|editions?\s*\d*"
+    r"|(cd|dis[ck]|part)\s*\d+|.*\brecovered\b.*|(primary|alternate|alternative|original|other|first|second)\s+editions?.*"
+    r"|\S*~\S*)$",  # "abook.ws~JsPn-TeBkBk-2017": a release tag, not a title
     re.IGNORECASE,
 )
 _SERIES_PREFIXES = (
@@ -202,10 +205,12 @@ _SERIES_PREFIXES = (
 _EDITION_SUFFIX = re.compile(r"[\s_-]+(uk|us|unabridged|abridged)$", re.IGNORECASE)
 
 
-def _title_keys(title: str) -> set[str]:
+def _title_keys(title: str, *, numbered: bool = False) -> set[str]:
     """Every fair reading of a title: as given, before a ": Series, Book N" subtitle, the
     last " - " part, and each without series or number prefixes ("05 - ", "TDT 0.5 ").
-    Two titles name the same book when their readings share one."""
+    Two titles name the same book when their readings share one. With numbered, also
+    without a trailing number ("In the Tall Grass 1"): only for comparing one file's own
+    sources, never library titles ("Alpha 2" is not "Alpha")."""
     raw = str(title or "")
     forms = {raw, raw.split(":")[0]}
     parts = [p for p in re.split(r"\s+-\s+", raw) if p.strip()]
@@ -217,6 +222,8 @@ def _title_keys(title: str) -> set[str]:
             for pattern in _SERIES_PREFIXES:
                 stripped = pattern.sub("", stripped, count=1)
         forms.update({stripped, _EDITION_SUFFIX.sub("", form)})
+        if numbered:
+            forms.add(re.sub(r"\s+\d{1,2}$", "", stripped))
     return {key for key in (_norm(form) for form in forms) if len(key) >= 2}
 
 
@@ -234,7 +241,7 @@ def text_language(text: str) -> str:
     return best if scores[best] >= 0.05 * len(tokens) else ""
 
 
-_PART = re.compile(r"[\s._-]*(\(?\d+\s*(-|of|/)\s*\d+\)?|part\s*\d+|cd\s*\d+|disc\s*\d+|\d{1,3})$", re.IGNORECASE)
+_PART = re.compile(r"[\s._-]*(\(?\d+\s*(-{1,2}|of|/)\s*\d+\)?|part\s*\d+|cd\s*\d+|disc\s*\d+|\d{1,3})$", re.IGNORECASE)
 
 
 def name_identities(name: str) -> list[tuple[str, str]]:
@@ -249,14 +256,34 @@ def name_identities(name: str) -> list[tuple[str, str]]:
 NAME_SOURCES = {"File name", "Folder names"}  # one uploader often names both: never proof on their own
 
 
+def _place(position: str) -> float | None:
+    try:
+        return float(str(position).strip())
+    except ValueError:
+        return None
+
+
 # ---- the library -------------------------------------------------------------
 
 def library_books() -> list[dict]:
+    """The books Bindery shows: books you excluded are hidden everywhere in Bindery, so
+    they are not in the library here either (and nothing is ever attached to one)."""
     with bindery_conn() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(books)")}
+        hidden = "WHERE b.excluded = 0" if "excluded" in columns else ""
+        language = "b.language" if "language" in columns else "'' AS language"
         rows = conn.execute(
-            "SELECT b.id, b.title, b.language, a.name AS author FROM books b JOIN authors a ON a.id = b.author_id"
+            f"SELECT b.id, b.title, {language}, a.name AS author FROM books b "
+            f"JOIN authors a ON a.id = b.author_id {hidden}"
         ).fetchall()
-    return [dict(row) for row in rows]
+        books = {int(row["id"]): {**dict(row), "series": []} for row in rows}
+        tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if {"series", "series_books"} <= tables:
+            for row in conn.execute("SELECT sb.book_id, s.title, sb.position_in_series FROM series_books sb "
+                                    "JOIN series s ON s.id = sb.series_id"):
+                if int(row["book_id"]) in books:
+                    books[int(row["book_id"])]["series"].append((_norm(row["title"]), str(row["position_in_series"])))
+    return list(books.values())
 
 
 class Library:
@@ -276,17 +303,40 @@ class Library:
                 found[int(book["id"])] = book
         return list(found.values())
 
-    def match(self, title: str, author: str) -> dict | None:
+    def find(self, title: str, author: str) -> tuple[dict | None, list[dict]]:
+        """(the book, []) or (None, the books it could be when it fits more than one)."""
         surname = _surname(author)
         if not surname:
-            return None
+            return None, []
         exact = [b for b in self.exact.get(_norm(title), []) if _surname(b["author"]) == surname]
+        if len(exact) == 1:
+            return exact[0], []
         if exact:
-            return exact[0]
+            return None, sorted(exact, key=lambda b: b["id"])
         # A shortened reading ("Chronicles" for "Chronicles: First") counts only when it
         # fits exactly one of that author's books; otherwise it could attach to the wrong one.
         loose = sorted((b for b in self.same_title(title) if _surname(b["author"]) == surname), key=lambda b: b["id"])
-        return loose[0] if len(loose) == 1 else None
+        return (loose[0], []) if len(loose) == 1 else (None, loose)
+
+    def match(self, title: str, author: str) -> dict | None:
+        return self.find(title, author)[0]
+
+    def series_book(self, title: str, author: str) -> dict | None | bool:
+        """For a "Series NN" title of one of the author's Bindery series: the book at that
+        place (when exactly one), False when the series is theirs but the place is not
+        clear, None when it is not one of their series at all."""
+        found = re.fullmatch(r"(.*[a-z])\s+(\d{1,3})", _norm(title))
+        surname = _surname(author)
+        if not found or not surname:
+            return None
+        name, place = found.group(1), float(found.group(2))
+        theirs = [b for b in self.books.values() if _surname(b["author"]) == surname
+                  and any(series == name for series, _ in b.get("series") or [])]
+        if not theirs:
+            return None
+        at = [b for b in theirs if any(series == name and _place(position) == place
+                                       for series, position in b.get("series") or [])]
+        return at[0] if len(at) == 1 else False
 
 
 # ---- file checks -------------------------------------------------------------
@@ -445,6 +495,7 @@ def _audio_facts(files: list[Path], evidence: list) -> dict:
 
 
 def _music_genre(genre: str) -> bool:
+    """Only whole, known music genres: "Folk Horror" or "Pop Psychology" are books."""
     return any(_norm(part) in MUSIC_GENRES for part in re.split(r"[,;/|]", genre or ""))
 
 
@@ -523,7 +574,36 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
                 "evidence": evidence}
 
     title, author, sources = best["title"], best["author"], " + ".join(sorted(best["sources"]))
-    book = library.match(title, author)
+    folder_surname = _surname(folder_author)
+    if audio and folder_surname and best["surname"] != folder_surname and best["named_by"] == {"Audio tags"}:
+        # Only one source names this author and the folder names another: often the narrator.
+        named_by = next(iter(best["named_by"]))
+        return {"verdict": "UNSURE", "evidence": evidence, "reason": (
+            f"The {named_by.lower()} name {author} as the author of “{title}”, but it sits in the “{folder_author}” "
+            f"folder and nothing else names the author. {author} may be the narrator; check it yourself.")}
+    book, choices = None, []
+    for candidate in best["titles"]:  # the best reading first, then the others that agree with it
+        book, found = library.find(candidate, author)
+        choices = choices or found
+        if book:
+            break
+    series = None if book else library.series_book(title, author)
+    if series is not None:
+        if series:
+            book, choices = series, []
+        else:
+            return {"verdict": "UNSURE", "evidence": evidence, "reason": (
+                f"“{title}” is a series name and number, not a book title, and BookGuard can't tell which of "
+                f"{author}'s books it is.")}
+    if book is None and choices:
+        names = ", ".join(f"“{b['title']}”" for b in choices[:4])
+        if len({_norm(b["title"]) for b in choices}) == 1:
+            reason = (f"It is “{title}” by {author} ({sources}), but your library has that book more than once "
+                      f"({names}), so BookGuard won't pick one. Remove the extra entry in Bindery, then check again.")
+        else:
+            reason = (f"It is “{title}” by {author} ({sources}), but that fits more than one book in your library "
+                      f"({names}), so BookGuard won't pick one.")
+        return {"verdict": "UNSURE", "reason": reason, "evidence": evidence}
     if book is None:
         # The folder's author has a book by this title: likely a pen name ("Richard Bachman")
         # or a narrator in the author tag. A person should decide.
@@ -574,8 +654,11 @@ def _folder_title(item: dict, folder_author: str) -> str:
         name = re.sub(r"\(\d{4}\)", "", name).strip()
         if not name or GENERIC_FOLDER.match(name):
             continue
-        if folder_author and name.lower().startswith(folder_author.lower()):
-            name = re.sub(r"^[\s,_-]+", "", name[len(folder_author):]) or name  # "Jane Mendelsohn-American Music"
+        if folder_author:  # "Jane Mendelsohn-American Music", "Never and Forever - Cressida Cowell", but
+            # never "Autobiography of Mark Twain": the author must be set off by a dash or comma
+            author = re.escape(folder_author)
+            name = re.sub(rf"^{author}\s*[-–,]\s*", "", name, flags=re.IGNORECASE) or name
+            name = re.sub(rf"\s*[-–]\s*{author}$", "", name, flags=re.IGNORECASE) or name
         return name
     return ""
 
@@ -589,7 +672,8 @@ def _best_identity(identities: list[tuple[str, str, str]], front: str) -> dict |
     A source supports a candidate when one of their title readings is shared and it names
     the same author or none (tags often lack one). Names and the title page only support an
     identity the file itself gives (embedded metadata, audio tags or an ISBN lookup)."""
-    read = [(source, title, author, _title_keys(title), _surname(author)) for source, title, author in identities]
+    read = [(source, title, author, _title_keys(title, numbered=True), _surname(author))
+            for source, title, author in identities]
     read = [r for r in read if r[3]]
     padded = f" {front} " if front else ""
     best = None
@@ -603,7 +687,10 @@ def _best_identity(identities: list[tuple[str, str, str]], front: str) -> dict |
             continue
         rank = (len(support), SOURCE_RANK.get(source, 0))
         if best is None or rank > best["rank"]:
-            best = {"title": title, "author": author, "surname": surname, "sources": support, "rank": rank}
+            named_by = {s for s, _, _, k, n in read if k & keys and n == surname}
+            titles = [title] + [t for s, t, _, k, n in read if k & keys and n in ("", surname) and t != title]
+            best = {"title": title, "author": author, "surname": surname, "sources": support, "rank": rank,
+                    "named_by": named_by, "titles": list(dict.fromkeys(titles))}
     return best
 
 
@@ -620,7 +707,7 @@ def _other_language(language: str, book: dict, identities: list[tuple[str, str, 
 
 # ---- running it ---------------------------------------------------------------
 
-CHECK_VERSION = 3  # raise when the checks change, so stored verdicts are worked out again
+CHECK_VERSION = 6  # raise when the checks change, so stored verdicts are worked out again
 
 
 def _signature(item: dict) -> str:
