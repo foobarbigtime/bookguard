@@ -147,3 +147,86 @@ def test_no_attention_link_points_at_the_removed_triage_panel():
 
     for path in Path("app").rglob("*.py"):
         assert "acquisitionPanel" not in path.read_text(encoding="utf-8"), path
+
+
+def _legacy_db(tmp_path, monkeypatch):
+    import sqlite3
+
+    from app.config import settings
+    from app.db import local_db_path
+
+    monkeypatch.setattr(settings, "config_dir", str(tmp_path / "config"))
+    monkeypatch.setattr(settings, "ebook_root", str(tmp_path / "books"))
+    monkeypatch.setattr(settings, "ebook_bindery_prefix", "/data/media/books")
+    (tmp_path / "config").mkdir()
+    (tmp_path / "books").mkdir()
+    monkeypatch.setattr(attention, "_journal_rows", lambda table, id_column: [])
+    monkeypatch.setattr(attention, "observe_attention_items", lambda limit: [])
+    monkeypatch.setattr(attention, "_blocked_plan_items", lambda limit: [])
+    monkeypatch.setattr(attention, "stale_execution_items", lambda limit: [])
+    conn = sqlite3.connect(local_db_path())
+    conn.execute(
+        "CREATE TABLE ebook_acquisitions (id INTEGER PRIMARY KEY, result_id INTEGER, status TEXT, "
+        "queue_id INTEGER, staged_relative_path TEXT, admission_id INTEGER, error TEXT, created_at TEXT, updated_at TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE ebook_admissions (id INTEGER PRIMARY KEY, result_id INTEGER, status TEXT, "
+        "publication_method TEXT, failure_stage TEXT, stored_path TEXT, staged_sha256 TEXT, error TEXT, created_at TEXT, updated_at TEXT)"
+    )
+    return conn
+
+
+def test_a_grab_bindery_refused_left_nothing_and_is_not_attention(tmp_path, monkeypatch):
+    conn = _legacy_db(tmp_path, monkeypatch)
+    refused = 'Bindery grab failed: Bindery POST /queue/grab returned HTTP 409: {"error":"already grabbed"}'
+    conn.executemany(
+        "INSERT INTO ebook_acquisitions(id, result_id, status, queue_id, staged_relative_path, admission_id, error, created_at, updated_at) "
+        "VALUES (?, NULL, 'failed', ?, NULL, NULL, ?, 't', 't')",
+        [
+            (1, None, refused),
+            (2, 55, refused),  # Bindery queued it: a download may be left
+            (3, None, "Bindery grab failed: Bindery request failed: read timed out"),  # may have reached Bindery
+            (4, None, "Bindery grab failed: Bindery POST /queue/grab returned HTTP 502: bad gateway"),
+        ],
+    )
+    conn.commit()
+
+    ids = {item["id"] for item in attention.attention_snapshot()["items"] if item["kind"] == "acquisition"}
+
+    assert ids == {2, 3, 4}
+
+
+def test_a_failed_admission_counts_only_while_its_library_file_exists(tmp_path, monkeypatch):
+    conn = _legacy_db(tmp_path, monkeypatch)
+    stored = "/data/media/books/Stephen King/Sometimes They Come Back (1974)/Sometimes They Come Back - Stephen King.epub"
+    import hashlib
+
+    verified = hashlib.sha256(b"verified copy").hexdigest()
+    conn.execute(
+        "INSERT INTO ebook_admissions(id, result_id, status, publication_method, failure_stage, stored_path, staged_sha256, error, created_at, updated_at) "
+        "VALUES (1, NULL, 'failed', NULL, NULL, ?, ?, '[Errno 22] Invalid argument', 't', 't')",
+        (stored, verified),
+    )
+    conn.commit()
+
+    def shown():
+        return [item["id"] for item in attention.attention_snapshot()["items"] if item["kind"] == "admission"]
+
+    assert shown() == [1]  # the library is empty, as if its mount were missing: prove nothing
+
+    (tmp_path / "books" / "Other Author").mkdir()
+    assert shown() == []  # the library is there and has no file at the path
+
+    local = tmp_path / "books" / "Stephen King" / "Sometimes They Come Back (1974)" / "Sometimes They Come Back - Stephen King.epub"
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b"a later copy from Bindery")
+    assert shown() == []  # a different file: not the copy the admission verified
+
+    local.write_bytes(b"verified copy")
+    assert shown() == [1]  # the admission's own bytes are there: check it
+
+
+def test_home_offers_no_automatic_mode():
+    from pathlib import Path
+
+    assert "'Automatic'" not in Path("templates/home.html").read_text(encoding="utf-8")

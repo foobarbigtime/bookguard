@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from collections import Counter
+import os
+import re
+from pathlib import Path
 from typing import Any
 
 from .attention_execution import stale_execution_items
+from .config import settings
+from .file_safety import sha256_file
 from .operator_guidance import operation_guidance
 from .observe import observe_attention_items
 from .db import (
@@ -60,6 +65,62 @@ _LEGACY_ATTENTION = {
 }
 
 
+_REFUSED_GRAB = re.compile(r"Bindery grab failed: Bindery POST /queue/grab returned HTTP 4\d\d\b")
+
+
+def _library_readable() -> bool:
+    """A missing file is evidence only when the ebook library itself is there."""
+    try:
+        with os.scandir(settings.ebook_root) as entries:
+            return next(entries, None) is not None
+    except OSError:
+        return False
+
+
+def _column(row, name: str):
+    return row[name] if name in row.keys() else None
+
+
+def _left_nothing_behind(kind: str, row) -> bool:
+    """True only when the record proves the failed step changed nothing.
+
+    A grab counts only when Bindery answered with a refusal (HTTP 4xx) and
+    nothing was queued, staged or admitted; a timeout or lost reply may still
+    have queued a download. An admission that never recorded a publication
+    left nothing only if the library is readable and has no file at its path,
+    or the file there is not the copy it verified (Bindery or a person put it
+    there). Anything else stays visible.
+    """
+    if str(row["status"] or "").casefold() != "failed":
+        return False
+    if kind == "acquisition":
+        return (
+            bool(_REFUSED_GRAB.search(str(_column(row, "error") or "")))
+            and _column(row, "queue_id") is None
+            and not _column(row, "staged_relative_path")
+            and _column(row, "admission_id") is None
+        )
+    if kind == "admission" and not _column(row, "publication_method"):
+        stored = str(_column(row, "stored_path") or "")
+        try:
+            relative = Path(stored).relative_to(Path(settings.ebook_bindery_prefix))
+        except ValueError:
+            return False
+        if not stored or not relative.parts:
+            return False
+        local = Path(settings.ebook_root) / relative
+        if not (local.exists() or local.is_symlink()):
+            return _library_readable()
+        verified = str(_column(row, "staged_sha256") or "")
+        if not verified or local.is_symlink() or not local.is_file():
+            return False
+        try:
+            return sha256_file(local) != verified
+        except OSError:
+            return False
+    return False
+
+
 def _legacy_items(limit: int) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     with local_conn() as conn:
@@ -67,13 +128,13 @@ def _legacy_items(limit: int) -> list[dict[str, Any]]:
             if not _table_exists(conn, table):
                 continue
             rows = conn.execute(
-                f"SELECT id, result_id, status, error, created_at, updated_at FROM {table} "
+                f"SELECT * FROM {table} "
                 "ORDER BY id DESC LIMIT ?",
                 (int(limit),),
             ).fetchall()
             for row in rows:
                 status = str(row["status"] or "").casefold()
-                if status not in statuses:
+                if status not in statuses or _left_nothing_behind(kind, row):
                     continue
                 result = result_by_id(int(row["result_id"])) if row["result_id"] else None
                 error = str(row["error"] or "").strip()
