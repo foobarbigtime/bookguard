@@ -299,3 +299,4 @@ def test_home_reports_unavailable_review_without_claiming_empty(library, monkeyp
         page = client.get("/").text
         assert "Review data is unavailable" in page
         assert "Nothing needs you right now" not in page
+        assert "nothing is waiting for you" not in page

@@ -20,7 +20,7 @@
         <h1>{{ health.title }}</h1>
         <p>
           {% if health.level == 'ok' %}Nothing is blocking normal operation{% else %}{{ health.problems|length }} {{ 'problem' if health.problems|length == 1 else 'problems' }} below{% endif %}
-          · {% if home.decisions %}{{ home.decisions }} {{ 'thing is' if home.decisions == 1 else 'things are' }} waiting for your decision{% else %}nothing is waiting for you{% endif %}
+          · {% if home.decisions %}{{ home.decisions }} {{ 'thing is' if home.decisions == 1 else 'things are' }} waiting for your decision{% elif not library.available %}review queue unavailable{% else %}nothing is waiting for you{% endif %}
         </p>
       </div>
     </div>
