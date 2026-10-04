@@ -215,6 +215,17 @@ def disc_track_sequence_warnings(probes: list[dict[str, Any]]) -> list[str]:
     if len(prefixes) != 1:
         return []
 
+    # "Title 01-35", "Title 02-35", ...: every file ends in the same total, so the
+    # numbers mean "part 1 of 35", not disc 1, track 35.
+    totals = {track for _, _, track in parsed}
+    parts = sorted({disc for _, disc, _ in parsed})
+    if len(totals) == 1 and next(iter(totals)) >= parts[-1] > 1:
+        total = next(iter(totals))
+        missing = [str(n) for n in range(1, total + 1) if n not in parts]
+        if missing:
+            return [f"Parts {', '.join(missing[:20])} of {total} are missing."]
+        return []
+
     groups: dict[int, list[int]] = {}
     for _, disc, track in parsed:
         groups.setdefault(disc, []).append(track)

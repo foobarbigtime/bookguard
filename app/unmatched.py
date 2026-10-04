@@ -10,7 +10,10 @@ and gives one plain verdict with the evidence:
 * NOT_IN_LIBRARY: a real book whose own identity (embedded metadata, ISBN
   lookup, file and folder names) agrees from at least two sources, and no
   Bindery book matches it.
-* BELONGS: at least two independent sources point at the same Bindery book.
+* BELONGS: at least two independent sources point at the same Bindery book,
+  and that book has no file of this kind yet (the only case Attach offers).
+* DUPLICATE: proven to be a library book that already has a file of this kind.
+* OTHER_LANGUAGE: proven to be a library book, but a translation of it.
 * UNSURE: real, but BookGuard cannot prove what it is.
 
 Read-only: nothing moves. Attach uses Bindery's own adopt (which Bindery can
@@ -46,6 +49,8 @@ VERDICTS = {
     "JUNK": "Junk",
     "NOT_IN_LIBRARY": "Not in your library",
     "BELONGS": "Belongs to a book",
+    "DUPLICATE": "Extra copy",
+    "OTHER_LANGUAGE": "Another-language edition",
     "UNSURE": "Unsure",
 }
 EBOOK_EXTENSIONS = {".epub", ".pdf", ".mobi", ".azw", ".azw3", ".txt", ".rtf", ".cbz"}
@@ -67,6 +72,21 @@ STOPWORDS = {
     "French": {"le", "la", "les", "et", "des", "une", "est", "pas", "que", "il", "elle", "dans"},
     "Spanish": {"el", "la", "los", "las", "que", "y", "una", "por", "con", "no", "se", "del"},
     "Swedish": {"och", "att", "det", "som", "en", "på", "är", "av", "för", "med", "inte", "jag"},
+}
+LANGUAGE_CODES = {
+    "English": {"en", "eng", "english"},
+    "Dutch": {"nl", "nld", "dut", "dutch"},
+    "German": {"de", "deu", "ger", "german"},
+    "French": {"fr", "fra", "fre", "french"},
+    "Spanish": {"es", "spa", "spanish"},
+    "Swedish": {"sv", "swe", "swedish"},
+}
+# Genre tags that mean a music album; checked as whole tags so "Science Fiction" never counts.
+MUSIC_GENRES = {
+    "rock", "pop", "country", "jazz", "blues", "folk", "classical", "hip hop", "hiphop", "rap", "soundtrack",
+    "r b", "rnb", "soul", "metal", "punk", "electronic", "dance", "reggae", "alternative", "indie", "americana",
+    "bluegrass", "gospel", "singer songwriter", "latin", "disco", "funk", "house", "techno", "ambient",
+    "new age", "easy listening", "oldies", "alt country", "country folk", "folk rock", "soft rock",
 }
 
 _LOCK = threading.Lock()
@@ -139,16 +159,65 @@ def _save(row_id: int, signature: str, item: dict, outcome: dict) -> None:
 
 def _norm(value: str) -> str:
     text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode().lower()
+    text = re.sub(r"['`]", "", text)  # "Caliban's" and "Calibans" are the same word
     text = re.sub(r"\(.*?\)|\[.*?\]", " ", text)
     text = re.sub(r"[^a-z0-9]+", " ", text)
     text = re.sub(r"^(the|a|an) ", "", text.strip())
     return re.sub(r"\s+", " ", text).strip()
 
 
+JUNK_AUTHORS = {"author", "authors", "unknown", "unknown author", "various", "various artists", "anonymous", "va"}
+NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "phd", "md"}
+
+
+def _name_words(name: str) -> list[str]:
+    text = _norm(name)
+    if text in JUNK_AUTHORS:
+        return []
+    return [w for w in text.split() if len(w) >= 2 and not w.isdigit() and w not in NAME_SUFFIXES]  # drops initials
+
+
 def _surname(author: str) -> str:
-    first = re.split(r";|&| and |,(?=\s*\w+\s)", str(author or ""))[0]
-    words = _norm(first).split()
+    """The first author's family name, in any of the usual orders:
+    "J.K. Rowling", "Rowling J.K.", "Corey, James S.A." and "Patterson, James"."""
+    first = re.split(r";|&| and ", str(author or ""))[0]
+    parts = [p for p in first.split(",") if p.strip()]
+    if not parts:
+        return ""
+    words = _name_words(parts[0])  # "A, B" is "Surname, Given" when A is one word, else two authors
     return words[-1] if words else ""
+
+
+GENERIC_FOLDER = re.compile(
+    r"^(e-?books?|audio-?books?|audio|m4b|mp3|epub|pdf|mobi|us|uk|au|ca|unabridged|abridged|edition\s*\d*"
+    r"|(cd|dis[ck]|part)\s*\d+|.*\brecovered\b.*|alternate edition.*)$",
+    re.IGNORECASE,
+)
+_SERIES_PREFIXES = (
+    re.compile(r"^\s*\[[^\]]*\]\s*-?\s*"),  # "[Alex Cross 23] - "
+    re.compile(r"^\s*(book|vol(ume)?|part|no\.?|#)?\s*\d+(\.\d+)?\s*[-.)]?\s+", re.IGNORECASE),  # "05 - ", "Book 5 - ", "1993 - "
+    re.compile(r"^\s*[a-z]{1,5}\s*\d+(\.\d+)?\s*-?\s+", re.IGNORECASE),  # "TDT 0.5 ", "WMC 01 - ", "LS1 ", "MR 3 - "
+    re.compile(r"^.{1,40}?\s#?\d+(\.\d+)?\s+-\s+"),  # "Expanse 01 - ", "Maximum Ride 03 - "
+)
+_EDITION_SUFFIX = re.compile(r"[\s_-]+(uk|us|unabridged|abridged)$", re.IGNORECASE)
+
+
+def _title_keys(title: str) -> set[str]:
+    """Every fair reading of a title: as given, before a ": Series, Book N" subtitle, the
+    last " - " part, and each without series or number prefixes ("05 - ", "TDT 0.5 ").
+    Two titles name the same book when their readings share one."""
+    raw = str(title or "")
+    forms = {raw, raw.split(":")[0]}
+    parts = [p for p in re.split(r"\s+-\s+", raw) if p.strip()]
+    if len(parts) >= 2:
+        forms.add(parts[-1])
+    for form in list(forms):
+        stripped = _EDITION_SUFFIX.sub("", form)
+        for _ in range(2):
+            for pattern in _SERIES_PREFIXES:
+                stripped = pattern.sub("", stripped, count=1)
+        forms.update({stripped, _EDITION_SUFFIX.sub("", form)})
+    return {key for key in (_norm(form) for form in forms) if len(key) >= 2}
 
 
 def _words(text: str) -> int:
@@ -185,7 +254,7 @@ NAME_SOURCES = {"File name", "Folder names"}  # one uploader often names both: n
 def library_books() -> list[dict]:
     with bindery_conn() as conn:
         rows = conn.execute(
-            "SELECT b.id, b.title, a.name AS author FROM books b JOIN authors a ON a.id = b.author_id"
+            "SELECT b.id, b.title, b.language, a.name AS author FROM books b JOIN authors a ON a.id = b.author_id"
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -194,17 +263,22 @@ class Library:
     def __init__(self, books: list[dict]):
         self.books = {int(b["id"]): b for b in books}
         self.by_title: dict[str, list[dict]] = defaultdict(list)
-        self.surnames: set[str] = set()
         for book in books:
-            self.by_title[_norm(book["title"])].append(book)
-            self.surnames.add(_surname(book["author"]))
+            for key in _title_keys(book["title"]):
+                self.by_title[key].append(book)
+
+    def same_title(self, title: str) -> list[dict]:
+        found: dict[int, dict] = {}
+        for key in _title_keys(title):
+            for book in self.by_title.get(key, []):
+                found[int(book["id"])] = book
+        return list(found.values())
 
     def match(self, title: str, author: str) -> dict | None:
         surname = _surname(author)
-        for book in self.by_title.get(_norm(title), []):
-            if surname and _surname(book["author"]) == surname:
-                return book
-        return None
+        if not surname:
+            return None
+        return next((b for b in self.same_title(title) if _surname(b["author"]) == surname), None)
 
 
 # ---- file checks -------------------------------------------------------------
@@ -312,6 +386,7 @@ def _ebook_facts(path: Path, evidence: list) -> dict:
     language = text_language(identity.text)
     if language:
         _check(evidence, "Language of the text", "info", language)
+    facts["language"] = language
     metadata = identity.metadata or {}
     if metadata.get("title"):
         facts["identities"].append(("Embedded metadata", metadata.get("title"), metadata.get("author") or ""))
@@ -334,6 +409,13 @@ def _audio_facts(files: list[Path], evidence: list) -> dict:
         facts["junk"] = f"It has only {total / 60:.1f} minutes of audio; that is not an audiobook."
     else:
         _check(evidence, "Length", "pass", f"{total / 3600:.1f} hours of audio in {len(probes)} files.")
+    genres = [str(p.get("genre") or "") for p in probes]
+    music = [g for g in genres if _music_genre(g)]
+    if music and len(music) * 2 > len(probes):
+        _check(evidence, "Genre", "fail", f"The files are tagged as music (“{music[0]}”).")
+        facts["junk"] = facts["junk"] or f"It is music (genre “{music[0]}”), not an audiobook."
+    elif any(genres):
+        _check(evidence, "Genre", "info", next(g for g in genres if g))
     warnings = disc_track_sequence_warnings(probes)
     if warnings:
         _check(evidence, "All parts present", "warn", "; ".join(warnings[:3]))
@@ -352,6 +434,10 @@ def _audio_facts(files: list[Path], evidence: list) -> dict:
     if title:
         facts["identities"].append(("Audio tags", title, author))
     return facts
+
+
+def _music_genre(genre: str) -> bool:
+    return any(_norm(part) in MUSIC_GENRES for part in re.split(r"[,;/|]", genre or ""))
 
 
 # ---- verdict -----------------------------------------------------------------
@@ -400,11 +486,9 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
     for title, author in name_identities(files[0].name):
         identities.append(("File name", title, author))
     folder_author = str(item.get("authorFolder") or "")
-    rel_parts = PurePosixPath(str(item.get("relPath") or "")).parts
-    # A folder row is "Author/Title"; a file row is "Author/Title/file".
-    folder_title = rel_parts[-1] if str(item.get("kind")) == "folder" else (rel_parts[-2] if len(rel_parts) >= 3 else "")
-    if folder_author and len(rel_parts) >= 2 and folder_title and folder_title != folder_author:
-        identities.append(("Folder names", re.sub(r"\(\d{4}\)", "", folder_title).strip(), folder_author))
+    folder_title = _folder_title(item, folder_author)
+    if folder_title:
+        identities.append(("Folder names", folder_title, folder_author))
     for isbn in facts["isbns"][:3]:
         try:
             found = client.lookup_isbn(isbn) if client else None
@@ -415,51 +499,46 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
             identities.append(("ISBN lookup", found["title"], author))
             _check(evidence, "ISBN lookup", "pass", f"ISBN {isbn} is “{found['title']}” by {author or 'unknown'}.")
     for source, title, author in identities:
-        if source != "File name":  # both readings of a name would only confuse
+        if source not in {"File name", "ISBN lookup"}:  # both readings of a name would only confuse
             _check(evidence, source, "info", f"“{title}” by {author or 'unknown author'}")
     if name_identities(files[0].name):
         _check(evidence, "File name", "info", files[0].name)
 
-    # Group sources that name the same book (title + author surname).
-    groups: dict[tuple[str, str], list[str]] = defaultdict(list)
-    shown: dict[tuple[str, str], tuple[str, str]] = {}
-    for source, title, author in identities:
-        key = (_norm(title), _surname(author))
-        if not key[0]:
-            continue
-        groups[key].append(source)
-        shown.setdefault(key, (title, author))
-    front = facts["front"]
-    for key in groups:
-        if front and key[0] and key[0] in front and (not key[1] or key[1] in front):
-            groups[key].append("Title page")
-    def proof(sources: list[str]) -> bool:
-        # Names and the title page only support an identity the file itself gives
-        # (embedded metadata, audio tags or an ISBN lookup); never proof on their own.
-        distinct = set(sources)
-        return len(distinct) >= 2 and bool(distinct - NAME_SOURCES - {"Title page"})
-
-    proven = [kv for kv in groups.items() if proof(kv[1])]
-    best = max(proven, key=lambda kv: len(set(kv[1])), default=None)
-    if folder_author and best and best[0][1] and _surname(folder_author) != best[0][1]:
+    best = _best_identity(identities, facts["front"])
+    if best and folder_author and _surname(folder_author) != best["surname"]:
         _check(evidence, "Folder", "warn", f"It sits in the “{folder_author}” folder, but the file says "
-               f"{shown[best[0]][1] or 'another author'}.")
-    if best and "Title page" in best[1]:
-        _check(evidence, "Title page", "pass", f"The first pages name “{shown[best[0]][0]}” and its author.")
+               f"{best['author'] or 'another author'}.")
+    if best and "Title page" in best["sources"]:
+        _check(evidence, "Title page", "pass", f"The first pages name “{best['title']}” and its author.")
     if not best:
         return {"verdict": "UNSURE", "reason": "It reads as a real book, but no two sources agree on what it is.",
                 "evidence": evidence}
 
-    title, author = shown[best[0]]
-    sources = sorted(set(best[1]))
+    title, author, sources = best["title"], best["author"], " + ".join(sorted(best["sources"]))
     book = library.match(title, author)
     if book is None:
-        reason = f"It is “{title}” by {author or 'an unknown author'} ({' + '.join(sources)}), which is not in your library."
+        # The folder's author has a book by this title: likely a pen name ("Richard Bachman")
+        # or a narrator in the author tag. A person should decide.
+        alias = next((b for b in library.same_title(title)
+                      if folder_author and _surname(b["author"]) == _surname(folder_author)), None)
+        if alias:
+            return {"verdict": "UNSURE", "evidence": evidence, "reason": (
+                f"The file says “{title}” by {author or 'an unknown author'}, but your library has "
+                f"“{alias['title']}” by {alias['author']}. The name may be a pen name or a narrator; check it yourself.")}
+        reason = f"It is “{title}” by {author or 'an unknown author'} ({sources}), which is not in your library."
         return {"verdict": "NOT_IN_LIBRARY", "reason": reason, "evidence": evidence}
 
-    # Belongs to a library book: an exact copy of a file it already has is junk.
+    found = {"bookId": int(book["id"]), "bookTitle": book["title"]}
+    language = facts.get("language") or ""
+    if language and _other_language(language, book, identities):
+        return {"verdict": "OTHER_LANGUAGE", "evidence": evidence, **found, "reason": (
+            f"It is a {language} edition of “{book['title']}” by {book['author']} ({sources}). "
+            "It is not the same book file as your library's edition, so BookGuard won't attach it.")}
+
+    # A library book: an exact copy of a file it already has is junk, any other copy is extra.
+    kind = "audiobook" if audio else "ebook"
     try:
-        existing = bindery_files_for_book(int(book["id"]), "audiobook" if audio else "ebook")
+        existing = bindery_files_for_book(int(book["id"]), kind)
     except Exception:
         existing = []
     if existing and not audio:
@@ -470,16 +549,70 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
                 _check(evidence, "Exact copy", "fail", f"Identical to “{book['title']}”’s ebook already in the library.")
                 return {"verdict": "JUNK", "reason": f"It is an exact copy of the ebook “{book['title']}” already has.",
                         "evidence": evidence}
-    reason = f"It is “{book['title']}” by {book['author']} ({' + '.join(sources)})."
+    reason = f"It is “{book['title']}” by {book['author']} ({sources})."
     if existing:
-        reason += " That book already has a file in this format."
-    return {"verdict": "BELONGS", "reason": reason, "bookId": int(book["id"]), "bookTitle": book["title"],
-            "evidence": evidence}
+        return {"verdict": "DUPLICATE", "evidence": evidence, **found, "reason": (
+            f"{reason} That book already has an {kind}, so this is an extra copy. Attaching it would add a second one.")}
+    return {"verdict": "BELONGS", "reason": reason, "evidence": evidence, **found}
+
+
+def _folder_title(item: dict, folder_author: str) -> str:
+    """The book's folder name, skipping folders like "eBook", "m4b", "US" or "Edition 1"."""
+    parts = list(PurePosixPath(str(item.get("relPath") or "")).parts)
+    if str(item.get("kind")) != "folder":
+        parts = parts[:-1]  # a file row is "Author/Title/file"
+    parts = parts[1:] if folder_author and parts and parts[0] == folder_author else parts
+    for name in reversed(parts):
+        name = re.sub(r"\(\d{4}\)", "", name).strip()
+        if not name or GENERIC_FOLDER.match(name):
+            continue
+        if folder_author and name.lower().startswith(folder_author.lower()):
+            name = re.sub(r"^[\s,_-]+", "", name[len(folder_author):]) or name  # "Jane Mendelsohn-American Music"
+        return name
+    return ""
+
+
+SOURCE_RANK = {"ISBN lookup": 3, "Embedded metadata": 2, "Audio tags": 2, "Folder names": 1, "File name": 0}
+
+
+def _best_identity(identities: list[tuple[str, str, str]], front: str) -> dict | None:
+    """The identity most sources agree on, if it is proven.
+
+    A source supports a candidate when one of their title readings is shared and it names
+    the same author or none (tags often lack one). Names and the title page only support an
+    identity the file itself gives (embedded metadata, audio tags or an ISBN lookup)."""
+    read = [(source, title, author, _title_keys(title), _surname(author)) for source, title, author in identities]
+    read = [r for r in read if r[3]]
+    padded = f" {front} " if front else ""
+    best = None
+    for source, title, author, keys, surname in read:
+        if not surname:
+            continue
+        support = {s for s, _, _, k, n in read if k & keys and n in ("", surname)}
+        if padded and surname in padded.split() and any(f" {key} " in padded for key in keys if len(key) >= 4):
+            support.add("Title page")
+        if len(support) < 2 or not support - NAME_SOURCES - {"Title page"}:
+            continue
+        rank = (len(support), SOURCE_RANK.get(source, 0))
+        if best is None or rank > best["rank"]:
+            best = {"title": title, "author": author, "surname": surname, "sources": support, "rank": rank}
+    return best
+
+
+def _other_language(language: str, book: dict, identities: list[tuple[str, str, str]]) -> bool:
+    """True when the text is in another language than the library's edition."""
+    book_language = str(book.get("language") or "").strip().lower()
+    known = {code for codes in LANGUAGE_CODES.values() for code in codes}
+    if book_language in known:
+        return book_language not in LANGUAGE_CODES.get(language, set())
+    # Bindery doesn't say: a non-English text whose own title isn't the book's is a translation.
+    own = [title for source, title, _ in identities if source == "Embedded metadata"]
+    return language != "English" and bool(own) and not any(_title_keys(t) & _title_keys(book["title"]) for t in own)
 
 
 # ---- running it ---------------------------------------------------------------
 
-CHECK_VERSION = 2  # raise when the checks change, so stored verdicts are worked out again
+CHECK_VERSION = 3  # raise when the checks change, so stored verdicts are worked out again
 
 
 def _signature(item: dict) -> str:
