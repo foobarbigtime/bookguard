@@ -462,3 +462,73 @@ def test_a_shortened_title_never_picks_between_two_books_of_one_author():
     assert library.match("Chronicles: First", "Ann Author")["id"] == 1
     assert library.match("Chronicles", "Ann Author") is None  # fits both: no guess
     assert library.match("05 - Nemesis Games", "James S. A. Corey")["id"] == 3  # one fit: fine
+
+
+# ---- second real-library run ------------------------------------------------------
+
+def test_a_book_listed_twice_in_the_library_is_unsure_and_says_so(lib, monkeypatch):
+    library = _library(("A Time to Kill", "John Grisham", {}), ("Time to Kill", "John Grisham", {}))
+    item = _audio(lib, monkeypatch, "John Grisham/A Time to Kill (1989)/1989 - A Time to Kill",
+                  {"album": "1989 - A Time to Kill", "artist": "Author's"})
+
+    outcome = unmatched.check_item(item, library, None)
+
+    assert outcome["verdict"] == "UNSURE" and "more than once" in outcome["reason"]
+
+
+def test_an_author_named_only_by_the_tags_against_the_folder_may_be_the_narrator(lib, monkeypatch):
+    item = _audio(lib, monkeypatch, "Stephen King/Stephen King 8 ()/Der dunkle Turm 7 - Der Turm (uncut)",
+                  {"album": "Der Turm (Der dunkle Turm 7)", "artist": "Vittorio Alfieri"},
+                  names=("001 - Der Turm (Der dunkle Turm 7).mp3", "002 - Der Turm (Der dunkle Turm 7).mp3"))
+
+    outcome = unmatched.check_item(item, _library(("The Dark Tower", "Stephen King", {})), None)
+
+    assert outcome["verdict"] == "UNSURE" and "narrator" in outcome["reason"]
+
+
+def test_double_dash_part_numbers_and_release_folders_still_name_the_book(lib, monkeypatch):
+    item = _audio(lib, monkeypatch, "James Patterson/NYPD Red 3 (1755)/Peter David - Artful (u261~19-64.44-m-chap)",
+                  {"album": "Artful", "artist": "Peter David"},
+                  names=("Peter David - Artful 01--19.mp3", "Peter David - Artful 02--19.mp3"))
+
+    outcome = unmatched.check_item(item, _library(), None)
+
+    assert outcome["verdict"] == "NOT_IN_LIBRARY" and "“Artful” by Peter David" in outcome["reason"]
+
+
+@pytest.mark.parametrize("rel, tags, title", [
+    ("James S. A. Corey/Persepolis Rising (2017)/Primary edition",
+     {"album": "Persepolis Rising (Unabridged)", "artist": "James S. A. Corey"}, "Persepolis Rising"),
+    ("James Patterson/The Black Book (2017)/abook.ws~JsPn-TeBkBk-2017",
+     {"album": "The Black Book (Unabridged)", "artist": "James Patterson, David Ellis"}, "The Black Book"),
+    ("Cressida Cowell/Never and Forever (2020)/The Wizards of Once - Never and Forever (Book 4) - Cressida Cowell",
+     {"album": "Never and Forever: The Wizards of Once, Book 4", "artist": "Cressida Cowell"}, "Never and Forever"),
+    ("Stephen King and Joe Hill/In the Tall Grass (2012)/In the Tall Grass (Disc 01)",
+     {"album": "In the Tall Grass 1", "artist": "Stephen King and Joe Hill"}, "In the Tall Grass"),
+    ("James Patterson/The #1 Lawyer (2024)/Stingrays",
+     {"album": "Stingrays", "artist": "James Patterson/Duane Swierczynski"}, "Stingrays"),
+])
+def test_more_real_folder_and_tag_shapes_belong_to_their_book(lib, monkeypatch, rel, tags, title):
+    author = rel.split("/")[0]
+    item = _audio(lib, monkeypatch, rel, tags)
+
+    outcome = unmatched.check_item(item, _library((title, author, {})), None)
+
+    assert (outcome["verdict"], outcome.get("bookId")) == ("BELONGS", 1), outcome["reason"]
+
+
+def test_a_series_name_and_number_is_not_a_book_title(lib, monkeypatch):
+    item = _audio(lib, monkeypatch, "Martha Wells/Murderbot Diaries ()/Murderbot Diaries 05",
+                  {"album": "Murderbot Diaries 05", "artist": "Martha Wells"})
+
+    outcome = unmatched.check_item(item, _library(("Network Effect", "Martha Wells", {})), None)
+
+    assert outcome["verdict"] == "UNSURE" and "series name and number" in outcome["reason"]
+
+
+@pytest.mark.parametrize("genre, music", [
+    ("Progressive Rock", True), ("Classic Country", True), ("Folk Tales", False), ("Pop Culture History", False),
+    ("Young Adult/Fantasy", False), ("Speech", False),
+])
+def test_music_genres_by_their_words(genre, music):
+    assert unmatched._music_genre(genre) is music
