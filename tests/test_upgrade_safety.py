@@ -159,6 +159,11 @@ def test_safer_upgrade_shell_syntax_and_safety_contract():
     assert "compose.clamav.yaml" in script
     assert "up -d --no-build" in script
     assert "No automatic rollback was attempted" in script
+    # Old rollback tags are pruned only after acceptance, and never forced.
+    accepted = script.index('echo "Upgrade accepted."')
+    assert script.index("  prune_rollback_tags\n") > accepted
+    assert "docker image rm --force" not in script
+    assert "rmi -f" not in script
 
 
 def test_writable_ebook_alias_is_accepted_only_when_opted_in_and_same_folder():
