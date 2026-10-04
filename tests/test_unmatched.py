@@ -532,3 +532,20 @@ def test_a_series_name_and_number_is_not_a_book_title(lib, monkeypatch):
 ])
 def test_music_genres_by_their_words(genre, music):
     assert unmatched._music_genre(genre) is music
+
+
+def test_books_excluded_in_bindery_are_not_in_the_library(tmp_path, monkeypatch):
+    import sqlite3
+
+    db = tmp_path / "bindery.db"
+    with sqlite3.connect(db) as conn:
+        conn.executescript("""
+            CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT);
+            CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, language TEXT,
+                                excluded INTEGER NOT NULL DEFAULT 0);
+            INSERT INTO authors VALUES (1, 'John Grisham');
+            INSERT INTO books VALUES (1, 'A Time to Kill', 1, 'eng', 1), (2, 'The Firm', 1, 'eng', 0);
+        """)
+    monkeypatch.setattr(settings, "bindery_db", str(db))
+
+    assert [b["title"] for b in unmatched.library_books()] == ["The Firm"]

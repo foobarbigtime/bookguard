@@ -253,9 +253,15 @@ NAME_SOURCES = {"File name", "Folder names"}  # one uploader often names both: n
 # ---- the library -------------------------------------------------------------
 
 def library_books() -> list[dict]:
+    """The books Bindery shows: books you excluded are hidden everywhere in Bindery, so
+    they are not in the library here either (and nothing is ever attached to one)."""
     with bindery_conn() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(books)")}
+        hidden = "WHERE b.excluded = 0" if "excluded" in columns else ""
+        language = "b.language" if "language" in columns else "'' AS language"
         rows = conn.execute(
-            "SELECT b.id, b.title, b.language, a.name AS author FROM books b JOIN authors a ON a.id = b.author_id"
+            f"SELECT b.id, b.title, {language}, a.name AS author FROM books b "
+            f"JOIN authors a ON a.id = b.author_id {hidden}"
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -667,7 +673,7 @@ def _other_language(language: str, book: dict, identities: list[tuple[str, str, 
 
 # ---- running it ---------------------------------------------------------------
 
-CHECK_VERSION = 4  # raise when the checks change, so stored verdicts are worked out again
+CHECK_VERSION = 5  # raise when the checks change, so stored verdicts are worked out again
 
 
 def _signature(item: dict) -> str:
