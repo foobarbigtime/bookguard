@@ -284,3 +284,14 @@ def test_an_ebook_type_file_inside_the_audiobooks_folder_is_found_and_judged(lib
     outcome = unmatched.check_item(item, lib["library"], None)
 
     assert outcome["verdict"] == "JUNK" and "1008 bytes" in outcome["reason"]
+
+
+def test_overlapping_library_prefixes_use_the_most_specific_one(lib, monkeypatch):
+    monkeypatch.setattr(settings, "audiobook_bindery_prefix", "/data")
+    monkeypatch.setattr(settings, "ebook_bindery_prefix", "/data/books")
+    assert unmatched._local_path("/data/books/A/B.epub", "ebook") == str(lib["root"] / "A/B.epub")
+    assert unmatched._local_path("/data/audio/A/B.mp3", "audiobook") == str(lib["audio"] / "audio/A/B.mp3")
+
+    monkeypatch.setattr(settings, "audiobook_bindery_prefix", "/data/books")  # identical: the row's format decides
+    assert unmatched._local_path("/data/books/A/B.epub", "ebook") == str(lib["root"] / "A/B.epub")
+    assert unmatched._local_path("/data/books/A/B.mp3", "audiobook") == str(lib["audio"] / "A/B.mp3")

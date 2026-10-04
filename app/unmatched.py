@@ -359,11 +359,13 @@ def _audio_facts(files: list[Path], evidence: list) -> dict:
 def _local_path(bindery_path: str, fmt: str) -> str:
     """Map by the library folder the file is in, not by its type: Bindery lists, say,
     a .txt "ebook" that sits in the audiobooks folder."""
-    for root_fmt in ("audiobook", "ebook"):
-        prefix = settings.audiobook_bindery_prefix if root_fmt == "audiobook" else settings.ebook_bindery_prefix
-        if bindery_path == prefix or bindery_path.startswith(prefix.rstrip("/") + "/"):
-            return map_path(bindery_path, root_fmt)
-    return map_path(bindery_path, fmt)
+    matches = []
+    for root_fmt, prefix in (("audiobook", settings.audiobook_bindery_prefix), ("ebook", settings.ebook_bindery_prefix)):
+        prefix = prefix.rstrip("/")
+        if prefix and (bindery_path == prefix or bindery_path.startswith(prefix + "/")):
+            # Most specific prefix wins; equal prefixes go to the row's own format.
+            matches.append((len(prefix), root_fmt == fmt, root_fmt))
+    return map_path(bindery_path, max(matches)[2] if matches else fmt)
 
 
 def _unit_files(item: dict) -> list[Path]:
