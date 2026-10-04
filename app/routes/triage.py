@@ -15,6 +15,7 @@ from ..db import latest_results, latest_scan, result_by_id
 from ..put_back import put_back
 from ..replace import triage_replace
 from ..unmatched import attach as attach_unmatched, check_status, start_check
+from ..duplicates import hide_all_empty, hide_empty
 from ..scanner import start_scan
 from ..services.dashboard import latest_missing_cleanup
 from ..verifier import verify_result
@@ -184,6 +185,31 @@ def api_unmatched_attach(row_id: int, payload: ConfirmationRequest):
     except ActionError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return {"ok": True, "message": message}
+
+
+@router.post("/duplicates/{book_id}/hide")
+def api_duplicate_hide(book_id: int, payload: ConfirmationRequest):
+    """Exclude one empty extra Bindery entry (Bindery can include it again)."""
+    require_confirmation(payload, "HIDE_DUPLICATE")
+    try:
+        message = hide_empty(book_id)
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True, "message": message}
+
+
+@router.post("/duplicates/hide-all")
+def api_duplicate_hide_all(payload: ConfirmationRequest):
+    """Exclude every empty extra Bindery entry that is safe to hide, each checked again."""
+    require_confirmation(payload, "HIDE_ALL_DUPLICATES")
+    try:
+        done = hide_all_empty()
+    except ActionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    message = f"Hid {done['hidden']} empty extra entries in Bindery."
+    if done["problems"]:
+        message += f" {len(done['problems'])} were left alone: " + " ".join(done["problems"][:3])
+    return {"ok": True, "message": message, **done}
 
 
 @router.post("/triage/{result_id}/replace")

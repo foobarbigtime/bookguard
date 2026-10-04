@@ -164,6 +164,8 @@ def _cleanup_events(conn, limit: int) -> list[dict[str, Any]]:
         label = (
             "Put back"
             if action == "PUT_BACK"
+            else "Hide duplicate"
+            if action == "HIDE_DUPLICATE"
             else "Quarantine"
             if "QUARANTINE" in action
             else "Detach"
