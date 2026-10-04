@@ -6,6 +6,7 @@ from typing import Any
 
 from .attention_execution import stale_execution_items
 from .config import settings
+from .file_safety import sha256_file
 from .operator_guidance import operation_guidance
 from .observe import observe_attention_items
 from .db import (
@@ -70,8 +71,9 @@ def _left_nothing_behind(kind: str, row) -> bool:
     """True only when the record proves the failed step changed nothing.
 
     A grab Bindery refused has no queue item, staged file or admission. An
-    admission that never recorded a publication left nothing only if its
-    library file is not there now; anything else stays visible.
+    admission that never recorded a publication left nothing only if the
+    library has no file at its path, or the file there is not the copy it
+    verified (Bindery or a person put it there). Anything else stays visible.
     """
     if str(row["status"] or "").casefold() != "failed":
         return False
@@ -90,7 +92,15 @@ def _left_nothing_behind(kind: str, row) -> bool:
         if not stored or not relative.parts:
             return False
         local = Path(settings.ebook_root) / relative
-        return not (local.exists() or local.is_symlink())
+        if not (local.exists() or local.is_symlink()):
+            return True
+        verified = str(_column(row, "staged_sha256") or "")
+        if not verified or local.is_symlink() or not local.is_file():
+            return False
+        try:
+            return sha256_file(local) != verified
+        except OSError:
+            return False
     return False
 
 
