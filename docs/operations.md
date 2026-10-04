@@ -9,7 +9,7 @@ in a separate directory. See [installation](getting-started.md) for paths.
 BookGuard's persistent application state lives in `/config/bookguard.db`. The
 backup helper creates a transactionally consistent SQLite copy while the normal
 BookGuard container may remain running. It does not copy media files, Bindery's
-database, credentials, verification snapshots, staging, or quarantine content.
+database, credentials, verification snapshots, or quarantine content.
 
 Create a backup on the Unraid host:
 
@@ -160,7 +160,7 @@ root filesystem. Bindery's read-only database and BookGuard's writable host
 directories therefore need normal filesystem ownership/permissions for that
 runtime identity; BookGuard does not bypass DAC permissions with capabilities.
 
-Writable state is limited to the explicit `/config`, `/staging`, and `/quarantine`
+Writable state is limited to the explicit `/config` and `/quarantine`
 mounts plus the action alias when deliberately enabled. `/tmp` is a
 bounded tmpfs mounted with `nosuid`, `nodev`, and `noexec`; application code,
 Python packages, and system binaries remain immutable at runtime.

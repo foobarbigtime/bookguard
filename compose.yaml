@@ -35,26 +35,13 @@ services:
       EBOOK_BINDERY_PREFIX: ${EBOOK_BINDERY_PREFIX:-/data/media/books}
       CONFIG_DIR: /config
       QUARANTINE_ROOT: ${QUARANTINE_ROOT:-/quarantine}
-      BOOKGUARD_STAGING_ROOT: ${BOOKGUARD_STAGING_ROOT:-/staging}
-      BOOKGUARD_BINDERY_DROP_FOLDER: ${BOOKGUARD_BINDERY_DROP_FOLDER:-}
-      # manual is the default. observe is non-mutating. automatic is E4-only
-      # and remains inert unless exact recovery step codes are explicitly allowlisted
-      # and have a code-registered executor with fresh boundary revalidation.
+      # manual is the default. observe records what BookGuard would do and
+      # changes nothing. automatic was removed and now behaves like manual.
       BOOKGUARD_AUTOMATION_MODE: ${BOOKGUARD_AUTOMATION_MODE:-manual}
-      BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST: ${BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST:-}
-      BOOKGUARD_AUTOMATIC_REACQUISITION: ${BOOKGUARD_AUTOMATIC_REACQUISITION:-false}
-      BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED: ${BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED:-false}
-      BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS: ${BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS:-10}
-      BOOKGUARD_MAX_STAGED_EBOOK_BYTES: ${BOOKGUARD_MAX_STAGED_EBOOK_BYTES:-536870912}
       # Ebook quarantine/remediation uses a separate opt-in writable alias.
       # The alias is absent unless compose.actions.yaml is deliberately included.
       BOOKGUARD_EBOOK_ACTIONS_ENABLED: ${BOOKGUARD_EBOOK_ACTIONS_ENABLED:-false}
       BOOKGUARD_EBOOK_ACTION_ROOT: ${BOOKGUARD_EBOOK_ACTION_ROOT:-/action-books}
-      # Direct admission is separately gated and has no writable library mount
-      # unless compose.admission.yaml is deliberately included.
-      BOOKGUARD_ADMISSION_ENABLED: ${BOOKGUARD_ADMISSION_ENABLED:-false}
-      BOOKGUARD_ADMISSION_ROOT: ${BOOKGUARD_ADMISSION_ROOT:-/admission-books}
-      BOOKGUARD_ADMISSION_BINDERY_ROOT: ${BOOKGUARD_ADMISSION_BINDERY_ROOT:-/data/media/books}
       BOOKGUARD_ALLOW_ACTIONS: ${BOOKGUARD_ALLOW_ACTIONS:-false}
       BOOKGUARD_SAMPLE_FILES: ${BOOKGUARD_SAMPLE_FILES:-3}
       BOOKGUARD_SCAN_ON_START: ${BOOKGUARD_SCAN_ON_START:-false}
@@ -107,7 +94,3 @@ services:
       - /mnt/user/data/media/audiobooks:/audiobooks:ro
       - /mnt/user/data/media/books:/books:ro
       - /mnt/user/data/bookguard-quarantine:/quarantine
-      # Pre-import staging for guarded, explicitly confirmed reacquisition.
-      # Bindery must use external import with auto-grab disabled and map its
-      # drop folder to this same host path.
-      - /mnt/user/data/bookguard-staging:/staging

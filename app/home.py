@@ -32,6 +32,8 @@ RECENT_DAYS = 7
 
 # Workflow attention (interrupted or refused work), grouped by what it is.
 _WORKFLOW_GROUPS: dict[str, tuple[str, str]] = {
+    "acquisition": ("legacy", "Unfinished work from a removed feature"),
+    "admission": ("legacy", "Unfinished work from a removed feature"),
     "hardlink_correction": ("shared", "A shared-file correction was interrupted"),
     "hardlink_cleanup": ("shared", "A shared-file correction was interrupted"),
     "recovery_plan": ("refused", "Automatic steps were refused by a safety check"),

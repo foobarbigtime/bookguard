@@ -13,7 +13,6 @@ def _compose_payload(
         {"source": "/host/audio", "target": "/audiobooks", "read_only": True},
         {"source": "/host/books", "target": "/books", "read_only": True},
         {"source": "/host/quarantine", "target": "/quarantine", "read_only": False},
-        {"source": "/host/staging", "target": "/staging", "read_only": False},
     ]
     if include_admission:
         volumes.append({

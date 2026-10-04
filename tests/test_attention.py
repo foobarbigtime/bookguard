@@ -18,11 +18,13 @@ def test_attention_snapshot_collects_only_intervention_states(monkeypatch):
     monkeypatch.setattr(attention, "observe_attention_items", lambda limit: [])
     monkeypatch.setattr(attention, "_blocked_plan_items", lambda limit: [])
     monkeypatch.setattr(attention, "stale_execution_items", lambda limit: [])
+    monkeypatch.setattr(attention, "_legacy_items", lambda limit: [])
 
     snapshot = attention.attention_snapshot()
 
     assert snapshot["total"] == 2
     assert snapshot["summary"] == {
+        "legacy": 0,
         "hardlinkCorrections": 1,
         "hardlinkCleanups": 1,
         "recoveryPlans": 0,
@@ -39,6 +41,7 @@ def test_attention_snapshot_zero_state(monkeypatch):
     monkeypatch.setattr(attention, "observe_attention_items", lambda limit: [])
     monkeypatch.setattr(attention, "_blocked_plan_items", lambda limit: [])
     monkeypatch.setattr(attention, "stale_execution_items", lambda limit: [])
+    monkeypatch.setattr(attention, "_legacy_items", lambda limit: [])
 
     snapshot = attention.attention_snapshot()
 
@@ -106,3 +109,41 @@ def _minimal_home(attention_groups):
         "system": [],
         "recent": {"days": 7, "totals": {"added": 0, "quarantined": 0, "blocked": 0}, "events": []},
     }
+
+
+def test_unfinished_legacy_acquisition_and_admission_stay_visible(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.db import local_conn
+
+    monkeypatch.setattr(settings, "config_dir", str(tmp_path))
+    with local_conn() as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS ebook_acquisitions (id INTEGER PRIMARY KEY, result_id INTEGER, status TEXT, error TEXT, created_at TEXT, updated_at TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS ebook_admissions (id INTEGER PRIMARY KEY, result_id INTEGER, status TEXT, error TEXT, created_at TEXT, updated_at TEXT)")
+        conn.executemany(
+            "INSERT INTO ebook_acquisitions(id, result_id, status, error, created_at, updated_at) VALUES (?, NULL, ?, ?, '2026-09-20T10:00:00Z', '2026-09-20T10:00:00Z')",
+            [(1, "cleanup_required", "cleanup stopped"), (2, "finalized", None)],
+        )
+        conn.execute(
+            "INSERT INTO ebook_admissions(id, result_id, status, error, created_at, updated_at) VALUES (4, NULL, 'registration_conflict', NULL, '2026-09-20T07:00:00Z', NULL)"
+        )
+        conn.commit()
+    monkeypatch.setattr(attention, "_journal_rows", lambda table, id_column: [])
+    monkeypatch.setattr(attention, "observe_attention_items", lambda limit: [])
+    monkeypatch.setattr(attention, "_blocked_plan_items", lambda limit: [])
+    monkeypatch.setattr(attention, "stale_execution_items", lambda limit: [])
+
+    snapshot = attention.attention_snapshot()
+
+    assert snapshot["summary"]["legacy"] == 2
+    found = {(item["kind"], item["id"]): item for item in snapshot["items"]}
+    assert set(found) == {("acquisition", 1), ("admission", 4)}
+    assert found[("acquisition", 1)]["href"] == "/activity/acquisition/1"
+    assert found[("admission", 4)]["detailHref"] == "/activity/admission/4"
+    assert all("acquisitionPanel" not in item["href"] for item in snapshot["items"])
+
+
+def test_no_attention_link_points_at_the_removed_triage_panel():
+    from pathlib import Path
+
+    for path in Path("app").rglob("*.py"):
+        assert "acquisitionPanel" not in path.read_text(encoding="utf-8"), path

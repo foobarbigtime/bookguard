@@ -97,46 +97,6 @@
     </div>
   </section>
 
-  <section class="diagnostic-sections">
-    {% for section in diagnostics.sections %}
-    <article class="table-card diagnostic-section">
-      <div class="section-title row-between">
-        <div>
-          <h2>{{ section.label }}</h2>
-          <p>{{ section.message or "Current read-only safety state." }}</p>
-        </div>
-        <span class="workflow-state {{ 'workflow-state-ready' if section.ready else 'workflow-state-review' }}">
-          {{ section.state|replace('_',' ') }}
-        </span>
-      </div>
-
-      {% if section.explanations %}
-      <div class="diagnostic-blockers">
-        {% for blocker in section.explanations %}
-        <div class="diagnostic-blocker">
-          <strong>{{ blocker.label }}</strong>
-          <small><b>Why:</b> {{ blocker.why }}</small>
-          <small><b>What to change:</b> {{ blocker.fix }}</small>
-          <code>{{ blocker.key }}</code>
-        </div>
-        {% endfor %}
-      </div>
-      {% elif section.state == 'error' %}
-      <div class="diagnostic-blockers">
-        <div class="diagnostic-blocker">
-          <strong>Readiness check could not complete</strong>
-          <small>{{ section.message }}</small>
-        </div>
-      </div>
-      {% else %}
-      <div class="diagnostic-ready">
-        <strong>No readiness blockers reported.</strong>
-        <small>This does not authorize a mutation by itself; the guarded operation will re-check its safety conditions at the mutation boundary.</small>
-      </div>
-      {% endif %}
-    </article>
-    {% endfor %}
-  </section>
 </main>
 </body>
 </html>

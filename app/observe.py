@@ -1059,11 +1059,7 @@ def observe_attention_items(limit: int = 200) -> list[dict[str, Any]]:
             and str(decoded["evidence"].get("scanId") or "") != latest_scan
         ):
             continue
-        workflow = (
-            "/review/triage#acquisitionPanel"
-            if decoded["subjectKind"] in {"acquisition", "admission"}
-            else "/review"
-        )
+        workflow = "/review"
         items.append({
             "kind": "observe",
             "kindLabel": "Observe Mode",

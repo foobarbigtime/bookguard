@@ -78,19 +78,14 @@ def validate_compose(payload: dict[str, Any], profile: str) -> dict[str, bool]:
         "binderyDatabaseMountedReadOnly": bool(
             volumes.get("/bindery", {}).get("read_only")
         ),
-        "stagingMountedWritable": (
-            "/staging" in volumes and not bool(volumes["/staging"].get("read_only"))
-        ),
+        # BookGuard no longer stages downloads; a writable drop folder is not needed.
+        "stagingMountAbsent": "/staging" not in volumes,
         "quarantineMountedWritable": (
             "/quarantine" in volumes
             and not bool(volumes["/quarantine"].get("read_only"))
         ),
         "configMountedWritable": (
             "/config" in volumes and not bool(volumes["/config"].get("read_only"))
-        ),
-        "stagingSeparateFromLibrary": (
-            volumes.get("/staging", {}).get("source")
-            != volumes.get("/books", {}).get("source")
         ),
         "quarantineSeparateFromLibrary": (
             volumes.get("/quarantine", {}).get("source")

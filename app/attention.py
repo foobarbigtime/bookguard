@@ -8,6 +8,7 @@ from .operator_guidance import operation_guidance
 from .observe import observe_attention_items
 from .db import (
     local_conn,
+    result_by_id,
     utc_now,
 )
 
@@ -48,6 +49,54 @@ def _journal_rows(table: str, id_column: str) -> list[dict[str, Any]]:
         for row in rows
         if str(row["status"] or "").casefold() not in _RESOLVED_JOURNAL_STATUSES
     ]
+
+
+# Records left by the removed self-download workflows (acquisition, admission).
+# BookGuard no longer advances them, so an unfinished one stays visible with a
+# link to its Activity record until someone checks it in Bindery.
+_LEGACY_ATTENTION = {
+    "ebook_acquisitions": ("acquisition", "Acquisition", {"review_required", "finalizing", "cleanup_required", "failed"}),
+    "ebook_admissions": ("admission", "Admission", {"registration_conflict", "registration_correcting", "failed"}),
+}
+
+
+def _legacy_items(limit: int) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    with local_conn() as conn:
+        for table, (kind, label, statuses) in _LEGACY_ATTENTION.items():
+            if not _table_exists(conn, table):
+                continue
+            rows = conn.execute(
+                f"SELECT id, result_id, status, error, created_at, updated_at FROM {table} "
+                "ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+            for row in rows:
+                status = str(row["status"] or "").casefold()
+                if status not in statuses:
+                    continue
+                result = result_by_id(int(row["result_id"])) if row["result_id"] else None
+                error = str(row["error"] or "").strip()
+                detail = f"/activity/{kind}/{row['id']}"
+                items.append({
+                    "kind": kind,
+                    "kindLabel": label,
+                    "id": row["id"],
+                    "status": status,
+                    "title": str((result or {}).get("title") or ""),
+                    "author": str((result or {}).get("author") or ""),
+                    "message": error or f"An older BookGuard left this {kind} unfinished ({status.replace('_', ' ')}).",
+                    "guidance": {
+                        "label": "Left over from a removed feature",
+                        "why": "BookGuard no longer downloads or places files itself, so it will not finish this.",
+                        "nextStep": "Open the Activity record, then check the book, its files and any download in Bindery.",
+                        "recordedError": error,
+                    },
+                    "updatedAt": row["updated_at"] or row["created_at"],
+                    "detailHref": detail,
+                    "href": detail,
+                })
+    return items
 
 
 def _hardlink_items() -> list[dict[str, Any]]:
@@ -138,7 +187,8 @@ def attention_snapshot(limit: int = 200) -> dict[str, Any]:
     """Return durable, read-only operator-attention state across guarded workflows."""
     limit = max(1, min(int(limit), 500))
     items = (
-        _hardlink_items()
+        _legacy_items(limit)
+        + _hardlink_items()
         + _blocked_plan_items(limit)
         + stale_execution_items(limit)
         + observe_attention_items(limit)
@@ -150,6 +200,7 @@ def attention_snapshot(limit: int = 200) -> dict[str, Any]:
         "total": len(items),
         "items": items,
         "summary": {
+            "legacy": counts["acquisition"] + counts["admission"],
             "hardlinkCorrections": counts["hardlink_correction"],
             "hardlinkCleanups": counts["hardlink_cleanup"],
             "recoveryPlans": counts["recovery_plan"],

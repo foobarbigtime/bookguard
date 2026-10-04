@@ -64,7 +64,7 @@ The acceptance test creates temporary clean and EICAR antivirus-test files
 inside the BookGuard container, proves the clean control is accepted, proves
 ClamAV detects EICAR, and proves BookGuard converts that detection into a
 fail-closed security result. The temporary files are deleted automatically and
-no test file is written to the ebook library, staging, or quarantine paths.
+no test file is written to the ebook library or quarantine paths.
 
 A deterministic failure produces an `UNSAFE_FILE` verdict before content identity is evaluated.
 Unsafe files are never treated as the right book. Plain-text and legacy formats

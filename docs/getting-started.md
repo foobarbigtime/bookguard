@@ -7,7 +7,7 @@ audit and preview settings; enable write workflows only when you need them.
 
 - Git and Docker with Docker Compose on the host.
 - Bindery's database and library folders, readable by the BookGuard container.
-- Dedicated writable folders for BookGuard's database, quarantine, and staging.
+- Dedicated writable folders for BookGuard's database and quarantine.
 - A password for BookGuard and a choice of localhost or LAN access.
 
 The supplied container runs as Unraid's `nobody:users` (`99:100`). If you choose
@@ -54,7 +54,6 @@ your installation. Its defaults are:
 | `/mnt/user/data/media/audiobooks` | `/audiobooks` | Read-only library |
 | `/mnt/user/data/media/books` | `/books` | Read-only library |
 | `/mnt/user/data/bookguard-quarantine` | `/quarantine` | Writable quarantine |
-| `/mnt/user/data/bookguard-staging` | `/staging` | Writable staging |
 
 Create the writable directories and make them writable by the selected UID/GID.
 Keep the ordinary library and Bindery mounts read-only. The default database
