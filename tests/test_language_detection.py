@@ -39,7 +39,7 @@ def test_language_override_escalates_pass_to_review():
     assert result["reason_code"] == "NON_ENGLISH_LANGUAGE"
     assert result["metadata"]["policy_flags"] == ["NON_ENGLISH_LANGUAGE"]
     assert result["reasons"][0] == "Expected title and author matched."
-    assert "non-English language: de" in result["reasons"][-1]
+    assert "declares German, which is not one of your library languages" in result["reasons"][-1]
 
 
 def test_language_override_never_downgrades_reject():
@@ -58,7 +58,7 @@ def test_language_override_never_downgrades_reject():
     assert result["reason_code"] == "STRONG_MISMATCH"
     assert result["metadata"]["policy_flags"] == ["NON_ENGLISH_LANGUAGE"]
     assert result["reasons"][0] == "Strong mismatch evidence."
-    assert "non-English language: fr" in result["reasons"][-1]
+    assert "declares French, which is not one of your library languages" in result["reasons"][-1]
 
 
 def test_epub_language_is_read_from_package_metadata(tmp_path):
@@ -119,3 +119,32 @@ def test_pdf_language_is_read_in_isolated_probe(tmp_path):
 
     assert result["languages"] == ["de"]
     assert result["evidence"] == ["de"]
+
+
+def test_junk_language_codes_count_as_undeclared():
+    assert [normalize_language(code) for code in ["xxx", "un", "zxx", "mul", "und", "swe", "en-US"]] == [
+        "", "", "", "", "", "sv", "en",
+    ]
+
+
+def test_library_languages_decide_what_is_flagged(monkeypatch):
+    from app.config import settings
+    from app.language_detection import outside_library_languages
+
+    result = {"languages": ["eng", "nl", "de"]}
+    monkeypatch.setattr(settings, "library_languages", ["en"])
+    assert outside_library_languages(result) == ["de", "nl"]
+    monkeypatch.setattr(settings, "library_languages", ["en", "nl"])
+    assert outside_library_languages(result) == ["de"]
+    monkeypatch.setattr(settings, "library_languages", [])
+    assert outside_library_languages(result) == []  # keep every language
+
+
+def test_library_languages_setting_accepts_names_and_codes():
+    from app.config import Settings
+
+    configured = Settings()
+    configured.apply({"library_languages": "English, nl, xxx, Dutch"})
+    assert configured.library_languages == ["en", "nl"]
+    configured.apply({"library_languages": ""})
+    assert configured.library_languages == []

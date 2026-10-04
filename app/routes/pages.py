@@ -257,7 +257,7 @@ def review_page(request: Request, group: str = "", language: str = "", page: int
     filtered = [
         item for item in items
         if (not selected or item["group"] in selected)
-        and (language != "other" or item["language"]["nonEnglish"])
+        and (language != "other" or item["language"]["otherLanguage"])
     ]
     pages = max(1, (len(filtered) + REVIEW_PAGE_LIMIT - 1) // REVIEW_PAGE_LIMIT)
     page = min(max(1, page), pages)
@@ -294,7 +294,7 @@ def review_page(request: Request, group: str = "", language: str = "", page: int
             "counts": group_counts(items),
             "group": ",".join(selected),
             "language_filter": language == "other",
-            "non_english": sum(1 for item in items if item["language"]["nonEnglish"]),
+            "non_english": sum(1 for item in items if item["language"]["otherLanguage"]),
             "allow_actions": settings.allow_actions,
             "repair_mode": settings.metadata_repair_mode,
             "catalogue_moves": list_moves(50),

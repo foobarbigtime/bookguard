@@ -28,7 +28,7 @@
     {% endfor %}
     {% if non_english or language_filter %}
       <a class="chip{% if language_filter %} active{% endif %}" href="/review?language=other"{% if language_filter %} aria-current="page"{% endif %}>
-        <span class="lang-tag" aria-hidden="true">Aa</span>Not in English <b>{{ non_english }}</b>
+        <span class="lang-tag" aria-hidden="true">Aa</span>Other languages <b>{{ non_english }}</b>
       </a>
     {% endif %}
   </nav>
@@ -47,7 +47,7 @@
           <span class="dot tone-bg-{{ tones[item.group] }}" aria-hidden="true"></span>
           <span class="review-row-text">
             <strong>{{ item.title }}</strong>{% if item.author %}<span class="muted"> · {{ item.author }}</span>{% endif %}
-            {% if item.language.nonEnglish %}<span class="lang-tag">{{ item.language.label }}</span>{% endif %}
+            {% if item.language.otherLanguage %}<span class="lang-tag">{{ item.language.label }}</span>{% endif %}
             <small>
               {% if item.group == 'verified' %}Verified as the right book.
               {% elif item.contains and item.group in ['move', 'duplicate', 'wrong'] %}Contains {{ item.contains }}.

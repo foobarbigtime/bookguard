@@ -54,21 +54,53 @@ LANGUAGE_ALIASES = {
     "zh": "zh",
     "zho": "zh",
     "chi": "zh",
+    "hun": "hu", "tur": "tr", "ara": "ar", "heb": "he", "gre": "el", "ell": "el",
+    "rum": "ro", "ron": "ro", "cat": "ca", "hin": "hi", "tha": "th", "vie": "vi",
+    "ind": "id", "nob": "nb", "nno": "nn", "slv": "sl", "slk": "sk", "slo": "sk",
+    "hrv": "hr", "srp": "sr", "bul": "bg", "est": "et", "lav": "lv", "lit": "lt",
+    "ice": "is", "isl": "is", "gle": "ga", "wel": "cy", "cym": "cy", "per": "fa",
+    "fas": "fa", "afr": "af", "eus": "eu", "baq": "eu", "glg": "gl", "lat": "la",
 }
+
+
+# ISO 639-1 codes. Anything else ("xxx", "un", "zxx", "mul", a typo) is not a
+# language a file can be judged by, so it counts as undeclared.
+ISO_639_1 = frozenset("""
+aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy
+da de dv dz ee el en eo es et eu fa ff fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu
+hy hz ia id ie ig ii ik io is it iu ja jv ka kg ki kj kk kl km kn ko kr ks ku kv kw ky la lb
+lg li ln lo lt lu lv mg mh mi mk ml mn mr ms mt my na nb nd ne ng nl nn no nr nv ny oc oj om
+or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg si sk sl sm sn so sq sr ss st su sv sw
+ta te tg th ti tk tl tn to tr ts tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu
+""".split())
 
 
 def normalize_language(value: object) -> str:
     raw = str(value or "").strip().lower().replace("_", "-")
-    if not raw or raw in {"und", "unknown", "none", "n/a"}:
+    if not raw:
         return ""
     if raw in LANGUAGE_ALIASES:
         return LANGUAGE_ALIASES[raw]
     primary = raw.split("-", 1)[0]
     if primary in LANGUAGE_ALIASES:
         return LANGUAGE_ALIASES[primary]
-    if len(primary) in {2, 3} and primary.isalpha():
-        return primary
-    return ""
+    return primary if primary in ISO_639_1 else ""
+
+
+def library_languages() -> frozenset[str]:
+    """Languages the user keeps (Settings → Scanning). Empty means every language."""
+    from .config import settings
+
+    return frozenset(code for code in (normalize_language(v) for v in settings.library_languages) if code)
+
+
+def outside_library_languages(result: dict) -> list[str]:
+    """Declared languages that are not one of the user's library languages."""
+    keep = library_languages()
+    if not keep:
+        return []
+    languages = {normalize_language(value) for value in result.get("languages", [])}
+    return sorted(language for language in languages if language and language not in keep)
 
 
 def epub_languages(path: str) -> dict:
@@ -137,8 +169,8 @@ def declared_language(result: dict) -> dict:
     """The language a scanned file declares about itself, for display.
 
     Read from what the library scan recorded (EPUB/PDF metadata or audio
-    tags); nothing is opened here. ``nonEnglish`` is true only when the file
-    explicitly declares a language other than English.
+    tags); nothing is opened here. ``otherLanguage`` is true only when the file
+    explicitly declares a language that is not one of the library languages.
     """
     detection = (result.get("metadata") or {}).get("language_detection") or {}
     codes = sorted({code for code in (normalize_language(v) for v in detection.get("languages") or []) if code})
@@ -147,5 +179,5 @@ def declared_language(result: dict) -> dict:
         "codes": codes,
         "label": " and ".join(names),
         "declared": bool(codes),
-        "nonEnglish": bool(explicit_non_english({"languages": codes})),
+        "otherLanguage": bool(outside_library_languages({"languages": codes})),
     }

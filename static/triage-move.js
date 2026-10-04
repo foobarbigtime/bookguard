@@ -108,10 +108,10 @@
       ["New path", proof.destination],
       ["Language", proof.language && proof.language.declared ? proof.language.label : "Not declared in the file"],
     ]);
-    if (proof.language && proof.language.nonEnglish) {
+    if (proof.language && proof.language.otherLanguage) {
       line(
         `This file is in ${proof.language.label}. Moving it files the ${proof.language.label} edition under ` +
-        `“${proof.targetTitle}”. If you only keep English books, quarantine it instead.`,
+        `“${proof.targetTitle}”, but it is not one of your library languages. Quarantine it instead.`,
         "notice warning",
       );
     }

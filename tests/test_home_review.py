@@ -183,15 +183,15 @@ def test_home_still_loads_when_the_attention_queue_cannot_be_read(library, monke
 
 def test_review_shows_the_declared_language_and_filters_books_not_in_english(library):
     items = {item["title"]: item for item in open_review_items()}
-    assert items["Kill"]["language"] == {"codes": ["sv"], "label": "Swedish", "declared": True, "nonEnglish": True}
-    assert items["Mary, Mary"]["language"]["nonEnglish"] is False
+    assert items["Kill"]["language"] == {"codes": ["sv"], "label": "Swedish", "declared": True, "otherLanguage": True}
+    assert items["Mary, Mary"]["language"]["otherLanguage"] is False
 
     app = FastAPI()
     app.include_router(pages_router)
     with TestClient(app) as client:
         page = client.get("/review").text
         assert '<span class="lang-tag">Swedish</span>' in page
-        assert "Not in English <b>1</b>" in page
+        assert "Other languages <b>1</b>" in page
         filtered = client.get("/review?language=other").text
         assert 'data-review-id="%d"' % library["Kill"] in filtered
         assert 'data-review-id="%d"' % library["Mary, Mary"] not in filtered
@@ -348,3 +348,33 @@ def test_recent_fallback_has_the_same_tiles(library, monkeypatch):
     monkeypatch.setattr(home, "_recent", broken)
 
     assert set(home.home_summary()["recent"]["totals"]) == {"imports", "quarantined", "duplicates"}
+
+
+def test_a_right_book_in_another_language_is_flagged_for_removal(monkeypatch):
+    from app.library_review import review_item
+
+    row = {
+        "id": 7, "book_id": 3, "title": "Zo klaar met jou!", "author": "Emily Giffin", "format": "ebook",
+        "metadata": {"language_detection": {"languages": ["nl"]}},
+    }
+    verified = {"id": 1, "verdict": "VERIFIED_CORRECT", "confidence": 99, "evidence": {}}
+    wrong = {"id": 2, "verdict": "WRONG_CONTENT", "confidence": 99, "evidence": {}}
+
+    monkeypatch.setattr(settings, "library_languages", ["en"])
+    item = review_item(row, verified)
+    assert item["group"] == "language"
+    assert "Dutch" in item["suggestion"] and "Replace it" in item["suggestion"]
+    assert review_item(row, wrong)["group"] == "wrong"  # the bigger problem wins
+
+    monkeypatch.setattr(settings, "library_languages", ["en", "nl"])
+    assert review_item(row, verified)["group"] == "verified"
+    monkeypatch.setattr(settings, "library_languages", [])
+    assert review_item(row, verified)["group"] == "verified"
+
+
+def test_review_offers_replace_for_another_language_and_settings_has_the_field():
+    from pathlib import Path
+
+    controller = Path("static/review.js").read_text(encoding="utf-8")
+    assert 'item.group === "language") main.push(guarded ? replaceAction(item) : null, quarantine)' in controller
+    assert 'name="library_languages"' in Path("templates/settings.html").read_text(encoding="utf-8")
