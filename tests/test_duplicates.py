@@ -86,25 +86,14 @@ def _by_title(found):
 class Client:
     """Bindery's API, changing the fake database the way Bindery would."""
 
-    def __init__(self, db, preview="move"):
-        self.db, self.preview, self.excluded, self.moved = db, preview, [], []
+    def __init__(self, db):
+        self.db, self.excluded = db, []
 
     def exclude_book(self, book_id):
         self.excluded.append(book_id)
         with sqlite3.connect(self.db) as conn:
             conn.execute("UPDATE books SET excluded = 1 WHERE id = ?", (book_id,))
         return {"ok": True}
-
-    def preview_manual_reassignment(self, path, book_id, *, file_format):
-        root = "/a" if file_format == "audiobook" else "/b"
-        return {"status": self.preview, "destination": f"{root}/John Grisham/The Client (1993)"}
-
-    def reassign_manual_import(self, path, book_id, *, file_format):
-        self.moved.append((path, book_id))
-        with sqlite3.connect(self.db) as conn:
-            conn.execute("UPDATE book_files SET book_id = ?, path = ? WHERE path = ?",
-                         (book_id, "/a/John Grisham/The Client (1993)", path))
-            conn.execute("UPDATE books SET audiobook_file_path = '' WHERE audiobook_file_path = ?", (path,))
 
 
 def test_each_pair_is_proven_or_left_with_the_reason(bindery):
@@ -114,17 +103,17 @@ def test_each_pair_is_proven_or_left_with_the_reason(bindery):
                           "Patron Saint of Liars", "Fang", "Witness", "Gioco"}
     assert (found["Nightingale"]["keep"], found["Nightingale"]["hideable"]) == (1, [2])
     assert found["Superman / Shazam!"]["kind"] == "ALL_EMPTY" and found["Superman / Shazam!"]["hideable"] == [8]
-    assert found["The Client"]["kind"] == "SPLIT" and found["The Client"]["moves"] == [
-        {"from": 4, "format": "audiobook", "path": "/a/Client"}]
-    assert found["Time to Kill"]["kind"] == "TWO_COPIES" and not found["Time to Kill"]["moves"]
+    # entries with files are never changed: a split and two copies are only listed
+    assert found["The Client"]["kind"] == "SPLIT" and not found["The Client"]["hideable"]
+    assert found["Time to Kill"]["kind"] == "TWO_COPIES" and not found["Time to Kill"]["hideable"]
     assert found["Patron Saint of Liars"]["hideable"] == [18]  # the shared ISBN outweighs the wrong year
     assert found["Patron Saint of Liars"]["proof"] == "the same ISBN or ASIN"
-    # Bindery's years and language labels are too often wrong to keep a matching title apart
-    assert (found["Lost"]["hideable"], found["Lost"]["blocked"]) == ([10], "")
-    assert (found["Order"]["hideable"], found["Order"]["blocked"]) == ([16], "")
-    assert found["Witness"]["hideable"] == [24, 25]
-    assert found["Gioco"]["hideable"] == [27]
-    assert found["Witness"]["proven"] == {24: "the same ISBN or ASIN", 25: "the same title and author"}
+    # disagreeing year or language labels leave a title-only match for the user
+    assert not found["Lost"]["hideable"] and "the year 2014" in found["Lost"]["blocked"]
+    assert not found["Order"]["hideable"] and "labels “The Order” de" in found["Order"]["blocked"]
+    assert found["Witness"]["hideable"] == [24] and "“Witness!” the year 2020" in found["Witness"]["blocked"]
+    assert found["Witness"]["proven"] == {24: "the same ISBN or ASIN"}
+    assert found["Gioco"]["hideable"] == [27]  # "und" is no language, so nothing disagrees
     # Bindery's series places still keep two books apart
     assert "different numbers (6 and 8)" in found["Fang"]["blocked"] and not found["Fang"]["hideable"]
 
@@ -146,7 +135,7 @@ def test_hiding_excludes_only_a_proven_empty_entry_and_records_it(bindery):
     assert client.excluded == [2]
     action = recent_cleanup_actions(1)[0]
     assert (action["action_kind"], action["status"], action["book_id"]) == ("HIDE_DUPLICATE", "applied", 2)
-    for book_id in (1, 20):  # the kept entry; another place in the same series
+    for book_id in (1, 10, 16, 20):  # kept entry; years disagree; languages disagree; another series place
         with pytest.raises(ActionError):
             duplicates.hide_empty(book_id, client)
     assert client.excluded == [2]
@@ -172,32 +161,13 @@ def test_a_refusal_from_bindery_is_reported_and_recorded(bindery):
     assert recent_cleanup_actions(1)[0]["status"] == "failed"
 
 
-def test_a_split_is_joined_with_fix_match_then_the_emptied_entry_hidden(bindery):
+def test_fix_all_hides_every_proven_empty_entry_and_nothing_else(bindery):
     client = Client(bindery)
 
-    message = duplicates.merge_split(3, client, poll_seconds=0)
+    done = duplicates.fix_all(client, auto=True)
 
-    assert client.moved == [("/a/Client", 3)] and client.excluded == [4]
-    assert "Joined" in message
-    kinds = [a["action_kind"] for a in recent_cleanup_actions(2)]
-    assert kinds == ["HIDE_DUPLICATE", "MERGE_DUPLICATE"]
-
-
-def test_a_split_fix_match_cannot_do_changes_nothing(bindery):
-    client = Client(bindery, preview="collision")
-
-    with pytest.raises(ActionError, match="can't move"):
-        duplicates.merge_split(3, client, poll_seconds=0)
-    assert client.moved == [] and client.excluded == []
-
-
-def test_fix_all_hides_and_joins_every_proven_pair_and_nothing_else(bindery):
-    client = Client(bindery)
-
-    done = duplicates.fix_all(client, auto=True, poll_seconds=0)
-
-    assert done == {"hidden": 8, "merged": 1, "problems": []}
-    assert sorted(client.excluded) == [2, 4, 8, 10, 16, 18, 24, 25, 27]
+    assert done == {"hidden": 5, "problems": []}
+    assert sorted(client.excluded) == [2, 8, 18, 24, 27]
     action = recent_cleanup_actions(1)[0]
     assert action["followup"].startswith("Automatically")
 
@@ -217,9 +187,9 @@ def test_the_hourly_run_needs_both_switches_and_waits_an_hour(bindery, monkeypat
     monkeypatch.setattr(duplicates, "start_fix", lambda auto=False: started.append(auto) or True)
     now = datetime(2026, 10, 4, 9, 0, tzinfo=timezone.utc)
 
-    monkeypatch.setattr(settings, "fix_duplicates", False)
+    monkeypatch.setattr(settings, "fix_duplicates_hourly", False)
     assert scheduler.run_duplicate_fix(now) is False
-    monkeypatch.setattr(settings, "fix_duplicates", True)
+    monkeypatch.setattr(settings, "fix_duplicates_hourly", True)
     assert scheduler.run_duplicate_fix(now) is True
     assert scheduler.run_duplicate_fix(now + timedelta(minutes=30)) is False
     assert scheduler.run_duplicate_fix(now + timedelta(minutes=61)) is True
@@ -249,24 +219,24 @@ def _app():
 def test_duplicates_page_shows_what_is_kept_and_what_is_left_for_you(bindery):
     page = _app().get("/review/duplicates").text
 
-    assert "data-duplicates-fix" in page and "Fixed automatically every hour" in page
+    assert "data-duplicates-fix" in page and "Hourly fixing is off (Settings → Schedule)" in page
     assert "will be hidden" in page and "kept" in page
     assert "Left for you: they are different numbers (6 and 8) in the same series" in page
 
 
 def test_fixes_read_plainly_in_activity(bindery):
     duplicates.hide_empty(2, Client(bindery))
-    duplicates.fix_all(Client(bindery), auto=True, poll_seconds=0)
+    duplicates.fix_all(Client(bindery), auto=True)
     client = _app()
     action_id = recent_cleanup_actions(1)[0]["id"]
 
     activity = client.get("/activity").text
     assert "You hid the empty extra Bindery entry" in activity
-    assert "BookGuard joined" in activity and "BookGuard hid the empty extra Bindery entry" in activity
+    assert "BookGuard hid the empty extra Bindery entry" in activity
     assert client.get(f"/activity/cleanup/{action_id}").status_code == 200
 
 
-def test_bindery_language_labels_are_shown_but_never_block(bindery):
+def test_bindery_language_labels_are_shown_on_the_page(bindery):
     found = _by_title(duplicates.find_duplicates())
     order = {e["id"]: e["language"] for e in found["Order"]["entries"]}
     gioco = {e["id"]: e["language"] for e in found["Gioco"]["entries"]}
@@ -284,3 +254,41 @@ def test_what_the_last_run_left_alone_is_listed_with_the_reason(bindery, monkeyp
 
     assert "Left alone in the last run" in page
     assert "“Appeal” can&#39;t be hidden safely" in page
+
+
+def test_hourly_fixing_is_off_unless_turned_on(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.delenv("BOOKGUARD_FIX_DUPLICATES_HOURLY", raising=False)
+    assert Settings().fix_duplicates_hourly is False
+
+
+def test_the_setting_sits_in_the_schedule_part_of_settings():
+    page = open("templates/settings.html", encoding="utf-8").read()
+    schedule = page[page.index('<h4 class="settings-group">Schedule</h4>'):page.index('<h4 class="settings-group">New imports</h4>')]
+    assert 'name="fix_duplicates_hourly"' in schedule
+
+
+def test_a_saved_setting_from_the_old_default_does_not_turn_hourly_fixing_on():
+    from app.config import Settings
+
+    upgraded = Settings()
+    upgraded.apply({"fix_duplicates": True})  # what the earlier version saved by default
+
+    assert upgraded.fix_duplicates_hourly is False
+
+
+def test_the_schedule_names_the_switch_that_is_actually_off(bindery, monkeypatch):
+    from app import scheduler
+
+    def row():
+        return next(t for t in scheduler.scheduled_tasks() if t["key"] == "duplicate_fix")["schedule"]
+
+    monkeypatch.setattr(settings, "fix_duplicates_hourly", False)
+    monkeypatch.setattr(settings, "allow_actions", True)
+    assert row() == "Off (turn it on in Settings → Schedule)"
+    monkeypatch.setattr(settings, "fix_duplicates_hourly", True)
+    monkeypatch.setattr(settings, "allow_actions", False)
+    assert row() == "Off (turn on Bindery actions in Settings)"
+    monkeypatch.setattr(settings, "allow_actions", True)
+    assert row() == "Every hour"

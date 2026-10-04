@@ -88,10 +88,10 @@ def duplicates_page(request: Request):
         context={
             "groups": groups,
             "total": len(found),
-            "fixable": sum(len(g["hideable"]) + (1 if g["moves"] else 0) for g in found),
+            "fixable": sum(len(g["hideable"]) for g in found),
             "error": error,
             "status": fix_status(),
-            "fix_duplicates": settings.fix_duplicates,
+            "fix_duplicates_hourly": settings.fix_duplicates_hourly,
             "allow_actions": settings.allow_actions,
             "version": __version__,
         },

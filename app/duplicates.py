@@ -15,21 +15,22 @@ Each group is one of:
 * TWO_COPIES: two entries each have a file of the same kind.
 * ALL_EMPTY: no entry has a file.
 
-What BookGuard fixes, automatically after each check when "Fix duplicates
-automatically" is on (and with the Fix now button):
+What BookGuard fixes (with the Fix now button, or every hour only when "Fix
+duplicate Bindery entries automatically" is turned on under Settings → Schedule):
 
 * Empty extra entries are hidden with Bindery's own exclude.
 * When no entry has files, all but one are hidden (Bindery searched for each).
-* An ebook on one entry and the audiobook on another are joined with Bindery's
-  Fix match onto one entry; the emptied entry is then hidden.
 
-Only when the entries are one book: titles and author agree and Bindery's series
-data doesn't contradict it (different places in one series). Bindery's language
-and year labels are not used: on real libraries they come from a random edition
-("The Racketeer" labelled Swedish, "Nightingale" 2025) and only caused false
-alarms. The files themselves are compared by the file clean-up, which handles
-two copies of the same kind. Every change is checked again against Bindery right
-before, recorded in Activity, and can be undone in Bindery.
+Nothing with files is changed: an ebook and audiobook split over two entries, and
+two copies of the same kind, are only listed.
+
+Only when an entry is proven the kept entry's book: titles and author agree,
+Bindery's series data doesn't contradict it, and Bindery's year or language
+labels don't disagree, unless a shared ISBN/ASIN or series place proves it anyway.
+The labels are often wrong (they come from a random edition), so such pairs are
+left for the user with the reason, never decided by the title alone. Every
+change is checked again against Bindery right before, recorded in Activity, and
+can be undone in Bindery.
 """
 
 from __future__ import annotations
@@ -37,10 +38,8 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 from itertools import combinations
-from pathlib import Path, PurePosixPath
 import re
 import threading
-import time
 from typing import Any
 import unicodedata
 
@@ -48,7 +47,6 @@ from .actions import ActionError, resolve_bindery_api_key
 from .bindery_client import BinderyClient, BinderyClientError
 from .config import settings
 from .db import bindery_conn, local_conn, utc_now
-from .file_safety import is_within
 
 KINDS = {
     "EMPTY_EXTRA": "An extra entry with no files",
@@ -73,7 +71,6 @@ def title_key(title: str) -> str:
 LANGUAGES = {"en": "en", "eng": "en", "english": "en", "de": "de", "deu": "de", "ger": "de", "german": "de",
              "fr": "fr", "fra": "fr", "fre": "fr", "french": "fr", "es": "es", "spa": "es", "spanish": "es",
              "nl": "nl", "nld": "nl", "dut": "nl", "dutch": "nl", "sv": "sv", "swe": "sv", "swedish": "sv"}
-MERGE_WAIT_SECONDS = 600
 
 
 UNKNOWN_LANGUAGES = {"", "und", "mul", "zxx", "mis", "unknown"}
@@ -159,14 +156,25 @@ def _has_files(entry: dict) -> bool:
 
 
 def _conflict(a: dict, b: dict) -> str:
-    """Why two entries are not one book, or "". Only Bindery's series places count:
-    its language and year labels are too often wrong to stand against a matching title."""
+    """Why two entries are not one book, or "": different places in one Bindery series."""
     places_a, places_b = dict(a["series"]), dict(b["series"])
     for series_id in places_a.keys() & places_b.keys():
         first, second = _place(places_a[series_id]), _place(places_b[series_id])
         if first is not None and second is not None and first != second:
             low, high = sorted((first, second))
             return f"they are different numbers ({low:g} and {high:g}) in the same series"
+    return ""
+
+
+def _labels_disagree(entry: dict, keep: dict) -> str:
+    """Bindery's year or language labels disagree, or "". Not proof of two books (the
+    labels are often wrong), but enough that a matching title alone doesn't decide it."""
+    if entry["year"] and keep["year"] and abs(entry["year"] - keep["year"]) > 1:
+        return (f"Bindery gives “{entry['title']}” the year {entry['year']} and “{keep['title']}” "
+                f"{keep['year']}, and no ISBN or series place shows they are one book")
+    if entry["language"] and keep["language"] and entry["language"] != keep["language"]:
+        return (f"Bindery labels “{entry['title']}” {entry['language']} and “{keep['title']}” "
+                f"{keep['language']}, and no ISBN or series place shows they are one book")
     return ""
 
 
@@ -182,15 +190,28 @@ def _proof(a: dict, b: dict) -> str:
 
 
 def _evidence(entries: list[dict], keep: dict) -> tuple[dict[int, str], str]:
-    """Each other entry's proof of being the keeper's book, and why the group is left.
+    """Each other entry's proof of being the keeper's book, and why anything is left.
 
-    Any contradiction between two entries leaves the whole group (it may mix books)."""
+    A series contradiction between any two entries leaves the whole group (it may mix
+    books). Otherwise each entry is judged against the keeper on its own: a shared
+    ISBN/ASIN or series place proves it; a matching title proves it only when Bindery's
+    year and language labels don't disagree."""
     for a, b in combinations(entries, 2):
         reason = _conflict(a, b)
         if reason:
             return {}, reason
-    proven = {e["id"]: _proof(e, keep) or "the same title and author" for e in entries if e is not keep}
-    return proven, ""
+    proven: dict[int, str] = {}
+    left: list[str] = []
+    for entry in entries:
+        if entry is keep:
+            continue
+        proof = _proof(entry, keep)
+        disagreement = "" if proof else _labels_disagree(entry, keep)
+        if disagreement:
+            left.append(disagreement)
+        else:
+            proven[entry["id"]] = proof or "the same title and author"
+    return proven, "; ".join(left)
 
 
 def _keeper(entries: list[dict]) -> dict:
@@ -218,14 +239,9 @@ def _classify(entries: list[dict]) -> dict:
     keep = _keeper(entries)
     proven, blocked = _evidence(entries, keep)
     hideable = [e["id"] for e in (empty if with_files else entries) if e is not keep and e["id"] in proven]
-    moves: list[dict] = []
-    if kind == "SPLIT" and all(e["id"] in proven for e in with_files if e is not keep):
-        moves = [{"from": e["id"], "format": fmt, "path": path}
-                 for e in with_files if e is not keep
-                 for fmt, paths in (("ebook", e["ebooks"]), ("audiobook", e["audiobooks"])) for path in paths]
     proofs = sorted(set(proven.values()))
     proof = " and ".join(proofs) if proofs else ""
-    return {"kind": kind, "label": KINDS[kind], "keep": keep["id"], "hideable": hideable, "moves": moves,
+    return {"kind": kind, "label": KINDS[kind], "keep": keep["id"], "hideable": hideable,
             "proof": proof, "proven": proven, "blocked": blocked}
 
 
@@ -302,69 +318,15 @@ def hide_empty(book_id: int, client: BinderyClient | None = None, *, auto: bool 
             "To undo it, include it again on the book's page in Bindery.")
 
 
-def _inside_library(destination: str, file_format: str) -> bool:
-    prefix = settings.audiobook_bindery_prefix if file_format == "audiobook" else settings.ebook_bindery_prefix
-    path = PurePosixPath(destination)
-    return ".." not in path.parts and is_within(Path(destination), Path(prefix)) and path != PurePosixPath(prefix)
-
-
-def _formats_of(book_id: int) -> dict[str, list[str]]:
-    with bindery_conn() as conn:
-        rows = conn.execute("SELECT format, path FROM book_files WHERE book_id=?", (int(book_id),)).fetchall()
-    found: dict[str, list[str]] = defaultdict(list)
-    for row in rows:
-        found[str(row["format"])].append(str(row["path"]))
-    return found
-
-
-def merge_split(keep_id: int, client: BinderyClient | None = None, *, auto: bool = False,
-                wait_seconds: int = MERGE_WAIT_SECONDS, poll_seconds: float = 5) -> str:
-    """Join an ebook and an audiobook split over two entries onto one, with Bindery's Fix match."""
-    _require_actions()
-    group = _group_of(keep_id)
-    if group is None or group["keep"] != int(keep_id) or not group["moves"]:
-        raise ActionError("These entries are no longer an ebook/audiobook split. Nothing was changed.")
-    client = _client(client)
-    keep = next(e for e in group["entries"] if e["id"] == int(keep_id))
-    # Every move must be one Bindery's Fix match can do inside the library, before any starts.
-    for move in group["moves"]:
-        preview = client.preview_manual_reassignment(move["path"], int(keep_id), file_format=move["format"])
-        if preview.get("status") not in {"move", "noop"} or not _inside_library(
-                str(preview.get("destination") or ""), move["format"]):
-            raise ActionError(f"Bindery's Fix match can't move “{move['path']}” onto “{keep['title']}” "
-                              f"({preview.get('message') or preview.get('status') or 'no answer'}). Nothing was changed.")
-    for move in group["moves"]:
-        source = next(e for e in group["entries"] if e["id"] == move["from"])
-        note = (f"{'Automatically: ' if auto else ''}moved the {move['format']} of “{source['title']}” onto "
-                f"“{keep['title']}” (Bindery book {keep['id']}); one book because of {group['proven'][move['from']]}.")
-        try:
-            client.reassign_manual_import(move["path"], int(keep_id), file_format=move["format"])
-        except BinderyClientError as exc:
-            _record(source, keep, "MERGE_DUPLICATE", "failed", note, str(exc), auto)
-            raise ActionError(f"Bindery refused to move it: {exc}") from exc
-        deadline = time.monotonic() + wait_seconds
-        while not _formats_of(int(keep_id)).get(move["format"]):
-            if time.monotonic() > deadline:
-                _record(source, keep, "MERGE_DUPLICATE", "attention", note,
-                        "Bindery did not finish moving it in time; check the book in Bindery.", auto)
-                raise ActionError("Bindery did not finish moving it in time.")
-            time.sleep(poll_seconds)
-        _record(source, keep, "MERGE_DUPLICATE", "applied", note, auto=auto)
-    # The moved-from entries are empty now: hide them the usual way (checked again).
-    for book_id in {m["from"] for m in group["moves"]}:
-        hide_empty(book_id, client, auto=auto)
-    return f"Joined the ebook and audiobook onto “{keep['title']}” and hid the emptied entry."
-
-
 _LOCK = threading.Lock()
-STATUS: dict[str, Any] = {"running": False, "hidden": 0, "merged": 0, "problems": [], "finishedAt": ""}
+STATUS: dict[str, Any] = {"running": False, "hidden": 0, "problems": [], "finishedAt": ""}
 
 
-def fix_all(client: BinderyClient | None = None, *, auto: bool = False, **merge_options) -> dict:
-    """Every safe fix: hide proven empty extras, then join proven ebook/audiobook splits."""
+def fix_all(client: BinderyClient | None = None, *, auto: bool = False) -> dict:
+    """Hide every proven empty extra entry, each checked again on its own."""
     _require_actions()
     client = _client(client)
-    hidden, merged, problems = 0, 0, []
+    hidden, problems = 0, []
     for group in find_duplicates():
         for book_id in group["hideable"]:
             try:
@@ -372,14 +334,7 @@ def fix_all(client: BinderyClient | None = None, *, auto: bool = False, **merge_
                 hidden += 1
             except ActionError as exc:
                 problems.append(str(exc))
-    for group in find_duplicates():
-        if group["moves"]:
-            try:
-                merge_split(group["keep"], client, auto=auto, **merge_options)
-                merged += 1
-            except (ActionError, BinderyClientError) as exc:
-                problems.append(str(exc))
-    return {"hidden": hidden, "merged": merged, "problems": problems}
+    return {"hidden": hidden, "problems": problems}
 
 
 def start_fix(*, auto: bool = False) -> bool:

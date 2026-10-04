@@ -139,7 +139,7 @@ def run_duplicate_fix(now: datetime | None = None) -> bool:
     """Fix proven duplicate Bindery entries once an hour, when it is on and actions are on."""
     from .duplicates import start_fix
 
-    if not (settings.fix_duplicates and settings.allow_actions):
+    if not (settings.fix_duplicates_hourly and settings.allow_actions):
         return False
     now = now or local_now()
     last = _last_started("duplicate_fix")
@@ -289,9 +289,10 @@ def scheduled_tasks(now: datetime | None = None) -> list[dict[str, Any]]:
         {
             "key": "duplicate_fix",
             "name": "Fix duplicate entries",
-            "about": "Hides proven duplicate Bindery entries and joins split ebook/audiobook entries",
-            "schedule": "Every hour" if settings.fix_duplicates and settings.allow_actions
-            else "Off (turn on actions and duplicate fixing in Settings)",
+            "about": "Hides proven empty duplicate entries in Bindery",
+            "schedule": ("Off (turn it on in Settings → Schedule)" if not settings.fix_duplicates_hourly
+                         else "Off (turn on Bindery actions in Settings)" if not settings.allow_actions
+                         else "Every hour"),
             "lastAt": duplicate_last.isoformat() if duplicate_last else "",
             "last": "",
             "nextAt": "",
