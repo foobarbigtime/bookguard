@@ -124,20 +124,10 @@ def _lines_env(name: str, default: list[str]) -> list[str]:
 
 
 def _language_list(raw: object) -> list[str]:
-    """Normalised language codes from "en, nl" or a list; unknown codes are dropped."""
-    from .language_detection import LANGUAGE_NAMES, normalize_language
+    """Normalised language codes; an entry that names no language is dropped."""
+    from .language_detection import parse_language_list
 
-    by_name = {name.casefold(): code for code, name in LANGUAGE_NAMES.items()}
-    if isinstance(raw, str):
-        raw = raw.replace("\n", ",").split(",")
-    if not isinstance(raw, list):
-        return []
-    codes: list[str] = []
-    for part in raw:
-        code = by_name.get(str(part).strip().casefold()) or normalize_language(part)
-        if code and code not in codes:
-            codes.append(code)
-    return codes
+    return parse_language_list(raw)[0]
 
 
 def _clean_lines(raw: object) -> list[str]:
@@ -452,7 +442,12 @@ class Settings:
             self.music_genres = _clean_lines(raw)
 
         if "library_languages" in values:
-            self.library_languages = _language_list(values["library_languages"])
+            from .language_detection import parse_language_list
+
+            codes, unknown = parse_language_list(values["library_languages"])
+            # A typo must never turn into "keep every language": keep the old value.
+            if not unknown:
+                self.library_languages = codes
 
         if "author_aliases" in values:
             self.author_aliases = _clean_lines(values["author_aliases"])

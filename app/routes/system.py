@@ -196,6 +196,17 @@ async def api_save_settings(request: Request):
         payload.pop("bindery_api_key", None)
     payload.pop("clear_api_key", None)
 
+    if "library_languages" in payload:
+        from ..language_detection import parse_language_list
+
+        _, unknown = parse_language_list(payload["library_languages"])
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Library languages: {', '.join(unknown)} is not a language BookGuard knows. "
+                        "Use a name such as English or Dutch, or a code such as en or nl."),
+            )
+
     before = settings.public_dict()
     settings.apply(payload)
     save_persisted_settings(settings.persistable_dict())

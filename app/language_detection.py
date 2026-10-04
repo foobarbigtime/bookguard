@@ -63,8 +63,9 @@ LANGUAGE_ALIASES = {
 }
 
 
-# ISO 639-1 codes. Anything else ("xxx", "un", "zxx", "mul", a typo) is not a
-# language a file can be judged by, so it counts as undeclared.
+# Two-letter codes must be ISO 639-1 ("un" is not). Three-letter codes are kept
+# unless they are a placeholder that names no language; those count as undeclared.
+NOT_A_LANGUAGE = frozenset({"und", "mul", "zxx", "mis", "xxx", "unk", "nil", "non", "nul"})
 ISO_639_1 = frozenset("""
 aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy
 da de dv dz ee el en eo es et eu fa ff fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu
@@ -84,7 +85,11 @@ def normalize_language(value: object) -> str:
     primary = raw.split("-", 1)[0]
     if primary in LANGUAGE_ALIASES:
         return LANGUAGE_ALIASES[primary]
-    return primary if primary in ISO_639_1 else ""
+    if len(primary) == 2:
+        return primary if primary in ISO_639_1 else ""
+    if len(primary) == 3 and primary.isalpha() and primary not in NOT_A_LANGUAGE and not "qaa" <= primary <= "qtz":
+        return primary  # a real ISO 639-2/3 code without a two-letter form ("ben", "urd")
+    return ""
 
 
 def library_languages() -> frozenset[str]:
@@ -162,7 +167,35 @@ LANGUAGE_NAMES = {
     "pt": "Portuguese", "nl": "Dutch", "sv": "Swedish", "no": "Norwegian", "da": "Danish",
     "fi": "Finnish", "pl": "Polish", "cs": "Czech", "ru": "Russian", "uk": "Ukrainian",
     "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
+    "hu": "Hungarian", "tr": "Turkish", "ar": "Arabic", "he": "Hebrew", "el": "Greek",
+    "ro": "Romanian", "ca": "Catalan", "hi": "Hindi", "th": "Thai", "vi": "Vietnamese",
+    "id": "Indonesian", "nb": "Norwegian Bokmål", "nn": "Norwegian Nynorsk", "sl": "Slovenian",
+    "sk": "Slovak", "hr": "Croatian", "sr": "Serbian", "bg": "Bulgarian", "et": "Estonian",
+    "lv": "Latvian", "lt": "Lithuanian", "is": "Icelandic", "ga": "Irish", "cy": "Welsh",
+    "fa": "Persian", "af": "Afrikaans", "eu": "Basque", "gl": "Galician", "la": "Latin",
+    "bn": "Bengali", "ur": "Urdu", "ta": "Tamil", "ms": "Malay", "tl": "Tagalog", "sw": "Swahili",
 }
+
+
+def parse_language_list(raw: object) -> tuple[list[str], list[str]]:
+    """Codes from "English, nl" or a list, plus every entry that names no language."""
+    if isinstance(raw, str):
+        raw = raw.replace("\n", ",").split(",")
+    if not isinstance(raw, list):
+        return [], []
+    by_name = {name.casefold(): code for code, name in LANGUAGE_NAMES.items()}
+    codes: list[str] = []
+    unknown: list[str] = []
+    for part in raw:
+        text = str(part).strip()
+        if not text:
+            continue
+        code = by_name.get(text.casefold()) or normalize_language(text)
+        if not code:
+            unknown.append(text)
+        elif code not in codes:
+            codes.append(code)
+    return codes, unknown
 
 
 def declared_language(result: dict) -> dict:

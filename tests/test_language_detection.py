@@ -144,7 +144,34 @@ def test_library_languages_setting_accepts_names_and_codes():
     from app.config import Settings
 
     configured = Settings()
-    configured.apply({"library_languages": "English, nl, xxx, Dutch"})
-    assert configured.library_languages == ["en", "nl"]
+    configured.apply({"library_languages": "English, nl, Dutch, Hungarian"})
+    assert configured.library_languages == ["en", "nl", "hu"]
+    # A typo never turns into "keep every language": the old value stays.
+    configured.apply({"library_languages": "Englsh"})
+    assert configured.library_languages == ["en", "nl", "hu"]
     configured.apply({"library_languages": ""})
     assert configured.library_languages == []
+
+
+def test_real_three_letter_codes_are_kept_and_placeholders_dropped():
+    assert [normalize_language(code) for code in ["ben", "urd", "tam", "qab", "mis"]] == ["ben", "urd", "tam", "", ""]
+
+
+def test_saving_an_unknown_language_is_refused(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.config import settings
+    from app.db import init_local_db
+    from app.routes.system import router
+
+    monkeypatch.setattr(settings, "config_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "library_languages", ["en"])
+    init_local_db()
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response = client.post("/api/settings", json={"library_languages": "Englsh"})
+    assert response.status_code == 400
+    assert "Englsh is not a language BookGuard knows" in response.json()["detail"]
+    assert settings.library_languages == ["en"]
