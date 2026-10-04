@@ -12,15 +12,16 @@ The goal is **less manual setup, not less testing**.
 ```bash
 scripts/acceptance/run --list
 scripts/acceptance/run selftest
-BOOKGUARD_ACCEPTANCE_EXPECTED_SHA=<reviewed-full-sha> \
+BOOKGUARD_ACCEPTANCE_EXPECTED_SHA="replace-with-reviewed-40-character-sha" \
   scripts/acceptance/run quarantine-copy-fault
 ```
 
-For a mutation PR, pin the exact commit that was reviewed/built:
+For a mutation PR, replace the quoted placeholder with the exact commit that
+was reviewed/built. Replace `quarantine-copy-fault` with the scenario you need:
 
 ```bash
-BOOKGUARD_ACCEPTANCE_EXPECTED_SHA=<full-40-character-sha> \
-  scripts/acceptance/run <scenario>
+BOOKGUARD_ACCEPTANCE_EXPECTED_SHA="replace-with-reviewed-40-character-sha" \
+  scripts/acceptance/run quarantine-copy-fault
 ```
 
 A scenario that needs disposable host storage defaults to `<repo>/.acceptance`. On an
@@ -28,8 +29,8 @@ Unraid host you may instead keep it outside the worktree:
 
 ```bash
 BOOKGUARD_ACCEPTANCE_ROOT=/mnt/cache/appdata/bookguard-acceptance \
-BOOKGUARD_ACCEPTANCE_EXPECTED_SHA=<full-sha> \
-  scripts/acceptance/run <scenario>
+BOOKGUARD_ACCEPTANCE_EXPECTED_SHA="replace-with-reviewed-40-character-sha" \
+  scripts/acceptance/run quarantine-copy-fault
 ```
 
 ## Safety rules
@@ -96,8 +97,15 @@ or media.
 
 ## CI
 
-CI runs shell syntax validation and the network-free `selftest` scenario. Mutation
-scenarios that need Docker peers, injected crashes, or a realistic fake Bindery are still
-run explicitly as acceptance evidence. As reusable fake services mature, deterministic
-parts of those scenarios can be promoted into CI without removing the local acceptance
-pass.
+CI runs lint and Python tests, shell syntax validation, `selftest`,
+`cleanup-selftest`, the isolated smoke suite, and a set of disposable mutation
+scenarios. The exact current list is in
+[`.github/workflows/test.yml`](../../.github/workflows/test.yml); use it as the
+source of truth. `scripts/acceptance/run --list` lists all available scenarios,
+including ones that are not part of CI.
+
+CI fixtures do not mount the production library. Host-specific acceptance still
+matters for a mutation release: pin the reviewed commit, use a marked disposable
+acceptance root, and run the relevant failure/restart scenarios on the target
+runtime. Live deployment provenance, hardening, and ClamAV/EICAR checks remain
+separate in [the upgrade and verification workflow](../../docs/operations.md).
