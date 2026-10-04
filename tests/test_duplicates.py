@@ -187,9 +187,9 @@ def test_the_hourly_run_needs_both_switches_and_waits_an_hour(bindery, monkeypat
     monkeypatch.setattr(duplicates, "start_fix", lambda auto=False: started.append(auto) or True)
     now = datetime(2026, 10, 4, 9, 0, tzinfo=timezone.utc)
 
-    monkeypatch.setattr(settings, "fix_duplicates", False)
+    monkeypatch.setattr(settings, "fix_duplicates_hourly", False)
     assert scheduler.run_duplicate_fix(now) is False
-    monkeypatch.setattr(settings, "fix_duplicates", True)
+    monkeypatch.setattr(settings, "fix_duplicates_hourly", True)
     assert scheduler.run_duplicate_fix(now) is True
     assert scheduler.run_duplicate_fix(now + timedelta(minutes=30)) is False
     assert scheduler.run_duplicate_fix(now + timedelta(minutes=61)) is True
@@ -259,11 +259,36 @@ def test_what_the_last_run_left_alone_is_listed_with_the_reason(bindery, monkeyp
 def test_hourly_fixing_is_off_unless_turned_on(monkeypatch):
     from app.config import Settings
 
-    monkeypatch.delenv("BOOKGUARD_FIX_DUPLICATES", raising=False)
-    assert Settings().fix_duplicates is False
+    monkeypatch.delenv("BOOKGUARD_FIX_DUPLICATES_HOURLY", raising=False)
+    assert Settings().fix_duplicates_hourly is False
 
 
 def test_the_setting_sits_in_the_schedule_part_of_settings():
     page = open("templates/settings.html", encoding="utf-8").read()
     schedule = page[page.index('<h4 class="settings-group">Schedule</h4>'):page.index('<h4 class="settings-group">New imports</h4>')]
-    assert 'name="fix_duplicates"' in schedule
+    assert 'name="fix_duplicates_hourly"' in schedule
+
+
+def test_a_saved_setting_from_the_old_default_does_not_turn_hourly_fixing_on():
+    from app.config import Settings
+
+    upgraded = Settings()
+    upgraded.apply({"fix_duplicates": True})  # what the earlier version saved by default
+
+    assert upgraded.fix_duplicates_hourly is False
+
+
+def test_the_schedule_names_the_switch_that_is_actually_off(bindery, monkeypatch):
+    from app import scheduler
+
+    def row():
+        return next(t for t in scheduler.scheduled_tasks() if t["key"] == "duplicate_fix")["schedule"]
+
+    monkeypatch.setattr(settings, "fix_duplicates_hourly", False)
+    monkeypatch.setattr(settings, "allow_actions", True)
+    assert row() == "Off (turn it on in Settings → Schedule)"
+    monkeypatch.setattr(settings, "fix_duplicates_hourly", True)
+    monkeypatch.setattr(settings, "allow_actions", False)
+    assert row() == "Off (turn on Bindery actions in Settings)"
+    monkeypatch.setattr(settings, "allow_actions", True)
+    assert row() == "Every hour"

@@ -23,7 +23,7 @@
       <small class="muted">
         {% if error %}Can't read Bindery: {{ error }}
         {% elif not allow_actions %}Turn on actions in Settings to let BookGuard fix these.
-        {% elif fix_duplicates %}Fixed automatically every hour. {{ fixable }} can be fixed now.
+        {% elif fix_duplicates_hourly %}Fixed automatically every hour. {{ fixable }} can be fixed now.
         {% else %}{{ fixable }} can be fixed now. Hourly fixing is off (Settings → Schedule).{% endif %}
         {% if status.finishedAt %}<br>Last run: hid {{ status.hidden }}{% if status.problems %}, {{ status.problems|length }} left alone{% endif %}.{% endif %}
       </small>

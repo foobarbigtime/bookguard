@@ -266,7 +266,9 @@ class Settings:
     watch_imports_minutes: int = _clamp(_int("BOOKGUARD_WATCH_IMPORTS_MINUTES", 5), 1, 60)
     # Hide proven empty duplicate Bindery entries every hour. Off unless turned on
     # (and only while actions are on); Fix now on the Duplicates page works anyway.
-    fix_duplicates: bool = _bool("BOOKGUARD_FIX_DUPLICATES", False)
+    # A new name on purpose: the old "fix_duplicates" (on by default) may be saved
+    # in app_settings, and an unknown saved key is ignored, so nobody is opted in.
+    fix_duplicates_hourly: bool = _bool("BOOKGUARD_FIX_DUPLICATES_HOURLY", False)
     # Optional scheduled full scan, in the container's local time. Off by default.
     scan_schedule: str = _scan_schedule(os.getenv("BOOKGUARD_SCAN_SCHEDULE", "off"))
     scan_schedule_time: str = _clock(os.getenv("BOOKGUARD_SCAN_SCHEDULE_TIME", "03:00"))
@@ -364,7 +366,7 @@ class Settings:
             "quarantine_root", "repair_audio_genre_value",
         }
         bool_fields = {
-            "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks", "watch_imports", "fix_duplicates",
+            "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks", "watch_imports", "fix_duplicates_hourly",
             "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
             "verification_enabled", "verification_use_tika",
             "verification_file_signatures", "verification_archive_safety",
@@ -444,7 +446,7 @@ class Settings:
             "scan_on_start": self.scan_on_start,
             "watch_imports": self.watch_imports,
             "watch_imports_minutes": self.watch_imports_minutes,
-            "fix_duplicates": self.fix_duplicates,
+            "fix_duplicates_hourly": self.fix_duplicates_hourly,
             "scan_schedule": self.scan_schedule,
             "scan_schedule_time": self.scan_schedule_time,
             "scan_schedule_day": self.scan_schedule_day,

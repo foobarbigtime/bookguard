@@ -58,7 +58,7 @@
           <label class="field" data-weekly-only{% if settings.scan_schedule != 'weekly' %} hidden{% endif %}><span>Weekly scan day</span><select name="scan_schedule_day">
             {% for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] %}<option value="{{ loop.index0 }}"{% if settings.scan_schedule_day == loop.index0 %} selected{% endif %}>{{ day }}</option>{% endfor %}
           </select></label>
-          <label class="check-field"><input name="fix_duplicates" type="checkbox" {% if settings.fix_duplicates %}checked{% endif %}><span>Fix duplicate Bindery entries every hour</span></label>
+          <label class="check-field"><input name="fix_duplicates_hourly" type="checkbox" {% if settings.fix_duplicates_hourly %}checked{% endif %}><span>Fix duplicate Bindery entries every hour</span></label>
           <small class="muted span-2">Off by default. When on (and actions are on), hides empty extra entries that are proven duplicates of a book you have. Nothing with files is changed. Every change is in Activity and can be undone in Bindery. Fix now on the Duplicates page works either way.</small>
           <h4 class="settings-group">New imports</h4>
           <label class="check-field"><input name="watch_imports" type="checkbox" {% if settings.watch_imports %}checked{% endif %}><span>Check each new Bindery import</span></label>
@@ -168,7 +168,7 @@ const tikaStatus = document.getElementById("tikaStatus");
 const testMalwareButton = document.getElementById("testMalwareButton");
 const malwareStatus = document.getElementById("malwareStatus");
 const booleanFields = [
-  "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks", "watch_imports", "fix_duplicates",
+  "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks", "watch_imports", "fix_duplicates_hourly",
   "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
   "verification_enabled", "verification_use_tika", "verification_file_signatures",
   "verification_archive_safety",
