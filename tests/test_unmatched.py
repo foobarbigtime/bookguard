@@ -209,3 +209,66 @@ def test_unmatched_page_shows_each_verdict_with_its_reason(lib, monkeypatch):
 
     assert "Junk" in page and "The file is only 1008 bytes." in page
     assert 'data-unmatched-attach="6"' in page and "Attach to “Lights Out”" in page
+
+
+def _cbz(path: Path, pages: int) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as cbz:
+        for n in range(pages):
+            cbz.writestr(f"page{n:03}.jpg", b"\xff\xd8\xff\xe0" + b"0" * 5000)
+    return path
+
+
+def test_a_comic_is_judged_by_its_pages_not_by_prose(lib):
+    _cbz(lib["root"] / "A/Comic/Comic.cbz", 24)
+    _cbz(lib["root"] / "A/Stub/Stub.cbz", 2)
+
+    real = unmatched.check_item(row("A/Comic/Comic.cbz"), lib["library"], None)
+    stub = unmatched.check_item(row("A/Stub/Stub.cbz"), lib["library"], None)
+
+    assert real["verdict"] != "JUNK"
+    assert any(e["detail"] == "24 pages of pictures (no text layer)." for e in real["evidence"])
+    assert stub["verdict"] == "JUNK" and "only 2 pages" in stub["reason"]
+
+
+def test_an_audiobook_folder_with_numbered_tracks_uses_its_folder_names(lib, monkeypatch):
+    folder = lib["audio"] / "James Patterson/Lights Out"
+    folder.mkdir(parents=True)
+    for n in range(1, 4):
+        (folder / f"{n:02}.mp3").write_bytes(b"ID3")
+    probe = {"audio_stream_count": 1, "duration_seconds": 3600, "album": "Lights Out", "artist": "James Patterson"}
+    monkeypatch.setattr(unmatched, "cached_or_probe_audio_file", lambda path: ({"path": path, **probe}, False))
+    monkeypatch.setattr(unmatched, "disc_track_sequence_warnings", lambda probes: [])
+    monkeypatch.setattr(unmatched, "_silent", lambda path: False)
+    item = {"id": 3, "kind": "folder", "format": "audiobook", "rootPath": "/data/audiobooks",
+            "relPath": "James Patterson/Lights Out", "authorFolder": "James Patterson",
+            "members": ["01.mp3", "02.mp3", "03.mp3"]}
+
+    outcome = unmatched.check_item(item, lib["library"], None)
+
+    assert (outcome["verdict"], outcome["bookId"]) == ("BELONGS", 7236)
+    assert "Audio tags + Folder names" in outcome["reason"]
+
+
+def test_attach_rechecks_and_refuses_when_the_file_changed_or_is_gone(lib, monkeypatch):
+    book = make_epub(lib["root"] / "James Patterson/Lights Out (2015)/Lights Out - James Patterson.epub",
+                     title="Lights Out", author="James Patterson")
+    client = FakeClient([{**row("James Patterson/Lights Out (2015)/Lights Out - James Patterson.epub"), "id": 11}])
+    monkeypatch.setattr(unmatched, "library_books", lambda: list(lib["library"].books.values()))
+    monkeypatch.setattr(unmatched, "BinderyClient", lambda **kwargs: client)
+    monkeypatch.setattr(unmatched, "resolve_bindery_api_key", lambda: "key")
+    monkeypatch.setattr(settings, "allow_actions", True)
+    unmatched.check_unmatched(client)
+
+    book.write_bytes(b"x" * 100)  # replaced after the check
+    with pytest.raises(unmatched.ActionError, match="changed since the last check"):
+        unmatched.attach(11)
+    assert client.adopted == []
+    assert unmatched.stored_checks()[0]["verdict"] == "JUNK"  # the page shows the new result
+
+    unmatched._save(11, unmatched._signature(client.items[0]), client.items[0],
+                    {"verdict": "BELONGS", "reason": "", "bookId": 7236, "bookTitle": "Lights Out", "evidence": []})
+    client.items.clear()  # Bindery no longer lists it
+    with pytest.raises(unmatched.ActionError, match="no longer lists"):
+        unmatched.attach(11)
+    assert client.adopted == [] and unmatched.stored_checks() == []

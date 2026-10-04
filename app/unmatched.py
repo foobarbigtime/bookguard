@@ -39,6 +39,7 @@ from .ebook_extraction import extract_ebook_identity
 from .ebook_security import inspect_ebook_security
 from .file_safety import sha256_file
 from .isbn_evidence import file_isbns
+from .pdf_probe import probe_pdf
 from .scanner import map_path
 
 VERDICTS = {
@@ -225,6 +226,25 @@ def _drm_locked(path: Path) -> bool:
     return bool(algorithms - FONT_OBFUSCATION)
 
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+MIN_PICTURE_PAGES = 5
+
+
+def _picture_pages(path: Path) -> int | None:
+    """Page count for formats that may be all pictures (comics, scanned PDFs); None otherwise."""
+    suffix = path.suffix.lower()
+    if suffix == ".cbz":
+        try:
+            with zipfile.ZipFile(path) as archive:
+                return sum(1 for name in archive.namelist() if PurePosixPath(name).suffix.lower() in IMAGE_EXTENSIONS)
+        except (OSError, zipfile.BadZipFile):
+            return 0
+    if suffix == ".pdf":
+        pages = probe_pdf(path).get("pages")
+        return int(pages) if isinstance(pages, int) else None
+    return None
+
+
 def _silent(path: str) -> bool | None:
     """True when a 60-second sample from a quarter in is all silence; None if ffmpeg can't tell."""
     try:
@@ -274,12 +294,19 @@ def _ebook_facts(path: Path, evidence: list) -> dict:
         facts["junk"] = facts["junk"] or "BookGuard could not read any text from it."
         return facts
     words = _words(identity.text)
-    if words < MIN_BOOK_WORDS:
+    pages = _picture_pages(path) if words < MIN_BOOK_WORDS else None
+    if pages is not None:  # comics and scanned PDFs are pictures, not prose
+        if pages < MIN_PICTURE_PAGES:
+            _check(evidence, "Length", "fail", f"Only {pages} pages and no readable text.")
+            facts["junk"] = facts["junk"] or f"It has only {pages} pages and no readable text; that is not a book."
+        else:
+            _check(evidence, "Length", "pass", f"{pages} pages of pictures (no text layer).")
+    elif words < MIN_BOOK_WORDS:
         _check(evidence, "Length", "fail", f"Only {words} readable words.")
         facts["junk"] = facts["junk"] or f"It has only {words} readable words; that is not a book."
     else:
         _check(evidence, "Length", "pass", f"About {words:,} readable words.")
-    if SAMPLE_TEXT.search(identity.text or "") and words < SAMPLE_MAX_WORDS:
+    if SAMPLE_TEXT.search(identity.text or "") and MIN_BOOK_WORDS <= words < SAMPLE_MAX_WORDS:
         _check(evidence, "Sample text", "fail", "The text says it is a sample or preview.")
         facts["junk"] = facts["junk"] or "It is a sample or preview, not the full book."
     language = text_language(identity.text)
@@ -359,8 +386,10 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
         identities.append(("File name", title, author))
     folder_author = str(item.get("authorFolder") or "")
     rel_parts = PurePosixPath(str(item.get("relPath") or "")).parts
-    if folder_author and len(rel_parts) >= 3:
-        identities.append(("Folder names", re.sub(r"\(\d{4}\)", "", rel_parts[1]).strip(), folder_author))
+    # A folder row is "Author/Title"; a file row is "Author/Title/file".
+    folder_title = rel_parts[-1] if str(item.get("kind")) == "folder" else (rel_parts[-2] if len(rel_parts) >= 3 else "")
+    if folder_author and len(rel_parts) >= 2 and folder_title and folder_title != folder_author:
+        identities.append(("Folder names", re.sub(r"\(\d{4}\)", "", folder_title).strip(), folder_author))
     for isbn in facts["isbns"][:3]:
         try:
             found = client.lookup_isbn(isbn) if client else None
@@ -439,13 +468,7 @@ def _signature(item: dict) -> str:
     return f"{item.get('rootPath')}/{item.get('relPath')}|{item.get('fileCount')}|{item.get('sizeBytes')}"
 
 
-def check_unmatched(client: BinderyClient | None = None, *, force: bool = False) -> dict:
-    """Check every pending unmatched row once (again only when its files change)."""
-    init_unmatched_db()
-    client = client or BinderyClient(api_key=resolve_bindery_api_key(), timeout=30)
-    library = Library(library_books())
-    with local_conn() as conn:
-        known = {int(r["row_id"]): r["signature"] for r in conn.execute("SELECT row_id, signature FROM unmatched_checks")}
+def _all_rows(client: BinderyClient) -> list[dict]:
     items, offset = [], 0
     while True:
         page = client.list_unmatched(offset=offset)
@@ -453,7 +476,21 @@ def check_unmatched(client: BinderyClient | None = None, *, force: bool = False)
         items.extend(batch)
         offset += len(batch)
         if not batch or offset >= int(page.get("total") or 0):
-            break
+            return items
+
+
+def _find_row(client: BinderyClient, row_id: int) -> dict | None:
+    return next((item for item in _all_rows(client) if int(item["id"]) == row_id), None)
+
+
+def check_unmatched(client: BinderyClient | None = None, *, force: bool = False) -> dict:
+    """Check every pending unmatched row once (again only when its files change)."""
+    init_unmatched_db()
+    client = client or BinderyClient(api_key=resolve_bindery_api_key(), timeout=30)
+    library = Library(library_books())
+    with local_conn() as conn:
+        known = {int(r["row_id"]): r["signature"] for r in conn.execute("SELECT row_id, signature FROM unmatched_checks")}
+    items = _all_rows(client)
     _STATUS.update(total=len(items), checked=0)
     seen = set()
     for item in items:
@@ -507,6 +544,19 @@ def attach(row_id: int) -> str:
     if not row or row["verdict"] != "BELONGS" or not row["book_id"]:
         raise ActionError("Only files BookGuard proved belong to a book can be attached.")
     client = BinderyClient(api_key=resolve_bindery_api_key(), timeout=30)
+    # Re-check right before changing Bindery: the row must still be listed with the
+    # same files, and the full proof must name the same book again.
+    item = _find_row(client, int(row_id))
+    if item is None:
+        with local_conn() as conn:
+            conn.execute("DELETE FROM unmatched_checks WHERE row_id=?", (int(row_id),))
+            conn.commit()
+        raise ActionError("Bindery no longer lists these files as unmatched. Nothing was changed.")
+    outcome = check_item(item, Library(library_books()), client)
+    _save(int(row_id), _signature(item), item, outcome)
+    if _signature(item) != row["signature"] or outcome["verdict"] != "BELONGS" or outcome.get("bookId") != row["book_id"]:
+        raise ActionError("The files changed since the last check, so nothing was attached. "
+                          "The page shows the new result.")
     try:
         client.adopt_unmatched(int(row_id), int(row["book_id"]))
     except BinderyClientError as exc:
