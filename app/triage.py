@@ -206,6 +206,61 @@ def triage_state(result: dict) -> dict:
     }
 
 
+def triage_states(results: list[dict]) -> dict[int, dict]:
+    """Read resolution state in batches; page loads never initialize schema per file."""
+    states = {
+        int(row["id"]): {
+            "resolved": False, "resolution": "OPEN", "decision_id": None, "cleanup_id": None,
+        }
+        for row in results
+    }
+    if not results:
+        return states
+    with local_conn() as conn:
+        decisions_exist = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='triage_decisions'"
+        ).fetchone() is not None
+        for start in range(0, len(results), 500):
+            chunk = results[start:start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            cleanups = conn.execute(
+                f"""
+                SELECT id, result_id, action_kind FROM cleanup_actions
+                WHERE result_id IN ({placeholders}) AND status='applied'
+                  AND action_kind IN ('TRIAGE_DETACH', 'TRIAGE_QUARANTINE')
+                ORDER BY id DESC
+                """,
+                [int(row["id"]) for row in chunk],
+            ).fetchall()
+            for cleanup in cleanups:
+                state = states[int(cleanup["result_id"])]
+                if not state["resolved"]:
+                    state.update(
+                        resolved=True,
+                        resolution="DETACHED" if cleanup["action_kind"] == "TRIAGE_DETACH" else "QUARANTINED",
+                        cleanup_id=int(cleanup["id"]),
+                    )
+            if not decisions_exist:
+                continue
+            signatures: dict[str, list[int]] = {}
+            for row in chunk:
+                if not states[int(row["id"])]["resolved"]:
+                    signatures.setdefault(result_signature(row), []).append(int(row["id"]))
+            if not signatures:
+                continue
+            decision_placeholders = ",".join("?" for _ in signatures)
+            decisions = conn.execute(
+                f"SELECT id, signature, decision FROM triage_decisions WHERE signature IN ({decision_placeholders})",
+                list(signatures),
+            ).fetchall()
+            for decision in decisions:
+                for result_id in signatures[decision["signature"]]:
+                    states[result_id].update(
+                        resolved=True, resolution=decision["decision"], decision_id=int(decision["id"]),
+                    )
+    return states
+
+
 def triage_summary() -> dict:
     out = {
         "REVIEW": {"total": 0, "open": 0, "resolved": 0},

@@ -15,9 +15,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .db import latest_results, local_conn
+from .db import latest_review_results, local_conn
 from .language_detection import declared_language
-from .triage import triage_state
+from .triage import triage_states
 from .verification_status import verification_is_inconclusive
 
 # key, label, tone; ordered by how urgently they need a decision.
@@ -187,12 +187,9 @@ def review_item(row: dict, verification: dict | None) -> dict[str, Any]:
 
 def open_review_items() -> list[dict[str, Any]]:
     """Unresolved REVIEW and REJECT items of the latest scan, most urgent group first."""
-    rows = [
-        row
-        for classification in ("REJECT", "REVIEW")
-        for row in latest_results(classification=classification, limit=10000)
-        if not triage_state(row)["resolved"]
-    ]
+    rows = latest_review_results()
+    states = triage_states(rows)
+    rows = [row for row in rows if not states[int(row["id"])]["resolved"]]
     verifications = latest_verifications([int(row["id"]) for row in rows])
     items = [review_item(row, verifications.get(int(row["id"]))) for row in rows]
     order = {key: index for index, (key, _, _) in enumerate(GROUPS)}

@@ -239,6 +239,15 @@
   });
 
   const fromHash = Number((location.hash.match(/^#book-(\d+)$/) || [])[1]);
+  // Activity links and old bookmarks may point to a book on another page.
+  if (fromHash && !items.has(fromHash)) {
+    const url = new URL(location.href);
+    if (url.searchParams.get("book") !== String(fromHash)) {
+      url.searchParams.set("book", String(fromHash));
+      window.location.replace(url.href);
+      return;
+    }
+  }
   const first = items.get(fromHash) || (data.items || [])[0];
   if (first) show(first);
 })();

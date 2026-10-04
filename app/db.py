@@ -656,6 +656,19 @@ def latest_results(
     return _decode_results(rows)
 
 
+def latest_review_results() -> list[dict]:
+    """All REVIEW/REJECT results from one latest-scan snapshot, without a display cap."""
+    with local_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM scan_results
+            WHERE scan_id = (SELECT id FROM scans ORDER BY started_at DESC LIMIT 1)
+              AND classification IN ('REVIEW', 'REJECT')
+            """
+        ).fetchall()
+    return _decode_results(rows)
+
+
 def latest_recent_results(limit: int = 20) -> list[dict]:
     scan = latest_scan()
     if not scan:
