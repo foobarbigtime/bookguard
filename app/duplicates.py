@@ -42,10 +42,12 @@ ARTICLE = re.compile(r"^(the|a|an) ")
 
 def title_key(title: str) -> str:
     """One key for spellings of the same title: case, accents, punctuation and a
-    leading article never matter. Words in brackets do ("Book 1" vs "Book 2")."""
-    text = unicodedata.normalize("NFKD", str(title or "")).encode("ascii", "ignore").decode().lower()
-    text = re.sub(r"['`]", "", text).replace("&", " and ")
-    text = re.sub(r"[^a-z0-9]+", " ", text).strip()
+    leading article never matter. Words in brackets do ("Book 1" vs "Book 2"), and so
+    does every letter of any alphabet."""
+    # Accents go, but letters of every alphabet stay: "战争 1" and "和平 1" must not meet.
+    text = "".join(c for c in unicodedata.normalize("NFKD", str(title or "")) if not unicodedata.combining(c))
+    text = re.sub(r"['`’]", "", text.casefold()).replace("&", " and ")
+    text = re.sub(r"[\W_]+", " ", text).strip()
     return ARTICLE.sub("", text).strip()
 
 
@@ -113,7 +115,7 @@ def find_duplicates(book_ids: list[int] | None = None) -> list[dict]:
     groups: dict[tuple[int, str], list[dict]] = defaultdict(list)
     for entry in entries:
         key = title_key(entry["title"])
-        if key:  # titles in other alphabets have no key here; never guess about them
+        if key:
             groups[(entry["authorId"], key)].append(entry)
     found = []
     for (_, key), members in groups.items():
@@ -152,16 +154,14 @@ def hide_empty(book_id: int, client: BinderyClient | None = None) -> str:
     keep = next(e for e in group["entries"] if _has_files(e))
     client = client or BinderyClient(api_key=resolve_bindery_api_key(), timeout=30)
     try:
-        book = client.toggle_book_excluded(int(book_id))
+        result = client.exclude_book(int(book_id))
     except BinderyClientError as exc:
         _record(entry, keep, "failed", str(exc))
         raise ActionError(f"Bindery refused to hide it: {exc}") from exc
-    if not (book or {}).get("excluded"):  # the call toggles: it was hidden elsewhere in the meantime
-        try:
-            client.toggle_book_excluded(int(book_id))
-        finally:
-            _record(entry, keep, "failed", "Bindery reported it was already hidden; it was left hidden.")
-        raise ActionError("Bindery had already hidden this entry. It is still hidden; nothing else changed.")
+    if not result.get("ok"):
+        error = str(result.get("error") or "Bindery did not confirm it.")
+        _record(entry, keep, "failed", error)
+        raise ActionError(f"Bindery refused to hide it: {error}")
     _record(entry, keep, "applied")
     return (f"Hid the empty “{entry['title']}” in Bindery and kept “{keep['title']}”. "
             "To undo it, include it again on the book's page in Bindery.")

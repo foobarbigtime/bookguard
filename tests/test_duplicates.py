@@ -25,8 +25,8 @@ BOOKS = [
     (10, 4, "The Lost", "2014", "", "", 0),
     (11, 5, "Hank (Book 1)", "", "/b/Hank1.epub", "", 0),
     (12, 5, "Hank (Book 2)", "", "", "", 0),
-    (13, 6, "หน้าผาวิปโยค", "", "", "", 0),
-    (14, 6, "ถ้ำทะมึน", "", "", "", 0),
+    (13, 6, "战争 1", "", "/b/war.epub", "", 0),
+    (14, 6, "和平 1", "", "", "", 0),
     (15, 7, "Order", "", "/b/Order.epub", "", 0),
     (16, 7, "The Order", "", "", "", 1),  # already excluded: Bindery doesn't show it
 ]
@@ -73,9 +73,9 @@ def test_hiding_excludes_only_the_empty_entry_and_records_it(bindery):
     calls = []
 
     class Client:
-        def toggle_book_excluded(self, book_id):
+        def exclude_book(self, book_id):
             calls.append(book_id)
-            return {"id": book_id, "excluded": True}
+            return {"ok": True}
 
     message = duplicates.hide_empty(2, Client())
 
@@ -94,37 +94,32 @@ def test_an_entry_that_got_a_file_meanwhile_is_not_hidden(bindery):
         conn.execute("INSERT INTO book_files(book_id, format, path) VALUES (2, 'audiobook', '/a/The Nightingale')")
 
     class Client:
-        def toggle_book_excluded(self, book_id):
+        def exclude_book(self, book_id):
             raise AssertionError("must not be called")
 
     with pytest.raises(ActionError):
         duplicates.hide_empty(2, Client())
 
 
-def test_an_entry_hidden_elsewhere_meanwhile_stays_hidden(bindery):
-    states = iter([False, True])  # the first toggle found it already hidden and showed it again
-
+def test_a_refusal_from_bindery_is_reported_and_recorded(bindery):
     class Client:
-        calls = 0
+        def exclude_book(self, book_id):
+            return {"ok": False, "error": "book not found"}
 
-        def toggle_book_excluded(self, book_id):
-            Client.calls += 1
-            return {"excluded": next(states)}
-
-    with pytest.raises(ActionError, match="already hidden"):
+    with pytest.raises(ActionError, match="book not found"):
         duplicates.hide_empty(2, Client())
-    assert Client.calls == 2
+    assert recent_cleanup_actions(1)[0]["status"] == "failed"
 
 
 def test_hide_all_hides_every_safe_empty_extra(bindery):
     hidden = []
 
     class Client:
-        def toggle_book_excluded(self, book_id):
+        def exclude_book(self, book_id):
             hidden.append(book_id)
             with sqlite3.connect(bindery) as conn:
                 conn.execute("UPDATE books SET excluded = 1 WHERE id = ?", (book_id,))
-            return {"excluded": True}
+            return {"ok": True}
 
     assert duplicates.hide_all_empty(Client()) == {"hidden": 1, "problems": []}
     assert hidden == [2]
@@ -141,7 +136,8 @@ def test_title_key_ignores_spelling_but_keeps_bracketed_words():
     assert duplicates.title_key("Get Well Soon, Mallory! (The Baby-Sitters Club #69)") == \
         duplicates.title_key("Get Well Soon Mallory (the Baby-Sitters Club #69)")
     assert duplicates.title_key("Hank (Book 1)") != duplicates.title_key("Hank (Book 2)")
-    assert duplicates.title_key("ถ้ำทะมึน") == ""
+    assert duplicates.title_key("战争 1") != duplicates.title_key("和平 1")
+    assert duplicates.title_key("ถ้ำทะมึน") != duplicates.title_key("หน้าผาวิปโยค")
 
 
 def test_duplicates_page_lists_groups_and_offers_hiding(bindery):
@@ -166,8 +162,8 @@ def test_a_hidden_duplicate_reads_plainly_in_activity(bindery):
     from app.routes.pages import router
 
     class Client:
-        def toggle_book_excluded(self, book_id):
-            return {"excluded": True}
+        def exclude_book(self, book_id):
+            return {"ok": True}
 
     duplicates.hide_empty(2, Client())
     app = FastAPI()

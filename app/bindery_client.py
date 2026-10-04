@@ -165,10 +165,11 @@ class BinderyClient:
         """Turn Bindery's monitoring of one book on or off; nothing else changes."""
         return self._request("PUT", f"/book/{int(book_id)}", json={"monitored": bool(monitored)})
 
-    def toggle_book_excluded(self, book_id: int) -> dict[str, Any]:
-        """Bindery's exclude switch for one book (it flips): hidden books are kept but
-        never searched for or added again, and can be included again in Bindery."""
-        return self._request("PUT", f"/book/{int(book_id)}/exclude")
+    def exclude_book(self, book_id: int) -> dict[str, Any]:
+        """Exclude one book (one-way: never shows it again by accident). Excluded books
+        are kept but never searched for or added again; Bindery can include them again."""
+        body = self._request("POST", "/book/bulk", json={"ids": [int(book_id)], "action": "exclude"})
+        return ((body or {}).get("results") or {}).get(str(int(book_id))) or {}
 
     def list_unmatched(
         self, *, search: str = "", file_format: str | None = None, offset: int = 0
