@@ -95,8 +95,13 @@ undecided item to gather stronger identity and safety evidence. Scans and
 verification record BookGuard state but do not alter library files or Bindery
 registrations.
 
-See the [user guide](user-guide.md) for review actions. For later deployments,
-use the [guarded upgrade command](operations.md#updating).
+See the [user guide](user-guide.md) for review actions. Before using the
+[guarded upgrade command](operations.md#updating), explicitly opt into the
+[ClamAV topology](configuration.md) and check scanner health. The helper always
+deploys the ClamAV overlay and enables malware scanning; it has no base-only
+mode and will change a base-only installation's topology. Allow for the
+scanner's resource use and signature initialization: verification fails closed
+while the scanner is unavailable.
 
 ## Optional shared staging
 

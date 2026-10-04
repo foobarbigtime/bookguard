@@ -78,8 +78,16 @@ BOOKGUARD_GID=100
 BOOKGUARD_CONFIG_HOST_PATH=/mnt/cache/appdata/bookguard-config
 ```
 
-Use the guarded upgrade helper instead of combining an ad-hoc pull, build, and
-Compose deployment.
+The guarded upgrade helper always deploys `compose.yaml` with
+`compose.clamav.yaml`, which enables malware scanning. It has no base-only mode.
+Before using it, explicitly opt into the [ClamAV topology](configuration.md)
+and check scanner health. Running it against the base-only quick start changes
+that installation's topology rather than preserving it. Plan for the scanner's
+resource use and signature initialization; verification fails closed while the
+scanner is unavailable.
+
+For this ClamAV-enabled topology, use the guarded upgrade helper instead of
+combining an ad-hoc pull, build, and Compose deployment.
 
 A non-deploying preflight may be run on a synchronized feature or integration
 branch:

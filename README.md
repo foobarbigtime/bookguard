@@ -49,7 +49,13 @@ another device at `http://<unraid-ip>:8788`.
 
 ## Updating
 
-For an existing installation on `main`:
+The guarded upgrade helper deploys `compose.yaml` together with
+`compose.clamav.yaml` and enables malware scanning. It has no base-only mode.
+Use it after explicitly opting into the [ClamAV topology](docs/configuration.md)
+and checking scanner health; it is not a topology-preserving update for the
+base-only quick start above.
+
+For an existing ClamAV-enabled installation on `main`:
 
 ```bash
 cd /mnt/cache/appdata/bookguard &&
