@@ -11,11 +11,10 @@ import sqlite3
 
 import pytest
 
-from app import series_titles, staging
+from app import series_titles
 from app.config import settings
 from app.series_titles import bindery_series_names, expected_title_variants
 from app.verification_engine import classify_identity
-from test_staging import FakeClient, _configure, _write_epub
 
 
 def _front(title: str, author: str) -> str:
@@ -126,23 +125,6 @@ def test_bindery_series_names_reads_series_read_only(tmp_path, monkeypatch):
 def test_bindery_series_names_is_empty_when_bindery_db_is_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "bindery_db", str(tmp_path / "missing.db"))
     assert series_titles.bindery_series_names(7) == []
-
-
-def test_staged_replacement_with_series_tagged_catalog_title_is_admissible(tmp_path, monkeypatch):
-    root = _configure(tmp_path, monkeypatch)
-    monkeypatch.setattr(settings, "bindery_db", str(tmp_path / "no-bindery.db"))
-    path = root / "Mary, Mary - Alex Cross, Book 11 - James Patterson.epub"
-    _write_epub(
-        path, "Mary, Mary", "James Patterson",
-        "MARY, MARY\nJAMES PATTERSON\n" + ("A fictional passage. " * 80),
-    )
-
-    result = staging.verify_staged_ebook(
-        6520, path.name, FakeClient("Mary, Mary: Alex Cross, Book 11", "James Patterson"),
-    )
-
-    assert result["verdict"] == "VERIFIED_CORRECT"
-    assert result["safeToAdmit"] is True
 
 
 # --- series tags in the file's own title -------------------------------------

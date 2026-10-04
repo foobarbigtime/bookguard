@@ -7,7 +7,6 @@ from app.db import init_local_db, local_conn, utc_now
 
 def test_blocked_e4_plan_is_visible_and_auditable_without_work(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "config_dir", str(tmp_path))
-    monkeypatch.setattr(attention, "acquisition_coordinator_status", lambda: {"state": "disabled"})
     monkeypatch.setattr(attention, "observe_attention_items", lambda _: [])
     init_local_db()
     now = utc_now()
@@ -51,7 +50,6 @@ def test_blocked_e4_plan_is_visible_and_auditable_without_work(tmp_path, monkeyp
 
 def test_only_stale_running_e4_receipts_enter_attention(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "config_dir", str(tmp_path))
-    monkeypatch.setattr(attention, "acquisition_coordinator_status", lambda: {"state": "disabled"})
     monkeypatch.setattr(attention, "observe_attention_items", lambda _: [])
     init_local_db()
     now = datetime.now(timezone.utc)

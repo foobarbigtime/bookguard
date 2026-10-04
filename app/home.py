@@ -32,9 +32,6 @@ RECENT_DAYS = 7
 
 # Workflow attention (interrupted or refused work), grouped by what it is.
 _WORKFLOW_GROUPS: dict[str, tuple[str, str]] = {
-    "acquisition": ("replacements", "Replacements are waiting for you"),
-    "admission": ("replacements", "Replacements are waiting for you"),
-    "coordinator": ("replacements", "Replacements are waiting for you"),
     "hardlink_correction": ("shared", "A shared-file correction was interrupted"),
     "hardlink_cleanup": ("shared", "A shared-file correction was interrupted"),
     "recovery_plan": ("refused", "Automatic steps were refused by a safety check"),
@@ -234,7 +231,8 @@ def _last_observe() -> str:
 _MODE_SENTENCES = {
     "manual": "BookGuard only changes things when you click. It does nothing on its own.",
     "observe": "BookGuard decides what it would do and records it, but changes nothing.",
-    "automatic": "BookGuard carries out the allowed actions on its own, one at a time, after fresh safety checks.",
+    # Automatic Mode was removed; the setting is still accepted and acts like manual.
+    "automatic": "BookGuard only changes things when you click. It does nothing on its own.",
 }
 
 
@@ -242,18 +240,14 @@ def _automation() -> tuple[dict[str, Any], dict[str, Any], str | None]:
     try:
         automation = load_automation_settings()
     except ConfigurationError as exc:
-        return {"mode": "invalid", "sentence": str(exc), "allowed": 0, "lastObserve": _last_observe()}, {}, str(exc)
+        return {"mode": "invalid", "sentence": str(exc), "lastObserve": _last_observe()}, {}, str(exc)
     return (
         {
             "mode": automation.automation_mode,
             "sentence": _MODE_SENTENCES[automation.automation_mode],
-            "allowed": len(automation.automatic_action_allowlist),
             "lastObserve": _last_observe(),
         },
-        {
-            "replacements": bool(automation.automatic_reacquisition and settings.allow_actions),
-            "coordinator": bool(automation.acquisition_coordinator_enabled),
-        },
+        {},
         None,
     )
 
@@ -291,8 +285,6 @@ def _system(malware: dict[str, Any], gates: dict[str, Any], scan: dict | None) -
         {"key": "bindery", "label": "Bindery", "level": "ok" if bindery_ok else "error",
          "text": f"Database readable · {actions}" if bindery_ok else "Database not found"},
         _import_line(),
-        {"key": "replacements", "label": "Replacements", "level": "ok" if gates.get("replacements") else "off",
-         "text": "Set up" if gates.get("replacements") else "Not set up"},
         {"key": "scan", "label": "Library scan", "level": "ok" if last_scan else "off",
          "text": "Last finished", "at": last_scan} if last_scan else
         {"key": "scan", "label": "Library scan", "level": "off", "text": "No finished scan yet"},

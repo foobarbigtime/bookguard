@@ -28,40 +28,6 @@ def test_diagnostics_snapshot_is_secret_free(monkeypatch):
     )
     monkeypatch.setattr(
         diagnostics,
-        "acquisition_readiness",
-        lambda: {
-            "ready": False,
-            "blockers": ["actionsEnabled"],
-            "message": "blocked",
-            "checks": {"actionsEnabled": False},
-        },
-    )
-    monkeypatch.setattr(
-        diagnostics,
-        "admission_readiness",
-        lambda: {
-            "ready": True,
-            "blockers": [],
-            "message": "ready",
-            "checks": {},
-        },
-    )
-    monkeypatch.setattr(
-        diagnostics,
-        "acquisition_coordinator_status",
-        lambda: {
-            "enabled": False,
-            "running": False,
-            "state": "disabled",
-            "blockers": ["coordinatorEnabled"],
-            "lastError": None,
-            "lastRunAt": None,
-            "lastSuccessAt": None,
-            "action": None,
-        },
-    )
-    monkeypatch.setattr(
-        diagnostics,
         "load_automation_settings",
         lambda: SimpleNamespace(
             automation_mode="observe",
@@ -96,7 +62,7 @@ def test_diagnostics_snapshot_is_secret_free(monkeypatch):
     assert result["gateCards"][0]["label"] == "Bindery actions"
     assert result["gateCards"][-1]["label"] == "Malware scanner configured"
     assert result["sections"][0]["explanations"][0]["key"] == "binderyExternalImport"
-    assert result["sections"][2]["ready"] is True
+    assert [section["key"] for section in result["sections"]] == ["preimport"]
     assert result["deployment"]["malware"]["reachable"] is True
     assert result["deployment"]["malware"]["version"] == "ClamAV test"
     assert "bindery_api_key" not in str(result).lower()

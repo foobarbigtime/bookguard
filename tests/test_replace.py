@@ -181,3 +181,22 @@ def test_flagged_import_clears_once_bindery_no_longer_tracks_that_path(book, mon
     event = imported()
     assert event["resultLabel"] == "Done"
     assert event["sentence"].endswith("it failed the safety checks, and it has since been fixed or removed")
+
+
+def test_source_grab_requires_exact_import_grab_title_pair():
+    items = [
+        {"id": 20, "eventType": "bookImported", "sourceTitle": "Cat Hickey - Death of a Texan (epub)"},
+        {"id": 19, "eventType": "grabbed", "sourceTitle": "Cat Hickey - Death of a Texan (epub)"},
+        {"id": 18, "eventType": "grabbed", "sourceTitle": "Unrelated release"},
+    ]
+    event = replace._source_grab_event(items)
+    assert event is not None
+    assert event["id"] == 19
+
+
+def test_source_grab_refuses_to_guess_without_pair():
+    items = [
+        {"id": 20, "eventType": "bookImported", "sourceTitle": "Imported release"},
+        {"id": 19, "eventType": "grabbed", "sourceTitle": "Different grab"},
+    ]
+    assert replace._source_grab_event(items) is None

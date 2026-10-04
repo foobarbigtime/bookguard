@@ -90,33 +90,6 @@
     </div>
   </section>
 
-  <section id="acquisitionPanel" class="table-card acquisition-panel" aria-live="polite">
-    <div class="section-title row-between">
-      <div>
-        <h2>Supervised ebook replacement</h2>
-        <p>BookGuard can prepare one verified wrong-content result, supervise its replacement, and pause before admission.</p>
-      </div>
-      <span id="acquisitionState" class="workflow-state workflow-state-loading">Loading status</span>
-    </div>
-    <div class="acquisition-body">
-      <p id="acquisitionMessage" class="muted">Checking the replacement safety gates…</p>
-      <dl id="acquisitionDetails" class="workflow-details" hidden></dl>
-      <div id="acquisitionControls" class="workflow-controls"></div>
-      <div id="acquisitionError" class="notice warning workflow-error" role="alert" hidden></div>
-    </div>
-  </section>
-
-  <section id="replacementPanel" class="table-card replacement-panel" aria-live="polite" hidden>
-    <div class="section-title row-between">
-      <div>
-        <h2 id="replacementTitle">Replacement candidates</h2>
-        <p id="replacementSubtitle"></p>
-      </div>
-      <button type="button" data-replacement-close>Close</button>
-    </div>
-    <div id="replacementBody" class="replacement-body"></div>
-  </section>
-
   <section id="movePanel" class="table-card replacement-panel" aria-live="polite" hidden>
     <div class="section-title row-between">
       <div>
@@ -319,12 +292,6 @@ function renderVerification(id, verification) {
   if (verification.verdict === 'METADATA_ERROR') {
     controls += ` <button class="repair-verified-button" onclick="repairVerified(${id})">Review metadata fix</button>`;
   }
-  const preparedReplacement = (
-    verification.verdict === 'INSUFFICIENT_EVIDENCE' &&
-    verification.source === 'missing' &&
-    cell.dataset.format === 'ebook' &&
-    cell.dataset.reasonCode === 'MISMATCH'
-  );
   const relationship = verification.evidence?.catalogue?.relationship;
   if (verification.verdict === 'WRONG_CONTENT' && relationship === 'missing_ebook' && cell.dataset.format === 'ebook') {
     const move = latestMoves[id];
@@ -335,11 +302,6 @@ function renderVerification(id, verification) {
     } else {
       controls += ` <button type="button" data-move-result="${id}">Move to correct book</button>`;
     }
-  }
-  if (verification.verdict === 'WRONG_CONTENT' || preparedReplacement) {
-    const bookId = Number(cell.dataset.bookId);
-    const label = preparedReplacement ? 'Resume replacement' : 'Replacement workflow';
-    controls += ` <button class="danger" type="button" data-replacement-result="${id}" data-replacement-book="${bookId}">${label}</button>`;
   }
   cell.innerHTML = `
     <span class="verification-badge ${verificationClass(verification.verdict)}">${escapeHtml(verificationLabel(verification.verdict))}</span>
@@ -561,7 +523,6 @@ async function triageAction(id, action) {
 loadCachedVerifications();
 pollVerificationJob();
 </script>
-<script src="{{ static_url('triage-acquisition.js') }}" defer></script>
 <script src="{{ static_url('triage-hardlinks.js') }}" defer></script>
 <script src="{{ static_url('triage-move.js') }}" defer></script>
 </body>

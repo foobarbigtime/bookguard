@@ -6,10 +6,6 @@ from fastapi import FastAPI
 
 from . import __version__
 from .static_assets import RevalidatedStaticFiles
-from .acquisition_coordinator import (
-    start_acquisition_coordinator,
-    stop_acquisition_coordinator,
-)
 from .auth import BasicAuthMiddleware
 from .config import settings
 from .request_origin import SameOriginMiddleware
@@ -38,7 +34,6 @@ async def lifespan(_: FastAPI):
     settings.apply(load_persisted_settings())
     if settings.scan_on_start:
         start_scan()
-    start_acquisition_coordinator()
     init_import_watch_db()
     import_watcher.start()
     init_scheduler_db()
@@ -48,7 +43,6 @@ async def lifespan(_: FastAPI):
     finally:
         scheduler.stop()
         import_watcher.stop()
-        stop_acquisition_coordinator()
 
 
 app = FastAPI(title="BookGuard", version=__version__, lifespan=lifespan)

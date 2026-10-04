@@ -11,10 +11,32 @@ then checks the new file like any other import.
 from __future__ import annotations
 
 from .actions import ActionError, resolve_bindery_api_key
-from .automatic import _history_items, _source_grab_event
 from .bindery_client import BinderyClient, BinderyClientError
 from .db import bindery_files_for_book, set_cleanup_followup
 from .triage import triage_quarantine
+
+
+def _history_items(payload: dict) -> list[dict]:
+    items = payload.get("items") if isinstance(payload, dict) else None
+    return [item for item in (items or []) if isinstance(item, dict)]
+
+
+def _source_grab_event(items: list[dict]) -> dict | None:
+    """Find the grab the bad file came from, without guessing.
+
+    Only a bookImported event with the exact source title of an earlier
+    grabbed event counts. Without that pair Replace does not blocklist.
+    """
+    imports = [item for item in items if item.get("eventType") == "bookImported"]
+    grabs = [item for item in items if item.get("eventType") == "grabbed"]
+    for imported in imports:
+        source = str(imported.get("sourceTitle") or "").strip()
+        if not source:
+            continue
+        matches = [g for g in grabs if str(g.get("sourceTitle") or "").strip() == source]
+        if matches:
+            return max(matches, key=lambda item: int(item.get("id") or 0))
+    return None
 
 
 def triage_replace(result: dict) -> tuple[int, str]:
