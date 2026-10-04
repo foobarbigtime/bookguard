@@ -23,11 +23,13 @@ automatically" is on (and with the Fix now button):
 * An ebook on one entry and the audiobook on another are joined with Bindery's
   Fix match onto one entry; the emptied entry is then hidden.
 
-Only when the entries are proven one book: titles and author agree and nothing
-contradicts it (different places in one series, different languages, or years
-far apart with no shared ISBN/ASIN or series place). Every change is checked
-again against Bindery right before, recorded in Activity, and can be undone in
-Bindery. Two copies of the same kind are left for the file clean-up.
+Only when the entries are one book: titles and author agree and Bindery's series
+data doesn't contradict it (different places in one series). Bindery's language
+and year labels are not used: on real libraries they come from a random edition
+("The Racketeer" labelled Swedish, "Nightingale" 2025) and only caused false
+alarms. The files themselves are compared by the file clean-up, which handles
+two copies of the same kind. Every change is checked again against Bindery right
+before, recorded in Activity, and can be undone in Bindery.
 """
 
 from __future__ import annotations
@@ -74,10 +76,13 @@ LANGUAGES = {"en": "en", "eng": "en", "english": "en", "de": "de", "deu": "de", 
 MERGE_WAIT_SECONDS = 600
 
 
+UNKNOWN_LANGUAGES = {"", "und", "mul", "zxx", "mis", "unknown"}
+
+
 def _language(value: Any) -> str:
-    """One code per language; codes not listed are kept as given, so they still differ."""
+    """One code per language for the page; "und" and blank are unknown."""
     text = str(value or "").strip().lower()
-    return LANGUAGES.get(text, text)
+    return "" if text in UNKNOWN_LANGUAGES else LANGUAGES.get(text, text)
 
 
 def _year(value: Any) -> int | None:
@@ -154,15 +159,14 @@ def _has_files(entry: dict) -> bool:
 
 
 def _conflict(a: dict, b: dict) -> str:
-    """Why two entries are not one book, or ""."""
+    """Why two entries are not one book, or "". Only Bindery's series places count:
+    its language and year labels are too often wrong to stand against a matching title."""
     places_a, places_b = dict(a["series"]), dict(b["series"])
     for series_id in places_a.keys() & places_b.keys():
         first, second = _place(places_a[series_id]), _place(places_b[series_id])
         if first is not None and second is not None and first != second:
             low, high = sorted((first, second))
             return f"they are different numbers ({low:g} and {high:g}) in the same series"
-    if a["language"] and b["language"] and a["language"] != b["language"]:
-        return "they are in different languages"
     return ""
 
 
@@ -178,26 +182,15 @@ def _proof(a: dict, b: dict) -> str:
 
 
 def _evidence(entries: list[dict], keep: dict) -> tuple[dict[int, str], str]:
-    """Each other entry's proof of being the keeper's book, and why any is left for the user.
+    """Each other entry's proof of being the keeper's book, and why the group is left.
 
-    Any contradiction between two entries leaves the whole group (it may mix books);
-    otherwise each entry is judged against the keeper on its own."""
+    Any contradiction between two entries leaves the whole group (it may mix books)."""
     for a, b in combinations(entries, 2):
         reason = _conflict(a, b)
         if reason:
             return {}, reason
-    proven: dict[int, str] = {}
-    left: list[str] = []
-    for entry in entries:
-        if entry is keep:
-            continue
-        proof = _proof(entry, keep)
-        if not proof and entry["year"] and keep["year"] and abs(entry["year"] - keep["year"]) > 1:
-            left.append(f"Bindery gives “{entry['title']}” the year {entry['year']} and “{keep['title']}” "
-                        f"{keep['year']}, and no ISBN or series place shows they are one book")
-            continue
-        proven[entry["id"]] = proof or "the same title and author"
-    return proven, "; ".join(left)
+    proven = {e["id"]: _proof(e, keep) or "the same title and author" for e in entries if e is not keep}
+    return proven, ""
 
 
 def _keeper(entries: list[dict]) -> dict:
