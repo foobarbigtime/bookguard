@@ -163,7 +163,7 @@
         <div class="card-head"><h2 id="automationHeading">Automation</h2><a class="more" href="/system">System →</a></div>
         {% set automation = home.automation %}
         <div class="mode-display" role="group" aria-label="Automation mode">
-          {% for mode, label in [('manual', 'Manual'), ('observe', 'Observe'), ('automatic', 'Automatic')] %}
+          {% for mode, label in [('manual', 'Manual'), ('observe', 'Observe')] %}
             <span class="{{ 'current' if automation.mode == mode }}"{% if automation.mode == mode %} aria-current="true"{% endif %}>{{ label }}</span>
           {% endfor %}
         </div>

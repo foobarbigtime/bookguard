@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 from .attention_execution import stale_execution_items
+from .config import settings
 from .operator_guidance import operation_guidance
 from .observe import observe_attention_items
 from .db import (
@@ -60,6 +62,38 @@ _LEGACY_ATTENTION = {
 }
 
 
+def _column(row, name: str):
+    return row[name] if name in row.keys() else None
+
+
+def _left_nothing_behind(kind: str, row) -> bool:
+    """True only when the record proves the failed step changed nothing.
+
+    A grab Bindery refused has no queue item, staged file or admission. An
+    admission that never recorded a publication left nothing only if its
+    library file is not there now; anything else stays visible.
+    """
+    if str(row["status"] or "").casefold() != "failed":
+        return False
+    if kind == "acquisition":
+        return (
+            _column(row, "queue_id") is None
+            and not _column(row, "staged_relative_path")
+            and _column(row, "admission_id") is None
+        )
+    if kind == "admission" and not _column(row, "publication_method"):
+        stored = str(_column(row, "stored_path") or "")
+        try:
+            relative = Path(stored).relative_to(Path(settings.ebook_bindery_prefix))
+        except ValueError:
+            return False
+        if not stored or not relative.parts:
+            return False
+        local = Path(settings.ebook_root) / relative
+        return not (local.exists() or local.is_symlink())
+    return False
+
+
 def _legacy_items(limit: int) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     with local_conn() as conn:
@@ -67,13 +101,13 @@ def _legacy_items(limit: int) -> list[dict[str, Any]]:
             if not _table_exists(conn, table):
                 continue
             rows = conn.execute(
-                f"SELECT id, result_id, status, error, created_at, updated_at FROM {table} "
+                f"SELECT * FROM {table} "
                 "ORDER BY id DESC LIMIT ?",
                 (int(limit),),
             ).fetchall()
             for row in rows:
                 status = str(row["status"] or "").casefold()
-                if status not in statuses:
+                if status not in statuses or _left_nothing_behind(kind, row):
                     continue
                 result = result_by_id(int(row["result_id"])) if row["result_id"] else None
                 error = str(row["error"] or "").strip()

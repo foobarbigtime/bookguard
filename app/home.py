@@ -245,7 +245,8 @@ def _automation() -> tuple[dict[str, Any], dict[str, Any], str | None]:
         return {"mode": "invalid", "sentence": str(exc), "lastObserve": _last_observe()}, {}, str(exc)
     return (
         {
-            "mode": automation.automation_mode,
+            # Automatic Mode was removed: an old "automatic" setting acts as manual.
+            "mode": "manual" if automation.automation_mode == "automatic" else automation.automation_mode,
             "sentence": _MODE_SENTENCES[automation.automation_mode],
             "lastObserve": _last_observe(),
         },
