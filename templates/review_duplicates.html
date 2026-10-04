@@ -53,7 +53,8 @@
       </ul>
       {% if group.blocked %}
         <p class="muted">Left for you: {{ group.blocked }}. Check them in Bindery.</p>
-      {% elif group.kind == 'TWO_COPIES' %}
+      {% endif %}
+      {% if group.kind == 'TWO_COPIES' and group.proof %}
         <p class="muted">Two copies of the same kind are on disk. One book because of {{ group.proof }}; the file clean-up will keep the better copy.</p>
       {% elif group.hideable or group.moves %}
         <p class="muted">One book because of {{ group.proof }}. BookGuard keeps Bindery book {{ group.keep }}{% if group.moves %}, moves the other entry's files onto it{% endif %} and hides the rest.</p>

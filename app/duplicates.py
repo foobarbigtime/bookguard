@@ -74,6 +74,12 @@ LANGUAGES = {"en": "en", "eng": "en", "english": "en", "de": "de", "deu": "de", 
 MERGE_WAIT_SECONDS = 600
 
 
+def _language(value: Any) -> str:
+    """One code per language; codes not listed are kept as given, so they still differ."""
+    text = str(value or "").strip().lower()
+    return LANGUAGES.get(text, text)
+
+
 def _year(value: Any) -> int | None:
     found = re.match(r"\s*(\d{4})", str(value or ""))
     return int(found.group(1)) if found else None
@@ -117,7 +123,9 @@ def _entries(conn, book_ids: list[int] | None = None) -> list[dict]:
         files[int(row["book_id"])][str(row["format"])].append(str(row["path"]))
     identifiers: dict[int, set[str]] = defaultdict(set)
     if "editions" in tables:
-        for row in conn.execute("SELECT book_id, isbn_13, isbn_10, asin FROM editions"):
+        edition_columns = {row["name"] for row in conn.execute("PRAGMA table_info(editions)")}
+        picked = ", ".join(c if c in edition_columns else f"'' AS {c}" for c in ("isbn_13", "isbn_10", "asin"))
+        for row in conn.execute(f"SELECT book_id, {picked} FROM editions"):
             identifiers[int(row["book_id"])].update(filter(None, map(_identifier, (row["isbn_13"], row["isbn_10"], row["asin"]))))
     series: dict[int, list[tuple[int, str]]] = defaultdict(list)
     if "series_books" in tables:
@@ -134,7 +142,7 @@ def _entries(conn, book_ids: list[int] | None = None) -> list[dict]:
             "id": book_id, "authorId": int(row["author_id"]), "author": str(row["author"]),
             "title": str(row["title"]), "year": _year(row["release_date"]),
             "ebooks": ebooks, "audiobooks": audio, "other": legacy,
-            "language": LANGUAGES.get(str(row["language"] or "").strip().lower(), ""),
+            "language": _language(row["language"]),
             "ids": identifiers.get(book_id, set()) | ({_identifier(row["asin"])} - {""}),
             "series": series.get(book_id, []),
         })
@@ -145,27 +153,51 @@ def _has_files(entry: dict) -> bool:
     return bool(entry["ebooks"] or entry["audiobooks"] or entry["other"])
 
 
-def _evidence(entries: list[dict]) -> tuple[str, str]:
-    """(what proves they are one book, why they may not be). Exactly one is set."""
-    proof = ""
+def _conflict(a: dict, b: dict) -> str:
+    """Why two entries are not one book, or ""."""
+    places_a, places_b = dict(a["series"]), dict(b["series"])
+    for series_id in places_a.keys() & places_b.keys():
+        first, second = _place(places_a[series_id]), _place(places_b[series_id])
+        if first is not None and second is not None and first != second:
+            low, high = sorted((first, second))
+            return f"they are different numbers ({low:g} and {high:g}) in the same series"
+    if a["language"] and b["language"] and a["language"] != b["language"]:
+        return "they are in different languages"
+    return ""
+
+
+def _proof(a: dict, b: dict) -> str:
+    """What shows two entries are one book beyond the title, or ""."""
+    if a["ids"] & b["ids"]:
+        return "the same ISBN or ASIN"
+    places_a, places_b = dict(a["series"]), dict(b["series"])
+    if any(_place(places_a[s]) is not None and _place(places_a[s]) == _place(places_b[s])
+           for s in places_a.keys() & places_b.keys()):
+        return "the same place in a series"
+    return ""
+
+
+def _evidence(entries: list[dict], keep: dict) -> tuple[dict[int, str], str]:
+    """Each other entry's proof of being the keeper's book, and why any is left for the user.
+
+    Any contradiction between two entries leaves the whole group (it may mix books);
+    otherwise each entry is judged against the keeper on its own."""
     for a, b in combinations(entries, 2):
-        if a["ids"] & b["ids"]:
-            proof = "the same ISBN or ASIN"
-        places_a, places_b = dict(a["series"]), dict(b["series"])
-        for series_id in places_a.keys() & places_b.keys():
-            first, second = _place(places_a[series_id]), _place(places_b[series_id])
-            if first is not None and second is not None:
-                if first != second:
-                    low, high = sorted((first, second))
-                    return "", f"they are different numbers ({low:g} and {high:g}) in the same series"
-                proof = proof or "the same place in a series"
-        if a["language"] and b["language"] and a["language"] != b["language"]:
-            return "", "they are in different languages"
-    years = [e["year"] for e in entries if e["year"]]
-    if not proof and years and max(years) - min(years) > 1:
-        return "", (f"Bindery gives them years {min(years)} and {max(years)}, and no ISBN or series place "
-                    "shows they are one book")
-    return proof or "the same title and author", ""
+        reason = _conflict(a, b)
+        if reason:
+            return {}, reason
+    proven: dict[int, str] = {}
+    left: list[str] = []
+    for entry in entries:
+        if entry is keep:
+            continue
+        proof = _proof(entry, keep)
+        if not proof and entry["year"] and keep["year"] and abs(entry["year"] - keep["year"]) > 1:
+            left.append(f"Bindery gives “{entry['title']}” the year {entry['year']} and “{keep['title']}” "
+                        f"{keep['year']}, and no ISBN or series place shows they are one book")
+            continue
+        proven[entry["id"]] = proof or "the same title and author"
+    return proven, "; ".join(left)
 
 
 def _keeper(entries: list[dict]) -> dict:
@@ -190,18 +222,18 @@ def _classify(entries: list[dict]) -> dict:
         kind = "SPLIT"
     else:
         kind = "EMPTY_EXTRA"
-    proof, blocked = _evidence(entries)
     keep = _keeper(entries)
-    hideable: list[int] = []
+    proven, blocked = _evidence(entries, keep)
+    hideable = [e["id"] for e in (empty if with_files else entries) if e is not keep and e["id"] in proven]
     moves: list[dict] = []
-    if not blocked:
-        hideable = [e["id"] for e in (empty if with_files else entries) if e is not keep]
-        if kind == "SPLIT":
-            moves = [{"from": e["id"], "format": fmt, "path": path}
-                     for e in with_files if e is not keep
-                     for fmt, paths in (("ebook", e["ebooks"]), ("audiobook", e["audiobooks"])) for path in paths]
+    if kind == "SPLIT" and all(e["id"] in proven for e in with_files if e is not keep):
+        moves = [{"from": e["id"], "format": fmt, "path": path}
+                 for e in with_files if e is not keep
+                 for fmt, paths in (("ebook", e["ebooks"]), ("audiobook", e["audiobooks"])) for path in paths]
+    proofs = sorted(set(proven.values()))
+    proof = " and ".join(proofs) if proofs else ""
     return {"kind": kind, "label": KINDS[kind], "keep": keep["id"], "hideable": hideable, "moves": moves,
-            "proof": proof, "blocked": blocked}
+            "proof": proof, "proven": proven, "blocked": blocked}
 
 
 def find_duplicates(book_ids: list[int] | None = None) -> list[dict]:
@@ -262,7 +294,7 @@ def hide_empty(book_id: int, client: BinderyClient | None = None, *, auto: bool 
         raise ActionError(f"“{entry['title']}” can't be hidden safely ({why}). Nothing was changed.")
     keep = next(e for e in group["entries"] if e["id"] == group["keep"])
     note = (f"{'Automatically: ' if auto else ''}kept “{keep['title']}” (Bindery book {keep['id']}); "
-            f"one book because of {group['proof']}.")
+            f"one book because of {group['proven'][int(book_id)]}.")
     try:
         result = _client(client).exclude_book(int(book_id))
     except BinderyClientError as exc:
@@ -311,7 +343,7 @@ def merge_split(keep_id: int, client: BinderyClient | None = None, *, auto: bool
     for move in group["moves"]:
         source = next(e for e in group["entries"] if e["id"] == move["from"])
         note = (f"{'Automatically: ' if auto else ''}moved the {move['format']} of “{source['title']}” onto "
-                f"“{keep['title']}” (Bindery book {keep['id']}); one book because of {group['proof']}.")
+                f"“{keep['title']}” (Bindery book {keep['id']}); one book because of {group['proven'][move['from']]}.")
         try:
             client.reassign_manual_import(move["path"], int(keep_id), file_format=move["format"])
         except BinderyClientError as exc:

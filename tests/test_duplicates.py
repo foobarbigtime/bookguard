@@ -34,6 +34,11 @@ BOOKS = [
     (19, 9, "Fang", "", "/b/Fang.epub", "", 0, ""),
     (20, 9, "The Fang", "", "", "", 0, ""),  # a different place in the same series
     (21, 10, "Dark", "", "/b/Dark.epub", "", 0, ""),
+    (23, 11, "Witness", "2000", "/b/Witness.epub", "", 0, ""),
+    (24, 11, "The Witness", "2000", "", "", 0, ""),  # shares an ISBN with 23
+    (25, 11, "Witness!", "2020", "", "", 0, ""),  # nothing ties it to 23 but the title
+    (26, 12, "Gioco", "", "/b/Gioco.epub", "", 0, "ita"),
+    (27, 12, "The Gioco", "", "", "", 0, "por"),  # languages outside the short list still differ
     (22, 10, "The Dark", "", "", "", 1, ""),  # already excluded: Bindery doesn't show it
 ]
 
@@ -56,12 +61,13 @@ def bindery(tmp_path, monkeypatch):
         conn.executemany("INSERT INTO authors VALUES (?, ?)", [
             (1, "Kristin Hannah"), (2, "John Grisham"), (3, "Jeff Parker"), (4, "James Patterson"),
             (5, "Steven Campbell"), (6, "Someone"), (7, "Daniel Silva"), (8, "Ann Patchett"),
-            (9, "James Patterson"), (10, "Lemony Snicket")])
+            (9, "James Patterson"), (10, "Lemony Snicket"), (11, "Nora Roberts"), (12, "Elena Ferrante")])
         conn.executemany("INSERT INTO books VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '')", BOOKS)
         conn.executemany("INSERT INTO book_files(book_id, format, path) VALUES (?, ?, ?)", [
             (b[0], "ebook", b[4]) for b in BOOKS if b[4]] + [(b[0], "audiobook", b[5]) for b in BOOKS if b[5]])
         conn.executemany("INSERT INTO editions(book_id, isbn_13) VALUES (?, ?)",
-                         [(17, "978-0-06-054075-3"), (18, "9780060540753")])
+                         [(17, "978-0-06-054075-3"), (18, "9780060540753"), (23, "9780000000017"),
+                          (24, "9780000000017")])
         conn.execute("INSERT INTO series VALUES (1, 'Maximum Ride')")
         conn.executemany("INSERT INTO series_books VALUES (1, ?, ?)", [(19, "8"), (20, "6")])
     monkeypatch.setattr(settings, "bindery_db", str(db))
@@ -105,7 +111,7 @@ def test_each_pair_is_proven_or_left_with_the_reason(bindery):
     found = _by_title(duplicates.find_duplicates())
 
     assert set(found) == {"Nightingale", "The Client", "Time to Kill", "Superman / Shazam!", "Lost", "Order",
-                          "Patron Saint of Liars", "Fang"}
+                          "Patron Saint of Liars", "Fang", "Witness", "Gioco"}
     assert (found["Nightingale"]["keep"], found["Nightingale"]["hideable"]) == (1, [2])
     assert found["Superman / Shazam!"]["kind"] == "ALL_EMPTY" and found["Superman / Shazam!"]["hideable"] == [8]
     assert found["The Client"]["kind"] == "SPLIT" and found["The Client"]["moves"] == [
@@ -113,9 +119,21 @@ def test_each_pair_is_proven_or_left_with_the_reason(bindery):
     assert found["Time to Kill"]["kind"] == "TWO_COPIES" and not found["Time to Kill"]["moves"]
     assert found["Patron Saint of Liars"]["hideable"] == [18]  # the shared ISBN outweighs the wrong year
     assert found["Patron Saint of Liars"]["proof"] == "the same ISBN or ASIN"
-    assert "years 2014 and 2020" in found["Lost"]["blocked"] and not found["Lost"]["hideable"]
+    assert "the year 2014" in found["Lost"]["blocked"] and not found["Lost"]["hideable"]
     assert "different languages" in found["Order"]["blocked"]
     assert "different numbers (6 and 8)" in found["Fang"]["blocked"]
+    assert found["Witness"]["hideable"] == [24] and "Witness!" in found["Witness"]["blocked"]
+    assert "different languages" in found["Gioco"]["blocked"] and not found["Gioco"]["hideable"]
+
+
+def test_an_older_editions_table_without_asin_still_works(bindery):
+    with sqlite3.connect(bindery) as conn:
+        conn.executescript("""
+            CREATE TABLE editions_old AS SELECT id, book_id, isbn_13, isbn_10 FROM editions;
+            DROP TABLE editions; ALTER TABLE editions_old RENAME TO editions;
+        """)
+    found = _by_title(duplicates.find_duplicates())
+    assert found["Patron Saint of Liars"]["hideable"] == [18]
 
 
 def test_hiding_excludes_only_a_proven_empty_entry_and_records_it(bindery):
@@ -175,8 +193,8 @@ def test_fix_all_hides_and_joins_every_proven_pair_and_nothing_else(bindery):
 
     done = duplicates.fix_all(client, auto=True, poll_seconds=0)
 
-    assert done == {"hidden": 3, "merged": 1, "problems": []}
-    assert sorted(client.excluded) == [2, 4, 8, 18]
+    assert done == {"hidden": 4, "merged": 1, "problems": []}
+    assert sorted(client.excluded) == [2, 4, 8, 18, 24]
     action = recent_cleanup_actions(1)[0]
     assert action["followup"].startswith("Automatically")
 
