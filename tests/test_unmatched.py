@@ -272,3 +272,15 @@ def test_attach_rechecks_and_refuses_when_the_file_changed_or_is_gone(lib, monke
     with pytest.raises(unmatched.ActionError, match="no longer lists"):
         unmatched.attach(11)
     assert client.adopted == [] and unmatched.stored_checks() == []
+
+
+def test_an_ebook_type_file_inside_the_audiobooks_folder_is_found_and_judged(lib):
+    folder = lib["audio"] / "James Patterson/Die 6. Geisel ()"
+    folder.mkdir(parents=True)
+    (folder / "Die 6. Geisel.txt").write_bytes(b"x" * 1008)
+    item = {"id": 60, "kind": "file", "format": "ebook", "rootPath": "/data/audiobooks",
+            "relPath": "James Patterson/Die 6. Geisel ()/Die 6. Geisel.txt", "members": ["Die 6. Geisel.txt"]}
+
+    outcome = unmatched.check_item(item, lib["library"], None)
+
+    assert outcome["verdict"] == "JUNK" and "1008 bytes" in outcome["reason"]

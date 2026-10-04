@@ -356,10 +356,20 @@ def _audio_facts(files: list[Path], evidence: list) -> dict:
 
 # ---- verdict -----------------------------------------------------------------
 
+def _local_path(bindery_path: str, fmt: str) -> str:
+    """Map by the library folder the file is in, not by its type: Bindery lists, say,
+    a .txt "ebook" that sits in the audiobooks folder."""
+    for root_fmt in ("audiobook", "ebook"):
+        prefix = settings.audiobook_bindery_prefix if root_fmt == "audiobook" else settings.ebook_bindery_prefix
+        if bindery_path == prefix or bindery_path.startswith(prefix.rstrip("/") + "/"):
+            return map_path(bindery_path, root_fmt)
+    return map_path(bindery_path, fmt)
+
+
 def _unit_files(item: dict) -> list[Path]:
     fmt = str(item.get("format") or "ebook")
     unit = PurePosixPath(str(item.get("rootPath") or "")) / str(item.get("relPath") or "")
-    local = Path(map_path(str(unit), fmt))
+    local = Path(_local_path(str(unit), fmt))
     extensions = AUDIO_EXTENSIONS if fmt == "audiobook" else EBOOK_EXTENSIONS
     if local.is_file():
         siblings = [local.parent / name for name in item.get("members") or []]
@@ -374,8 +384,11 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
     evidence: list[dict] = []
     files = _unit_files(item)
     if not files:
+        unit = PurePosixPath(str(item.get("rootPath") or "")) / str(item.get("relPath") or "")
         return {"verdict": "UNSURE", "reason": "BookGuard can't see these files from its own mounts.",
-                "evidence": [{"check": "Files", "result": "warn", "detail": "Not found under BookGuard's library folders."}]}
+                "evidence": [{"check": "Files", "result": "warn",
+                              "detail": f"Bindery's {unit} → {_local_path(str(unit), str(item.get('format') or 'ebook'))} "
+                                        "does not exist inside BookGuard."}]}
     audio = str(item.get("format")) == "audiobook"
     facts = _audio_facts(files, evidence) if audio else _ebook_facts(files[0], evidence)
     if facts["junk"]:
@@ -450,7 +463,7 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
     if existing and not audio:
         mine = sha256_file(files[0])
         for other in existing:
-            local = Path(map_path(str(other["stored_path"]), "ebook"))
+            local = Path(_local_path(str(other["stored_path"]), "ebook"))
             if local.is_file() and local.stat().st_size == files[0].stat().st_size and sha256_file(local) == mine:
                 _check(evidence, "Exact copy", "fail", f"Identical to “{book['title']}”’s ebook already in the library.")
                 return {"verdict": "JUNK", "reason": f"It is an exact copy of the ebook “{book['title']}” already has.",
@@ -464,8 +477,12 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
 
 # ---- running it ---------------------------------------------------------------
 
+CHECK_VERSION = 2  # raise when the checks change, so stored verdicts are worked out again
+
+
 def _signature(item: dict) -> str:
-    return f"{item.get('rootPath')}/{item.get('relPath')}|{item.get('fileCount')}|{item.get('sizeBytes')}"
+    return (f"v{CHECK_VERSION}|{item.get('rootPath')}/{item.get('relPath')}"
+            f"|{item.get('fileCount')}|{item.get('sizeBytes')}")
 
 
 def _all_rows(client: BinderyClient) -> list[dict]:
