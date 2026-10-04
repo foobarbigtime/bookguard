@@ -1,3 +1,5 @@
+import pytest
+
 from app.config import Settings, settings
 from app.matcher import (
     analyze_audio_identity_set,
@@ -249,3 +251,29 @@ def test_whole_set_does_not_call_box_set_members_mixed():
 
     assert summary["titleMismatchCount"] == 0
     assert summary["mixedContent"] is False
+
+
+@pytest.mark.parametrize(
+    ("expected", "sample"),
+    [
+        ("Cujo", {"album": "Cujo", "title": "Chapter 01", "artist": "Stephen King"}),
+        ("Holly", {"album": "Holly", "title": "Holly 01", "artist": "Stephen King"}),
+        ("It", {"album": "It", "title": "Track 3", "artist": "Stephen King"}),
+        ("Messenger, The", {"album": "The Messenger", "title": "Part 2", "artist": "Daniel Silva"}),
+        ("Cross", {"album": "Cross: Alex Cross, Book 12", "title": "01", "artist": "James Patterson"}),
+        ("Order", {"album": "The Order: A Novel: Gabriel Al", "title": "Chapter 7", "artist": "Daniel Silva"}),
+    ],
+)
+def test_short_audiobook_titles_match_their_album_tag(expected, sample):
+    author = sample["artist"]
+    classification, _, reason, _ = classify_audio(expected, author, [sample])
+    assert (classification, reason) == ("PASS", "MATCH")
+
+
+def test_a_different_album_with_generic_tracks_still_does_not_match():
+    from app.matcher import audio_title_supported
+
+    assert not audio_title_supported("Cujo", {"album": "Carrie", "title": "Chapter 01"})
+    assert not audio_title_supported("Later", {"album": "", "title": "Chapter 2"})
+    # A subtitle split only happens after a real subtitle marker.
+    assert not audio_title_supported("Night", {"album": "Night: Shift and Other Stories"})
