@@ -27,7 +27,6 @@ def _inspect_payload() -> list[dict]:
         },
         "Mounts": [
             {"Destination": "/config", "RW": True},
-            {"Destination": "/staging", "RW": True},
             {"Destination": "/quarantine", "RW": True},
             {"Destination": "/bindery", "RW": False},
             {"Destination": "/books", "RW": False},

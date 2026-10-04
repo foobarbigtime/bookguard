@@ -168,7 +168,6 @@
           {% endfor %}
         </div>
         <p>{{ automation.sentence }}</p>
-        {% if automation.mode == 'automatic' %}<small class="muted">{{ automation.allowed }} {{ 'action is' if automation.allowed == 1 else 'actions are' }} allowed.</small>{% endif %}
         <small class="muted">
           {% if automation.lastObserve %}Last observe check <time data-local datetime="{{ automation.lastObserve }}">{{ automation.lastObserve[:16]|replace('T', ' ') }}</time>.{% else %}No observe check has run yet.{% endif %}
           The mode is set by <code>BOOKGUARD_AUTOMATION_MODE</code> for now.

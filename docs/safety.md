@@ -1,6 +1,6 @@
 # Safety and permissions
 
-BookGuard uses layered access, repair, action, and reacquisition safeguards.
+BookGuard uses layered access, repair, and action safeguards.
 
 ### Application access
 
@@ -38,7 +38,7 @@ a trusted LAN; use an HTTPS reverse proxy or VPN for remote access, and do not
 publish BookGuard directly to the internet.
 
 Operations such as repair, undo, scan, reset, detach, quarantine, remediation,
-admission, and reconciliation require their operation-specific confirmation
+and reconciliation require their operation-specific confirmation
 where defined by the route. Read the request model for the particular endpoint;
 individual verification requests, for example, do not use a confirmation token.
 Authentication and operation-specific confirmation serve different purposes.
@@ -50,7 +50,7 @@ BOOKGUARD_ALLOW_ACTIONS=false
 ```
 
 This controls Bindery changes and guarded operations such as Detach, Quarantine,
-direct admission, and admission reconciliation. Metadata repair has its own
+Replace and Put back. Metadata repair has its own
 repair-mode and writable-mount checks. `PASS` results remain protected
 from destructive actions.
 
@@ -128,4 +128,4 @@ Generic labels such as `Chapter 01` and `Track 01` are never enough for strong s
 Metadata repair is narrower still: only already-confirmed identities or explicitly recognized mechanical metadata faults are eligible for Safe repair.
 
 See [configuration](configuration.md) for scanner settings and
-[advanced workflows](advanced-workflows.md) for staging and admission gates.
+[advanced workflows](advanced-workflows.md) for the shared-file correction gates.

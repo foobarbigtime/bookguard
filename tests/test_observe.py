@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
-import pytest
-from fastapi import HTTPException
 
 from app.config import settings
 from app.db import add_result, create_scan, finish_scan, init_local_db, local_conn
@@ -219,34 +216,6 @@ def test_observe_evidence_is_durable_and_human_readable(monkeypatch, tmp_path):
     assert evidence["scanId"] == "observe-scan"
     assert evidence["verification"]["verdict"] == "WRONG_CONTENT"
     assert "future Automatic Mode should quarantine" in evidence["nextStep"]
-
-
-
-def test_automatic_mutation_endpoint_is_blocked_in_observe_mode(monkeypatch):
-    import app.routes.automatic as automatic_routes
-
-    monkeypatch.setattr(
-        automatic_routes,
-        "load_automation_settings",
-        lambda: SimpleNamespace(automation_mode="observe"),
-    )
-    monkeypatch.setattr(
-        automatic_routes,
-        "start_ebook_acquisition",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("mutation workflow was called")
-        ),
-    )
-
-    payload = automatic_routes.EbookAcquisitionRequest(
-        candidateGuid="candidate",
-        confirm="START_EBOOK_ACQUISITION",
-    )
-    with pytest.raises(HTTPException) as exc:
-        automatic_routes.api_automatic_start_acquisition(123, payload)
-
-    assert exc.value.status_code == 409
-    assert "Observe Mode is active" in str(exc.value.detail)
 
 
 

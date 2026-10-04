@@ -52,8 +52,7 @@ as unavailable. It is useful for UI development without a live library.
 ```bash
 bookguard_dev_dir=$(mktemp -d /tmp/bookguard-dev.XXXXXX)
 mkdir -p "$bookguard_dev_dir/config" "$bookguard_dev_dir/books" \
-  "$bookguard_dev_dir/audiobooks" "$bookguard_dev_dir/quarantine" \
-  "$bookguard_dev_dir/staging"
+  "$bookguard_dev_dir/audiobooks" "$bookguard_dev_dir/quarantine"
 
 export CONFIG_DIR="$bookguard_dev_dir/config"
 export BINDERY_DB="$bookguard_dev_dir/bindery-unconfigured.db"
@@ -61,16 +60,11 @@ export BINDERY_URL=http://127.0.0.1:1
 export EBOOK_ROOT="$bookguard_dev_dir/books"
 export AUDIOBOOK_ROOT="$bookguard_dev_dir/audiobooks"
 export QUARANTINE_ROOT="$bookguard_dev_dir/quarantine"
-export BOOKGUARD_STAGING_ROOT="$bookguard_dev_dir/staging"
 export BOOKGUARD_AUTH_USERNAME=bookguard
 export BOOKGUARD_AUTH_PASSWORD=local-development-only
 export BOOKGUARD_AUTOMATION_MODE=manual
-export BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST=
-export BOOKGUARD_AUTOMATIC_REACQUISITION=false
-export BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED=false
 export BOOKGUARD_ALLOW_ACTIONS=false
 export BOOKGUARD_EBOOK_ACTIONS_ENABLED=false
-export BOOKGUARD_ADMISSION_ENABLED=false
 export BOOKGUARD_METADATA_REPAIR_MODE=preview
 export BOOKGUARD_SCAN_ON_START=false
 export BOOKGUARD_WATCH_IMPORTS=false

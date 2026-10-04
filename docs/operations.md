@@ -9,7 +9,7 @@ in a separate directory. See [installation](getting-started.md) for paths.
 BookGuard's persistent application state lives in `/config/bookguard.db`. The
 backup helper creates a transactionally consistent SQLite copy while the normal
 BookGuard container may remain running. It does not copy media files, Bindery's
-database, credentials, verification snapshots, staging, or quarantine content.
+database, credentials, verification snapshots, or quarantine content.
 
 Create a backup on the Unraid host:
 
@@ -116,8 +116,7 @@ backup read-only, proves restore compatibility in disposable tmpfs, rechecks
 the source revision, and tags the currently running image for rollback. It then
 deploys `compose.yaml` plus `compose.clamav.yaml` with `--no-build`. When
 `BOOKGUARD_EBOOK_ACTIONS_ENABLED=true`, it also includes `compose.actions.yaml`
-to retain the explicitly enabled writable ebook alias. The upgrade topology
-does not include the separate direct-admission alias.
+to retain the explicitly enabled writable ebook alias.
 
 Post-deployment acceptance fails closed unless all of these succeed:
 
@@ -151,11 +150,9 @@ Before a release or live acceptance test, run:
 ./scripts/smoke-test.sh
 ```
 
-The command builds the current source and validates the normal Compose topology,
-each opt-in writable alias, and their combined topology. It then exercises the complete ebook
-workflow—acquisition, external-handoff enforcement, staged-byte verification,
-atomic admission, registration, and finalization—against a fake Bindery client
-and temporary files.
+The command builds the current source, checks that the image runs with a
+read-only root filesystem, and validates the normal Compose topology, the
+writable action alias overlay, and the ClamAV overlay.
 
 The production Compose service runs BookGuard as a non-root UID/GID
 (default `99:100` on Unraid), drops all Linux capabilities, and uses a read-only
@@ -163,16 +160,12 @@ root filesystem. Bindery's read-only database and BookGuard's writable host
 directories therefore need normal filesystem ownership/permissions for that
 runtime identity; BookGuard does not bypass DAC permissions with capabilities.
 
-Writable state is limited to the explicit `/config`, `/staging`, and `/quarantine`
-mounts plus any deliberately enabled action/admission alias. `/tmp` is a
+Writable state is limited to the explicit `/config` and `/quarantine`
+mounts plus the action alias when deliberately enabled. `/tmp` is a
 bounded tmpfs mounted with `nosuid`, `nodev`, and `noexec`; application code,
 Python packages, and system binaries remain immutable at runtime.
 
-The workflow container uses `--network none`, a read-only root filesystem, and
-the same bounded no-exec temporary filesystem. It does not mount `/config`, `/books`,
-`/staging`, the Bindery database, the download client, or any other live host
-path. The temporary library and audit database are removed when the command
-finishes. A successful run therefore replaces most of the long manual CLI
-checks; a live test is still appropriate once per release milestone.
+The smoke containers use `--network none` and mount no live host path. A live
+test is still appropriate once per release milestone.
 
 After scanner/matcher upgrades, run a **new scan**. Historical scan rows are kept and are not silently reclassified.

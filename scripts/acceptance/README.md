@@ -13,17 +13,15 @@ The goal is **less manual setup, not less testing**.
 scripts/acceptance/run --list
 scripts/acceptance/run selftest
 BOOKGUARD_ACCEPTANCE_EXPECTED_SHA="replace-with-reviewed-40-character-sha" \
-  scripts/acceptance/run acquisition-progress
-BOOKGUARD_ACCEPTANCE_EXPECTED_SHA="replace-with-reviewed-40-character-sha" \
-  scripts/acceptance/run acquisition-admission
+  scripts/acceptance/run quarantine-copy-fault
 ```
 
 For a mutation PR, replace the quoted placeholder with the exact commit that
-was reviewed/built. Replace `acquisition-progress` with the scenario you need:
+was reviewed/built. Replace `quarantine-copy-fault` with the scenario you need:
 
 ```bash
 BOOKGUARD_ACCEPTANCE_EXPECTED_SHA="replace-with-reviewed-40-character-sha" \
-  scripts/acceptance/run acquisition-progress
+  scripts/acceptance/run quarantine-copy-fault
 ```
 
 A scenario that needs disposable host storage defaults to `<repo>/.acceptance`. On an
@@ -32,7 +30,7 @@ Unraid host you may instead keep it outside the worktree:
 ```bash
 BOOKGUARD_ACCEPTANCE_ROOT=/mnt/cache/appdata/bookguard-acceptance \
 BOOKGUARD_ACCEPTANCE_EXPECTED_SHA="replace-with-reviewed-40-character-sha" \
-  scripts/acceptance/run acquisition-progress
+  scripts/acceptance/run quarantine-copy-fault
 ```
 
 ## Safety rules
@@ -111,23 +109,3 @@ matters for a mutation release: pin the reviewed commit, use a marked disposable
 acceptance root, and run the relevant failure/restart scenarios on the target
 runtime. Live deployment provenance, hardening, and ClamAV/EICAR checks remain
 separate in [the upgrade and verification workflow](../../docs/operations.md).
-
-## Known acquisition progression
-
-The `acquisition-progress` scenario uses disposable BookGuard data and a read-only fake
-Bindery API. It checks Observe planning, empty-allowlist refusal, staged observation,
-independent verification on a second plan, unchanged staged bytes, absence of library
-publication, and an idle post-verification replay. It never calls a Bindery mutation route.
-
-The `acquisition-admission` scenario uses a separate writable disposable admission root
-and fake Bindery. It proves an empty allowlist publishes nothing, exact allowlisting
-publishes one verified ebook without overwrite or scan, and a seeded interrupted
-journal adopts exact published bytes without another publication. The Bindery scan
-remains a separate allowlisted mutation.
-It never mounts or reads the production library.
-
-The `prepublication-retirement` scenario seeds a failed admission before any publication,
-requires a separate exact allowlist to retire only its local journal, and proves that
-the refreshed acquisition plan still cannot publish with that retirement allowlist.
-It retains staged bytes and never requests a Bindery scan.
-It also checks adoption of an interrupted local retirement after Observe and restart.

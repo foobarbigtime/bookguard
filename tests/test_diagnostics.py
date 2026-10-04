@@ -1,10 +1,11 @@
 from types import SimpleNamespace
 
 import app.diagnostics as diagnostics
+from app.operator_guidance import explain_blockers
 
 
 def test_explain_blockers_returns_operator_guidance():
-    items = diagnostics.explain_blockers(
+    items = explain_blockers(
         ["binderyExternalImport", "stagingRootWritable", "unknownFutureGate"]
     )
 
@@ -16,50 +17,6 @@ def test_explain_blockers_returns_operator_guidance():
 
 
 def test_diagnostics_snapshot_is_secret_free(monkeypatch):
-    monkeypatch.setattr(
-        diagnostics,
-        "preimport_readiness",
-        lambda: {
-            "ready": False,
-            "blockers": ["binderyExternalImport"],
-            "message": "blocked",
-            "checks": {"binderyExternalImport": False},
-        },
-    )
-    monkeypatch.setattr(
-        diagnostics,
-        "acquisition_readiness",
-        lambda: {
-            "ready": False,
-            "blockers": ["actionsEnabled"],
-            "message": "blocked",
-            "checks": {"actionsEnabled": False},
-        },
-    )
-    monkeypatch.setattr(
-        diagnostics,
-        "admission_readiness",
-        lambda: {
-            "ready": True,
-            "blockers": [],
-            "message": "ready",
-            "checks": {},
-        },
-    )
-    monkeypatch.setattr(
-        diagnostics,
-        "acquisition_coordinator_status",
-        lambda: {
-            "enabled": False,
-            "running": False,
-            "state": "disabled",
-            "blockers": ["coordinatorEnabled"],
-            "lastError": None,
-            "lastRunAt": None,
-            "lastSuccessAt": None,
-            "action": None,
-        },
-    )
     monkeypatch.setattr(
         diagnostics,
         "load_automation_settings",
@@ -95,8 +52,7 @@ def test_diagnostics_snapshot_is_secret_free(monkeypatch):
     assert result["gates"]["malwareScannerConfigured"] is True
     assert result["gateCards"][0]["label"] == "Bindery actions"
     assert result["gateCards"][-1]["label"] == "Malware scanner configured"
-    assert result["sections"][0]["explanations"][0]["key"] == "binderyExternalImport"
-    assert result["sections"][2]["ready"] is True
+    assert "sections" not in result
     assert result["deployment"]["malware"]["reachable"] is True
     assert result["deployment"]["malware"]["version"] == "ClamAV test"
     assert "bindery_api_key" not in str(result).lower()

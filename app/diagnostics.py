@@ -3,23 +3,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import platform
-from typing import Any, Callable
+from typing import Any
 
-from .acquisition import acquisition_readiness
-from .acquisition_coordinator import acquisition_coordinator_status
-from .admission import admission_readiness
 from . import __version__
 from .config import ConfigurationError, load_automation_settings, settings
 from .malware_scan import probe_clamd
-from .operator_guidance import explain_blockers, humanize_key
-from .preimport import preimport_readiness
+from .operator_guidance import humanize_key
 
 
 _GATE_LABELS = {
     "actionsEnabled": "Bindery actions",
-    "automaticReacquisitionEnabled": "Automatic reacquisition",
-    "coordinatorEnabled": "Supervised coordinator",
-    "admissionEnabled": "Direct admission",
     "ebookActionsEnabled": "Ebook file actions",
     "malwareScanningEnabled": "Malware scanning",
     "malwareScannerConfigured": "Malware scanner configured",
@@ -169,29 +162,12 @@ def _deployment_report(automation: Any | None) -> dict[str, Any]:
         _path_status("quarantine", "Quarantine", settings.quarantine_root, expected_writable=True),
     ]
     if automation is not None:
-        mounts.append(
-            _path_status(
-                "staging",
-                "Pre-import staging",
-                automation.staging_root,
-                expected_writable=True,
-            )
-        )
         if automation.ebook_actions_enabled or os.path.exists(automation.ebook_action_root):
             mounts.append(
                 _path_status(
                     "ebookActions",
                     "Writable ebook action alias",
                     automation.ebook_action_root,
-                    expected_writable=True,
-                )
-            )
-        if automation.admission_enabled or os.path.exists(automation.admission_root):
-            mounts.append(
-                _path_status(
-                    "admission",
-                    "Writable admission alias",
-                    automation.admission_root,
                     expected_writable=True,
                 )
             )
@@ -209,72 +185,8 @@ def _deployment_report(automation: Any | None) -> dict[str, Any]:
     }
 
 
-def _readiness_section(
-    key: str,
-    label: str,
-    loader: Callable[[], dict[str, Any]],
-) -> dict[str, Any]:
-    try:
-        raw = loader()
-    except Exception as exc:
-        return {
-            "key": key,
-            "label": label,
-            "ready": False,
-            "state": "error",
-            "message": str(exc)[:1000],
-            "blockers": [],
-            "explanations": [],
-            "details": {},
-        }
-
-    blockers = [str(item) for item in raw.get("blockers") or []]
-    return {
-        "key": key,
-        "label": label,
-        "ready": bool(raw.get("ready")),
-        "state": "ready" if raw.get("ready") else "blocked",
-        "message": str(raw.get("message") or ""),
-        "blockers": blockers,
-        "explanations": explain_blockers(blockers),
-        "details": {
-            name: value
-            for name, value in raw.items()
-            if name not in {"checks", "blockers", "message", "ready"}
-        },
-    }
-
-
 def diagnostics_snapshot() -> dict[str, Any]:
     """Build a read-only, secret-free explanation of current safety gates."""
-    sections = [
-        _readiness_section("preimport", "Pre-import staging", preimport_readiness),
-        _readiness_section("acquisition", "Controlled acquisition", acquisition_readiness),
-        _readiness_section("admission", "Direct admission", admission_readiness),
-    ]
-
-    coordinator = acquisition_coordinator_status()
-    coordinator_blockers = [str(item) for item in coordinator.get("blockers") or []]
-    coordinator_state = str(coordinator.get("state") or "unknown")
-    sections.append(
-        {
-            "key": "coordinator",
-            "label": "Supervised coordinator",
-            "ready": not coordinator_blockers and coordinator_state not in {"error", "blocked"},
-            "state": coordinator_state,
-            "message": str(coordinator.get("lastError") or ""),
-            "blockers": coordinator_blockers,
-            "explanations": explain_blockers(coordinator_blockers),
-            "details": {
-                "enabled": bool(coordinator.get("enabled")),
-                "running": bool(coordinator.get("running")),
-                "action": coordinator.get("action"),
-                "lastRunAt": coordinator.get("lastRunAt"),
-                "lastSuccessAt": coordinator.get("lastSuccessAt"),
-            },
-        }
-    )
-
     automation = None
     automation_mode = "invalid"
     try:
@@ -283,9 +195,6 @@ def diagnostics_snapshot() -> dict[str, Any]:
         deployment_error = None
         gates = {
             "actionsEnabled": bool(settings.allow_actions),
-            "automaticReacquisitionEnabled": bool(automation.automatic_reacquisition),
-            "coordinatorEnabled": bool(automation.acquisition_coordinator_enabled),
-            "admissionEnabled": bool(automation.admission_enabled),
             "ebookActionsEnabled": bool(automation.ebook_actions_enabled),
             "malwareScanningEnabled": bool(settings.verification_malware_scan),
             "malwareScannerConfigured": bool(settings.verification_clamd_host),
@@ -304,7 +213,6 @@ def diagnostics_snapshot() -> dict[str, Any]:
         "automationMode": automation_mode,
         "gates": gates,
         "gateCards": _gate_cards(gates),
-        "sections": sections,
         "deployment": _deployment_report(automation),
         "secretsIncluded": False,
     }

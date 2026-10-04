@@ -73,13 +73,13 @@ required topology and explicit recovery behavior.
 ## Safety model
 
 BookGuard requires authentication, checks request origins, and uses separate
-permissions for Bindery actions, metadata repair, ebook actions, and admission.
+permissions for Bindery actions, metadata repair, and ebook actions.
 A preview or cached verdict does not authorize a later write: guarded actions
 recheck the current evidence and their own preconditions.
 
 Quarantine removes a file from the library into quarantine; Detach removes its
 Bindery association while leaving the file in place. Eligible quarantines have
-**Put back** in Activity. Publication refuses to overwrite an existing file,
+**Put back** in Activity. Put back refuses to overwrite an existing file,
 and uncertain interrupted operations remain visible for review. See
 [safety and permissions](docs/safety.md) and
 [advanced workflows](docs/advanced-workflows.md) for the exact limits.
@@ -93,7 +93,7 @@ and uncertain interrupted operations remain visible for review. See
 | [Configuration](docs/configuration.md) | Persisted settings, deployment settings, and optional ClamAV |
 | [Operations](docs/operations.md) | Upgrades, database backups, smoke tests, and deployment verification |
 | [Safety and permissions](docs/safety.md) | Action gates, writable aliases, identity rules, and repair limits |
-| [Advanced workflows](docs/advanced-workflows.md) | Import checks, scheduling, conflicts, staging, and supervised recovery |
+| [Advanced workflows](docs/advanced-workflows.md) | Import checks, scheduling, Observe mode, Replace, and shared-file conflicts |
 | [Architecture](docs/architecture.md) | Data flow, module responsibilities, journals, and change entry points |
 | [Development](docs/development.md) | Local setup, tests, lint, and contribution checks |
 | [Acceptance harness](scripts/acceptance/README.md) | Disposable Docker, restart, and failure scenarios |

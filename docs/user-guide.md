@@ -78,9 +78,9 @@ replacement workflow. The action appears only when that record is eligible.
   extras using Bindery's exclude operation. Entries with files remain unchanged;
   split ebook/audiobook entries and multiple copies are listed for your review.
   Hourly fixing is off by default and is controlled in Settings → Schedule.
-- **Triage** retains the detailed shared-file and supervised acquisition panels.
-  Use the [advanced workflow reference](advanced-workflows.md) for their gates,
-  recovery behavior, and deployment overlays.
+- **Triage** retains the detailed shared-file panel. Use the
+  [advanced workflow reference](advanced-workflows.md) for its gates and
+  recovery behavior.
 
 ## Supported checks and capabilities
 

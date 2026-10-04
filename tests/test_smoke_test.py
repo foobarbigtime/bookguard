@@ -13,7 +13,6 @@ def _compose_payload(
         {"source": "/host/audio", "target": "/audiobooks", "read_only": True},
         {"source": "/host/books", "target": "/books", "read_only": True},
         {"source": "/host/quarantine", "target": "/quarantine", "read_only": False},
-        {"source": "/host/staging", "target": "/staging", "read_only": False},
     ]
     if include_admission:
         volumes.append({
@@ -58,20 +57,15 @@ def test_action_profile_keeps_books_read_only_and_maps_writable_alias():
     assert checks["writableAdmissionAliasAbsent"] is True
 
 
-def test_admission_profile_keeps_books_read_only_and_maps_writable_alias():
-    checks = validate_compose(_compose_payload(True), "admission")
-
-    assert checks["booksMountedReadOnly"] is True
-    assert checks["writableAdmissionAliasWritable"] is True
-    assert checks["admissionAliasMapsLibrary"] is True
-    assert checks["writableActionAliasAbsent"] is True
+def test_removed_admission_profiles_are_rejected():
+    for profile in ("admission", "full"):
+        with pytest.raises(SmokeTestFailure):
+            validate_compose(_compose_payload(False), profile)
 
 
-def test_full_profile_maps_distinct_action_and_admission_aliases():
-    checks = validate_compose(_compose_payload(True, True), "full")
-
-    assert checks["actionAliasMapsLibrary"] is True
-    assert checks["admissionAliasMapsLibrary"] is True
+def test_admission_alias_is_flagged_in_every_profile():
+    with pytest.raises(SmokeTestFailure, match="writableAdmissionAliasAbsent"):
+        validate_compose(_compose_payload(True), "base")
 
 
 def test_compose_profile_requires_no_new_privileges():

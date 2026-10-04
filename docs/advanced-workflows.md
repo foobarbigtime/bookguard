@@ -1,8 +1,8 @@
 # Advanced workflows
 
 Start with the [everyday user guide](user-guide.md). This reference describes
-misfiled ebooks, import checks, scheduling, shared-file conflicts, and the
-separately gated staging and recovery workflows.
+misfiled ebooks, import checks, scheduling, Observe mode, and shared-file
+conflicts.
 
 ## Contents
 
@@ -10,11 +10,7 @@ separately gated staging and recovery workflows.
 - [Check new imports](#checking-new-imports)
 - [Schedule a library scan](#scheduled-scan)
 - [Observe mode](#observe-mode-v06-foundation)
-- [Automatic reacquisition](#automatic-reacquisition)
-- [Supervised Automatic mode](#supervised-automatic-mode-e4)
-- [Controlled ebook admission](#controlled-ebook-admission)
 - [Shared-file registration conflicts](#shared-file-registration-conflicts)
-- [Automatic maintenance API](#automatic-maintenance-api)
 
 ## Moving a misfiled ebook to the right book
 
@@ -115,23 +111,17 @@ deployment-only and fail-closed:
 BOOKGUARD_AUTOMATION_MODE=manual
 ```
 
-Supported values are `manual`, `observe`, and `automatic`; any other value is a
-configuration error. `manual` preserves the explicitly confirmed workflow.
+Supported values are `manual` and `observe` (`automatic` is still accepted but
+now behaves like `manual`); any other value is a configuration error. `manual` preserves the explicitly confirmed workflow.
 `observe` records durable decisions about recovery work using existing
 BookGuard database state, but does not invoke Bindery mutation, queue mutation,
 staging cleanup, quarantine, metadata writes, or library publication.
-
-While `observe` is active, the supervised acquisition coordinator is disabled
-even if its older mutation gates are enabled. Legacy mutation endpoints under
-`/api/automatic` return a conflict instead of running; the explicit observe
-cycle only writes BookGuard's decision journal. Read-only inspection and
-verification endpoints remain available.
 
 Observe decisions are idempotently journaled in `automation_observations`,
 appear in unified History, and the latest decision for a subject appears in
 Attention when the decision is `attention`. Missing durable ebook verification
 is recorded as `would_verify_result` rather than Attention because verification
-is a read-only prerequisite that a future Automatic Mode can perform safely.
+is a read-only prerequisite.
 Observe Mode itself still does not open the library file. A later safe/terminal
 state records a resolving `no_action` decision so stale Observe Mode attention
 does not remain active.
@@ -143,9 +133,8 @@ POST /api/automatic/observe/run
 
 The run endpoint requires the exact confirmation token
 `RUN_OBSERVE_MODE`. Running it may write only BookGuard's own durable decision
-journal; the source scan, verification, acquisition, admission, repair, cleanup,
-Bindery, queue, staging, quarantine, and library state are not changed by the
-Observe decision engine.
+journal; the source scan, verification, repair, cleanup, Bindery, queue,
+quarantine, and library state are not changed by the Observe decision engine.
 
 ### Unified media evidence (v0.6 E2)
 
@@ -179,170 +168,13 @@ safe metadata repairs are also represented as proposed future automatic work,
 while true insufficient evidence remains Attention. These E2 decisions still
 perform no library or Bindery mutation.
 
-## Automatic reacquisition
+## Replacing a bad file
 
-```env
-BOOKGUARD_AUTOMATION_MODE=manual
-BOOKGUARD_STAGING_ROOT=/staging
-BOOKGUARD_BINDERY_DROP_FOLDER=/data/bookguard-staging
-BOOKGUARD_AUTOMATIC_REACQUISITION=false
-BOOKGUARD_ACQUISITION_COORDINATOR_ENABLED=false
-BOOKGUARD_ACQUISITION_COORDINATOR_INTERVAL_SECONDS=10
-BOOKGUARD_MAX_STAGED_EBOOK_BYTES=536870912
-```
-
-The manual acquisition workflow fails closed unless every readiness check
-passes. It is operator-driven: it can start one freshly revalidated release,
-observe its Bindery queue record, and verify exactly one ebook arriving in an
-initially empty staging folder. Its coordinator does not choose candidates,
-retry a failed grab, or admit a verified ebook. E4 has separately gated
-recovery steps described below.
-
-The optional supervised coordinator removes the need to press Reconcile
-repeatedly. It discovers the single durable active acquisition after startup,
-polls Bindery, observes stable staging bytes, and advances verification. It
-stops at `verified` with `explicitAdmissionRequired`; it never calls the
-admission operation. After an operator explicitly admits those verified bytes,
-the coordinator can resume registration reconciliation and finalization. It
-removes only the exact terminal Bindery queue record and verified staging copy,
-with download-client and downloaded-data deletion disabled.
-
-The coordinator starts only when its own opt-in, automatic reacquisition, and
-guarded actions are enabled. Turning off either mutation gate makes it remain
-blocked without changing durable acquisition state. Its read-only status is
-available from `GET /api/automatic/acquisition-coordinator`. The polling
-interval is clamped between 2 and 300 seconds.
-
-The Triage page exposes this workflow without changing its safety policy. A
-`WRONG_CONTENT` verification gains a Replacement workflow button. The browser
-can run the read-only preflight, explicitly prepare the exact bad file, display
-safe and rejected search candidates, start one selected release, and show the
-durable acquisition state. It pauses for an explicit Admit verified ebook
-decision. When the coordinator is disabled, equivalent manual progress,
-registration, and finalization controls remain available. The UI never enables
-environment or action gates on the operator's behalf. A prepared MISMATCH ebook
-whose source is now absent retains a Resume replacement entry after refresh;
-the backend still revalidates the missing path and Bindery association before
-allowing a release to start.
-
-Starting an acquisition additionally requires Bindery auto-grab to be disabled,
-a complete and idle Bindery queue, an empty and completely inventoried staging
-folder, no other unfinished acquisition, and `BOOKGUARD_ALLOW_ACTIONS=true`. The
-selected release must still appear exactly once in a fresh search, explicitly be
-an ebook, pass BookGuard's independent title/author gate, and not have an exact
-grabbed-and-imported match in Bindery history. BookGuard records the session
-before asking Bindery to grab it.
-
-Reconciliation never moves or deletes staged files. It accepts a staged result
-only after Bindery reaches a completed external-handoff state, the folder
-contains exactly one supported ebook, and its bytes verify at the admission
-threshold. Any ambiguity becomes durable `review_required` state. A third,
-separately confirmed request hands that verified session to the existing
-admission transaction, which checks the hash and repeats full verification
-before publication.
-
-An operator can explicitly retry staged verification from `review_required`
-after verifier rules are updated. The coordinator does not retry that state on
-its own, and the staged file remains untouched unless it later passes the same
-admission threshold.
-
-## Supervised Automatic Mode (E4)
-
-`BOOKGUARD_AUTOMATION_MODE=automatic` enables the E4 recovery executor, which
-advances one durable work item per confirmed `POST /api/automatic/run` request
-(`{"confirm":"RUN_AUTOMATIC_CYCLE"}`). It attempts at most one external
-mutation per cycle. The default mode is `manual`, and the default
-`BOOKGUARD_AUTOMATIC_ACTION_ALLOWLIST` is empty. An action runs only when its
-code is allowlisted, a live executor is registered, and its fresh identity,
-byte, destination, and operation-specific gates pass. A supported action code
-alone does not mean that a live executor exists. Inspect
-`GET /api/automatic/execution-policy` for the mode, allowlist, and registered
-executors; `GET /api/automatic/executions` shows the durable execution journal.
-
-E4 can retry a bounded failed acquisition grab, advance a known Bindery queue
-item to verified staging, and admit separately allowlisted verified bytes. It
-also has guarded publication, scan, registration, and quarantine recovery steps.
-Candidate selection requires an explicit operator choice; the executor does not
-choose a new release on its own. Publication uses no-replace and exact-byte
-checks, and uncertain interrupted external effects are held for reconciliation
-instead of being blindly retried. Existing action gates, including
-`BOOKGUARD_ALLOW_ACTIONS`, `BOOKGUARD_AUTOMATIC_REACQUISITION`, and
-`BOOKGUARD_ADMISSION_ENABLED` where applicable, remain separate prerequisites.
-Set the mode back to `manual` or clear the allowlist to stop new E4 executions;
-the journal remains available for review.
-
-## Controlled ebook admission
-
-Direct admission uses a separate writable alias while the ordinary `/books`
-mount remains read-only:
-
-```env
-BOOKGUARD_ADMISSION_ENABLED=false
-BOOKGUARD_ADMISSION_ROOT=/admission-books
-BOOKGUARD_ADMISSION_BINDERY_ROOT=/data/media/books
-```
-
-Start the opt-in topology only when deliberately testing admission:
-
-```bash
-bash scripts/build-with-provenance.sh
-docker compose -f compose.yaml -f compose.admission.yaml up -d --no-build
-```
-
-For the complete supervised replacement workflow, include both narrow aliases;
-`/books` remains read-only throughout:
-
-```bash
-bash scripts/build-with-provenance.sh
-docker compose \
-  -f compose.yaml \
-  -f compose.actions.yaml \
-  -f compose.admission.yaml \
-  up -d --no-build
-```
-
-An admission is tied to a prior scan result so BookGuard can reuse the exact
-former library path instead of reproducing Bindery's configurable naming
-engine. BookGuard refuses missing/symlinked destination directories, format
-changes, existing destinations, inconsistent root mappings, changed Bindery
-book identity, or an already-registered ebook.
-
-At the mutation boundary BookGuard opens the staged file without following
-symlinks, copies it to a private file on the destination filesystem, verifies
-the copied bytes again at 99% confidence, flushes them, and atomically publishes
-without overwrite. BookGuard prefers Linux `renameat2(RENAME_NOREPLACE)` and,
-on filesystems such as Unraid `shfs`, falls back to atomically linking the private
-verified snapshot into place before immediately removing its private name. The
-library file is never hardlinked to staging and remains independent from it.
-Admission state is recorded in `/config/bookguard.db` before copying, including
-the successful publication method. If publication succeeds but a later
-durability step reports an error, the record remains recoverable rather than
-being mislabeled as an ordinary failed copy. After publication, BookGuard asks
-Bindery to scan its library and retains the staged source even after registration
-is confirmed. A separate `FINALIZE_EBOOK_ACQUISITION` request can then verify the
-registered library copy and staged hash, remove only the terminal Bindery queue
-record with download-client and file deletion explicitly disabled, and remove
-only that acquisition's verified staging copy. The library file and durable
-admission/acquisition audit records are retained. Interrupted finalization stays
-blocked as `cleanup_required` unless the exact safe cleanup state can be proven.
-An explicitly finalized historical record may also adopt cleanup that an
-operator already completed, but only after proving the registered library hash,
-complete queue response, absent exact queue record, and safely absent staged
-path; that recovery changes the audit status only.
-
-Before requesting any follow-up library scan, reconciliation checks Bindery's
-read-only database for the exact admitted path. If a different book owns that
-path, the admission enters durable `registration_conflict` state, the
-coordinator stops polling it, and no additional scan is requested. Triage shows
-the conflicting state and offers either a recheck after an external correction
-or a separately confirmed guarded correction. The guarded correction repeats
-the library and staging hashes, intended-book identity, exact wrong owner,
-complete queue, disabled auto-grab, and Bindery no-move preview checks. It removes
-only the linked queue record with client and file deletion disabled, temporarily
-uses Bindery's manual reassignment operation, and restores external import mode.
-Library and staged bytes are never moved or deleted. An interruption remains in
-durable `registration_correcting` state; the coordinator pauses and only another
-explicit operator request may resume it.
+BookGuard no longer downloads, stages or publishes replacement files itself.
+**Replace** quarantines the bad file (Put back can undo it), blocklists the
+release it came from in Bindery, keeps the book monitored and runs Bindery's
+Automatic search. Bindery picks, downloads and imports a new copy with your own
+Bindery settings, and BookGuard checks it like any other import.
 
 ## Shared-file registration conflicts
 
@@ -365,7 +197,7 @@ it does not reassign, delete, move, or rewrite media, request a scan, or start a
 download. Both filenames remain in place. A full proof is persisted before the
 request, then BookGuard verifies the retained ebook, both books' remaining file
 registrations, audiobook paths, hard-link identity, and SHA-256 after the request.
-No writable library alias, admission gate, or automatic-reacquisition gate is
+No writable library alias is
 required for this database-only operation; the existing Bindery action gate
 still applies and stays off by default.
 
@@ -381,8 +213,7 @@ staging name is unregistered everywhere and still shares the exact recorded
 inode and SHA-256 with the protected final EPUB. **Remove unregistered staging
 link** is a separate explicit action. It requires the existing Bindery action
 gate, `BOOKGUARD_EBOOK_ACTIONS_ENABLED=true`, and the opt-in
-`compose.actions.yaml` writable alias; `/books` remains read-only. No admission
-or automatic-reacquisition gate is needed.
+`compose.actions.yaml` writable alias; `/books` remains read-only.
 
 Cleanup unlinks only the exact proven staging name through the writable alias,
 using directory handles with symlink following disabled. It does not change
@@ -395,41 +226,3 @@ repeating unlink or recreating a link; unchanged work is cancelled and a proven
 completed unlink is adopted. Uncertain or changed state remains blocked for
 review. Remove the unused staging name before initiating another library scan
 so it cannot be imported again against a wrong identity.
-
-## Automatic maintenance API
-
-Automatic-maintenance endpoints (status and inventory `GET` requests are read-only):
-
-```text
-GET  /api/automatic/staging/files
-POST /api/automatic/books/{book_id}/staged-verification
-GET  /api/automatic/admission-readiness
-GET  /api/automatic/admissions
-POST /api/automatic/results/{result_id}/admit-staged-ebook
-POST /api/automatic/admissions/{admission_id}/reconcile
-POST /api/automatic/admissions/{admission_id}/correct-registration
-GET  /api/automatic/acquisition-readiness
-GET  /api/automatic/acquisitions
-GET  /api/automatic/acquisition-coordinator
-POST /api/automatic/results/{result_id}/acquisitions
-POST /api/automatic/acquisitions/{acquisition_id}/reconcile
-POST /api/automatic/acquisitions/{acquisition_id}/admit
-POST /api/automatic/acquisitions/{acquisition_id}/finalize
-```
-
-The verification request uses a path relative to `/staging`:
-
-```json
-{"relativePath":"Bel Canto - Ann Patchett.epub"}
-```
-
-Absolute paths, traversal outside the staging root, symlinked files, empty files, unsupported formats, and files over the configured size limit are rejected.
-
-Acquisition finalization is a separate, explicitly confirmed operation. It is
-available only after the linked admission is registered at the exact Bindery
-path and the staged SHA-256 still matches. It removes the terminal Bindery
-queue record with download-client and downloaded-data deletion disabled, then
-removes only the verified staging copy. Library bytes and durable audit records
-are retained.
-
-See the [safety model](safety.md) before enabling a writable alias.

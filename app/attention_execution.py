@@ -57,15 +57,11 @@ def stale_execution_items(limit: int = 200, *, now: datetime | None = None) -> l
             "guidance": {
                 "label": "Execution outcome needs review",
                 "why": "The durable running receipt has not been reconciled for at least 15 minutes.",
-                "nextStep": "Inspect the plan and execution journal before resuming automatic work. Do not manually repeat the action.",
+                "nextStep": "Automatic Mode was removed, so nothing will resume this. Inspect the plan audit, then check the book in Bindery. Do not repeat the action by hand.",
                 "recordedError": "",
             },
             "updatedAt": row["updated_at"],
             "detailHref": f"/activity/recovery-plan/{row['plan_id']}" if row["subject_kind"] else "",
-            "href": (
-                "/review/triage#acquisitionPanel"
-                if row["subject_kind"] in {"acquisition", "admission"}
-                else "/review"
-            ),
+            "href": "/review",
         })
     return items

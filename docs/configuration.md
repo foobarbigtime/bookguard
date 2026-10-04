@@ -2,10 +2,10 @@
 
 Most operator settings can be changed at `/settings` and are persisted in
 `/config/bookguard.db`. Authentication, the scanner endpoint, automation mode,
-allowlisting, and action/admission aliases also have deployment-only settings.
+and the ebook action alias also have deployment-only settings.
 Use [`.env.example`](../.env.example) and [Compose](../compose.yaml) for the
 deployment defaults, and the [workflow reference](advanced-workflows.md) for
-automation and admission configuration.
+Observe mode.
 
 Persisted settings are loaded at startup over ordinary environment defaults.
 Changing an environment default does not override an already saved UI setting;
@@ -64,10 +64,10 @@ The acceptance test creates temporary clean and EICAR antivirus-test files
 inside the BookGuard container, proves the clean control is accepted, proves
 ClamAV detects EICAR, and proves BookGuard converts that detection into a
 fail-closed security result. The temporary files are deleted automatically and
-no test file is written to the ebook library, staging, or quarantine paths.
+no test file is written to the ebook library or quarantine paths.
 
 A deterministic failure produces an `UNSAFE_FILE` verdict before content identity is evaluated.
-Unsafe files cannot pass staged verification or controlled admission. Plain-text and legacy formats
+Unsafe files are never treated as the right book. Plain-text and legacy formats
 without a reliable fixed signature are reported as not applicable instead of being guessed.
 An EPUB whose valid `mimetype` entry is merely compressed, not first, or padded with a UTF-8
 BOM or ASCII whitespace receives a visible conformance warning rather than an unsafe verdict;

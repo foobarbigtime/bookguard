@@ -84,7 +84,6 @@ def validate_runtime(payload: Any) -> dict[str, Any]:
         "tmpfsNoDev": "nodev" in tmp_options.split(","),
         "tmpfsSizeBounded": "size=" in tmp_options,
         "configMountedWritable": mounted_rw("/config"),
-        "stagingMountedWritable": mounted_rw("/staging"),
         "quarantineMountedWritable": mounted_rw("/quarantine"),
         "binderyMountedReadOnly": mounted_ro("/bindery"),
         "ebooksMountedReadOnly": mounted_ro("/books"),
