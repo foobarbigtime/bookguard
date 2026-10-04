@@ -300,3 +300,51 @@ def test_home_reports_unavailable_review_without_claiming_empty(library, monkeyp
         assert "Review data is unavailable" in page
         assert "Nothing needs you right now" not in page
         assert "nothing is waiting for you" not in page
+
+
+def test_recent_tiles_count_imports_quarantines_and_hidden_duplicates(library):
+    from app.db import utc_now
+    from app.import_watch import init_import_watch_db
+
+    init_import_watch_db()
+    with local_conn() as conn:
+        conn.executemany(
+            """INSERT INTO import_checks(file_id, book_id, format, title, author, stored_path, trigger, checked_at)
+               VALUES (?, 1, 'ebook', 'T', 'A', '/p', 'webhook', ?)""",
+            [(1, utc_now()), (2, utc_now()), (3, "2020-01-01T00:00:00+00:00")],
+        )
+        conn.commit()
+    row = result_by_id(library["Reviewed already"])
+    finish_cleanup_action(create_cleanup_action(row, "TRIAGE_QUARANTINE"), "applied")
+    finish_cleanup_action(create_cleanup_action(row, "HIDE_DUPLICATE"), "applied")
+    finish_cleanup_action(create_cleanup_action(row, "HIDE_DUPLICATE"), "failed")
+
+    totals = home._recent()["totals"]
+
+    assert totals == {"imports": 2, "quarantined": 1, "duplicates": 1}
+
+
+def test_home_has_no_tiles_for_removed_features():
+    from pathlib import Path
+
+    page = Path("templates/home.html").read_text(encoding="utf-8")
+    assert "automatic steps blocked" not in page
+    assert "books added to the library" not in page
+
+
+def test_recent_duplicate_count_is_not_cut_off_by_a_busy_week(library):
+    row = result_by_id(library["Reviewed already"])
+    finish_cleanup_action(create_cleanup_action(row, "HIDE_DUPLICATE"), "applied")
+    for _ in range(510):  # newer records than the 500-item activity feed holds
+        finish_cleanup_action(create_cleanup_action(row, "TRIAGE_DETACH"), "applied")
+
+    assert home._recent()["totals"]["duplicates"] == 1
+
+
+def test_recent_fallback_has_the_same_tiles(library, monkeypatch):
+    def broken():
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(home, "_recent", broken)
+
+    assert set(home.home_summary()["recent"]["totals"]) == {"imports", "quarantined", "duplicates"}
