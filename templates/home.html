@@ -42,6 +42,7 @@
   {% endif %}
 
   <section class="library-strip" aria-label="Library check">
+    {% if library.available %}
     <span><b>Library check</b> · {{ library.checked }} {{ 'book' if library.checked == 1 else 'books' }} under review · {{ library.passed }} passed the scan</span>
     {% set total = library.checked or 1 %}
     <div class="strip-bar" aria-hidden="true">
@@ -55,6 +56,9 @@
     <a href="/review?group=unsafe"><b class="tone-red">{{ library.damaged }}</b> damaged</a>
     <a href="/review?group=metadata"><b class="tone-blue">{{ library.details }}</b> wrong details</a>
     <a href="/review?group=undecided"><b>{{ library.undecided }}</b> undecided</a>
+    {% else %}
+    <span>Review data is unavailable. Check the problem above, then refresh.</span>
+    {% endif %}
   </section>
 
   <div class="home-grid">
@@ -105,7 +109,8 @@
             </div>
           </article>
         {% else %}
-          <p class="all-clear">Nothing needs you right now.</p>
+          {% if library.available %}<p class="all-clear">Nothing needs you right now.</p>
+          {% else %}<p class="muted">BookGuard could not load the books waiting for review.</p>{% endif %}
         {% endfor %}
       </section>
 

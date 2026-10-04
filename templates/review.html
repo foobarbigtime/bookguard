@@ -10,8 +10,6 @@
 {% from "_layout.html" import site_header %}
 {{ site_header("review", "books", version) }}
 {% set selected = group.split(',') if group else [] %}
-{% set shown = items|selectattr('group', 'in', selected)|list if selected else items %}
-{% if language_filter %}{% set shown = shown|selectattr('language.nonEnglish')|list %}{% endif %}
 
 <main class="review-page">
   <div class="review-head">
@@ -37,6 +35,13 @@
 
   <div class="review-layout">
     <section class="card review-list" aria-label="Books">
+      {% if pagination.total %}
+      <nav class="row-between" aria-label="Review pages">
+        {% if pagination.previous %}<a href="{{ pagination.previous }}" rel="prev">← Previous</a>{% endif %}
+        <span class="muted">{{ pagination.start }}–{{ pagination.end }} of {{ pagination.total }} · Page {{ pagination.page }} of {{ pagination.pages }}</span>
+        {% if pagination.next %}<a href="{{ pagination.next }}" rel="next">Next →</a>{% endif %}
+      </nav>
+      {% endif %}
       {% for item in shown %}
         <button type="button" class="review-row" data-review-id="{{ item.id }}" aria-controls="reviewDetail">
           <span class="dot tone-bg-{{ tones[item.group] }}" aria-hidden="true"></span>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 
 import pytest
@@ -17,6 +18,8 @@ from app.routes.pages import router as pages_router
 from app.routes.system import router as system_router
 from app.triage import init_triage_db, save_keep_decision
 from app.db import result_by_id
+from app.db import create_cleanup_action, finish_cleanup_action, latest_review_results
+from app.triage import triage_state, triage_states
 from app.verifier import init_verification_db
 
 SCAN = "home-scan"
@@ -192,3 +195,107 @@ def test_review_shows_the_declared_language_and_filters_books_not_in_english(lib
         filtered = client.get("/review?language=other").text
         assert 'data-review-id="%d"' % library["Kill"] in filtered
         assert 'data-review-id="%d"' % library["Mary, Mary"] not in filtered
+
+
+def seed_many_results(count):
+    with local_conn() as conn:
+        conn.executemany(
+            """INSERT INTO scan_results(scan_id, file_id, book_id, author, title, format,
+                   stored_path, local_path, classification, risk_score, reason_code,
+                   reasons_json, metadata_json, scanned_at)
+               VALUES (?, ?, ?, 'Author', ?, 'ebook', ?, ?, 'REVIEW', 1, 'MISMATCH',
+                       '[]', '{}', '2026-10-01T10:00:00+00:00')""",
+            [(SCAN, 1000 + i, 1000 + i, f"Extra {i:05}", f"/books/{i}.epub", f"/books/{i}.epub")
+             for i in range(count)],
+        )
+        conn.commit()
+
+
+def test_batched_states_match_existing_resolution_rules(library):
+    row = result_by_id(library["Mary, Mary"])
+    save_keep_decision(row)
+    cleanup = create_cleanup_action(row, "TRIAGE_DETACH")
+    finish_cleanup_action(cleanup, "applied")
+    later = create_cleanup_action(row, "TRIAGE_QUARANTINE")
+    finish_cleanup_action(later, "applied")
+    failed = create_cleanup_action(row, "TRIAGE_DETACH")
+    finish_cleanup_action(failed, "failed")
+    rows = latest_review_results()
+    assert triage_states(rows) == {r["id"]: triage_state(r) for r in rows}
+    assert triage_states(rows)[row["id"]]["cleanup_id"] == later
+    # A keep decision follows the content signature, even if another result has that signature.
+    kept = result_by_id(library["Reviewed already"])
+    twin = {**kept, "id": 999999}
+    assert all(s["resolved"] for s in triage_states([kept, twin]).values())
+
+
+def test_review_reads_scale_by_batch_and_do_not_write_schema(library, monkeypatch):
+    seed_many_results(1001)
+    connect = sqlite3.connect
+    connections, statements = [], []
+
+    def counted_connect(*args, **kwargs):
+        conn = connect(*args, **kwargs)
+        connections.append(conn)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", counted_connect)
+    assert len(open_review_items()) == 1010
+    assert len(connections) == 3
+    assert len(statements) < 20
+    assert not any(sql.lstrip().upper().startswith(("CREATE", "INSERT", "UPDATE", "DELETE"))
+                   for sql in statements)
+
+
+def test_review_does_not_hide_results_above_old_cap(library):
+    seed_many_results(10001)
+    assert len(open_review_items()) == 10010
+
+
+def test_review_pages_keep_totals_filters_and_book_links(library):
+    seed_many_results(205)
+    app = FastAPI()
+    app.include_router(pages_router)
+    with TestClient(app) as client:
+        first = client.get("/review").text
+        assert len(re.findall(r'data-review-id="\d+"', first)) == 100
+        assert "1–100 of 214" in first
+        assert "All <b>214</b>" in first
+        second = client.get("/review?page=2").text
+        assert "101–200 of 214" in second
+        last = client.get("/review?page=999").text
+        ids = re.findall(r'data-review-id="(\d+)"', last)
+        assert len(ids) == 14
+        linked = client.get(f"/review?book={ids[-1]}").text
+        assert f'data-review-id="{ids[-1]}"' in linked
+        assert "Page 3 of 3" in linked
+        filtered = client.get("/review?group=undecided&page=2").text
+        assert "group=undecided" in filtered
+        assert 'data-review-id="%d"' % library["Young Blood"] not in filtered
+        assert "1–100" in client.get("/review?page=-1").text
+        empty = client.get("/review?group=unsafe&language=other").text
+        assert "Nothing matches this filter" in empty
+        assert 'data-review-id="' not in empty
+        english_filter = client.get("/review?group=move&language=other").text
+        assert 'data-review-id="%d"' % library["Kill"] in english_filter
+        # Only this page's detailed records are embedded in the response.
+        payload = json.loads(re.search(r'<script id="reviewData"[^>]*>(.*?)</script>', second, re.S)[1])
+        assert len(payload["items"]) == 100
+
+
+def test_home_reports_unavailable_review_without_claiming_empty(library, monkeypatch):
+    def broken():
+        raise RuntimeError("review read failed")
+
+    monkeypatch.setattr(home, "open_review_items", broken)
+    summary = home.home_summary()
+    assert summary["library"]["available"] is False
+    assert summary["health"]["level"] == "error"
+    assert any("review read failed" in p["text"] for p in summary["health"]["problems"])
+    app = FastAPI()
+    app.include_router(pages_router)
+    with TestClient(app) as client:
+        page = client.get("/").text
+        assert "Review data is unavailable" in page
+        assert "Nothing needs you right now" not in page

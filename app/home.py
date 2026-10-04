@@ -329,12 +329,13 @@ def _safely(load, fallback, failures: list[str], what: str):
 
 def home_summary() -> dict[str, Any]:
     scan = latest_scan()
-    items = open_review_items()
+    failures: list[str] = []
+    items = _safely(open_review_items, [], failures, "the review list")
+    review_available = not failures
     counts = group_counts(items)
     unverified = sum(1 for item in items if not item["verified"])
     automation, gates, automation_error = _automation()
     malware = _malware_report()
-    failures: list[str] = []
     attention = (
         _verification_groups(items)
         + _workflow_groups(_safely(attention_snapshot, {"items": []}, failures, "the attention queue"))
@@ -354,6 +355,7 @@ def home_summary() -> dict[str, Any]:
         "health": health,
         "decisions": decisions,
         "library": {
+            "available": review_available,
             "checked": len(items),
             "passed": int(library_counts.get("PASS") or 0),
             "verified": counts["verified"],

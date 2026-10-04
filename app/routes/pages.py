@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -42,6 +43,7 @@ router = APIRouter(tags=["pages"])
 templates = Jinja2Templates(directory="templates")
 templates.env.globals["static_url"] = static_url
 ACTIVITY_PAGE_LIMIT = 500
+REVIEW_PAGE_LIMIT = 100
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -248,15 +250,45 @@ def triage_page(
 
 
 @router.get("/review", response_class=HTMLResponse)
-def review_page(request: Request, group: str = "", language: str = ""):
+def review_page(request: Request, group: str = "", language: str = "", page: int = 1, book: int = 0):
     items = open_review_items()
     known = {key for key, _, _ in GROUPS}
     selected = [key for key in group.split(",") if key in known]
+    filtered = [
+        item for item in items
+        if (not selected or item["group"] in selected)
+        and (language != "other" or item["language"]["nonEnglish"])
+    ]
+    pages = max(1, (len(filtered) + REVIEW_PAGE_LIMIT - 1) // REVIEW_PAGE_LIMIT)
+    page = min(max(1, page), pages)
+    if book:
+        for index, item in enumerate(filtered):
+            if item["id"] == book:
+                page = index // REVIEW_PAGE_LIMIT + 1
+                break
+    start = (page - 1) * REVIEW_PAGE_LIMIT
+
+    def page_url(number: int) -> str:
+        params = {"page": str(number)}
+        if selected:
+            params["group"] = ",".join(selected)
+        if language == "other":
+            params["language"] = "other"
+        return "/review?" + urlencode(params)
+
     return templates.TemplateResponse(
         request=request,
         name="review.html",
         context={
             "items": items,
+            "shown": filtered[start:start + REVIEW_PAGE_LIMIT],
+            "pagination": {
+                "page": page, "pages": pages, "total": len(filtered),
+                "start": start + 1 if filtered else 0,
+                "end": min(start + REVIEW_PAGE_LIMIT, len(filtered)),
+                "previous": page_url(page - 1) if page > 1 else "",
+                "next": page_url(page + 1) if page < pages else "",
+            },
             "groups": GROUPS,
             "tones": {key: tone for key, _, tone in GROUPS},
             "counts": group_counts(items),
