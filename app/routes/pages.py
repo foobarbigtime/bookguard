@@ -18,7 +18,7 @@ from ..activity import RESULTS, WHAT, WHO, activity_events, activity_totals, fil
 from ..history import operation_detail
 from ..put_back import put_back_preview
 from ..unmatched import VERDICTS, check_status, stored_checks
-from ..duplicates import KINDS as DUPLICATE_KINDS, find_duplicates
+from ..duplicates import KINDS as DUPLICATE_KINDS, find_duplicates, fix_status
 from ..db import (
     latest_counts,
     latest_reason_counts,
@@ -88,8 +88,10 @@ def duplicates_page(request: Request):
         context={
             "groups": groups,
             "total": len(found),
-            "hideable": sum(len(g["hideable"]) for g in found),
+            "fixable": sum(len(g["hideable"]) + (1 if g["moves"] else 0) for g in found),
             "error": error,
+            "status": fix_status(),
+            "fix_duplicates": settings.fix_duplicates,
             "allow_actions": settings.allow_actions,
             "version": __version__,
         },

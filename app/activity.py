@@ -145,11 +145,18 @@ def _from_history(item: dict[str, Any]) -> dict[str, Any] | None:
             base["detail"] = followup
             return _event(**base, what="decisions", who="you", result="waiting",
                           sentence=f"You quarantined {_book(title)}; Bindery needs you to start the replacement")
-        if label == "Hide duplicate" and result == "done":
-            return _event(**base, what="decisions", who="you", result="done",
-                          sentence=f"You hid the empty extra Bindery entry {_book(title)}")
+        if label in {"Hide duplicate", "Merge duplicate"}:
+            auto = followup.startswith("Automatically")
+            who, what = ("automatic", "automation") if auto else ("you", "decisions")
+            subject = "BookGuard" if auto else "You"
+            if result == "done":
+                sentence = (f"{subject} hid the empty extra Bindery entry {_book(title)}" if label == "Hide duplicate"
+                            else f"{subject} joined {_book(title)} onto its other Bindery entry")
+            else:
+                sentence = f"{label} of {_book(title)} {RESULTS[result].lower()}"
+            return _event(**base, what=what, who=who, result=result, sentence=sentence)
         verb = {"Quarantine": "quarantined", "Detach": "detached from Bindery",
-                "Put back": "put back", "Hide duplicate": "hid the extra entry"}.get(label, "cleaned up")
+                "Put back": "put back"}.get(label, "cleaned up")
         if result == "done":
             sentence = f"You {verb} {_book(title)}" + (" (nothing was deleted)" if label == "Quarantine" else "")
         elif result == "waiting":
