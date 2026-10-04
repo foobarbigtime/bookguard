@@ -263,7 +263,9 @@ class Library:
     def __init__(self, books: list[dict]):
         self.books = {int(b["id"]): b for b in books}
         self.by_title: dict[str, list[dict]] = defaultdict(list)
+        self.exact: dict[str, list[dict]] = defaultdict(list)
         for book in books:
+            self.exact[_norm(book["title"])].append(book)
             for key in _title_keys(book["title"]):
                 self.by_title[key].append(book)
 
@@ -278,7 +280,13 @@ class Library:
         surname = _surname(author)
         if not surname:
             return None
-        return next((b for b in self.same_title(title) if _surname(b["author"]) == surname), None)
+        exact = [b for b in self.exact.get(_norm(title), []) if _surname(b["author"]) == surname]
+        if exact:
+            return exact[0]
+        # A shortened reading ("Chronicles" for "Chronicles: First") counts only when it
+        # fits exactly one of that author's books; otherwise it could attach to the wrong one.
+        loose = sorted((b for b in self.same_title(title) if _surname(b["author"]) == surname), key=lambda b: b["id"])
+        return loose[0] if len(loose) == 1 else None
 
 
 # ---- file checks -------------------------------------------------------------

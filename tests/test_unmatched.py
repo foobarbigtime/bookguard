@@ -452,3 +452,13 @@ def test_files_numbered_part_of_total_are_not_missing_tracks():
 
     assert disc_track_sequence_warnings(probes(range(1, 36))) == []
     assert disc_track_sequence_warnings(probes([1, 2, 4], total=10)) == ["Parts 3, 5, 6, 7, 8, 9, 10 of 10 are missing."]
+
+
+def test_a_shortened_title_never_picks_between_two_books_of_one_author():
+    library = _library(("Chronicles: First", "Ann Author", {}), ("Chronicles: Second", "Ann Author", {}),
+                       ("Nemesis Games", "James S. A. Corey", {}))
+
+    assert library.match("Chronicles: Second", "Ann Author")["id"] == 2  # the exact title wins
+    assert library.match("Chronicles: First", "Ann Author")["id"] == 1
+    assert library.match("Chronicles", "Ann Author") is None  # fits both: no guess
+    assert library.match("05 - Nemesis Games", "James S. A. Corey")["id"] == 3  # one fit: fine
