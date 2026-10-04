@@ -159,6 +159,16 @@ def test_safer_upgrade_shell_syntax_and_safety_contract():
     assert "compose.clamav.yaml" in script
     assert "up -d --no-build" in script
     assert "No automatic rollback was attempted" in script
+    # Old rollback tags are pruned only after acceptance, and never forced.
+    accepted = script.index('echo "Upgrade accepted."')
+    assert script.index("  prune_rollback_tags\n") > accepted
+    assert "docker image rm --force" not in script
+    assert "rmi -f" not in script
+    # Retention is parsed as decimal ("08" is not octal), the tag this upgrade
+    # made is never a candidate, and images used by containers are skipped.
+    assert "10#$rollback_keep" in script
+    assert 'grep -vxF -- "$rollback_tag"' in script
+    assert "docker ps -aq" in script
 
 
 def test_writable_ebook_alias_is_accepted_only_when_opted_in_and_same_folder():

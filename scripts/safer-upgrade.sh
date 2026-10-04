@@ -8,6 +8,7 @@ container="${BOOKGUARD_CONTAINER:-bookguard}"
 clamav_container="${BOOKGUARD_CLAMAV_CONTAINER:-bookguard-clamav}"
 backup_root="${BOOKGUARD_BACKUP_ROOT:-/mnt/cache/appdata/bookguard-backups}"
 health_wait_seconds="${BOOKGUARD_UPGRADE_HEALTH_WAIT_SECONDS:-180}"
+rollback_keep="${BOOKGUARD_ROLLBACK_KEEP:-3}"
 confirmation="DEPLOY_BOOKGUARD_UPGRADE"
 compose_files=(-f compose.yaml -f compose.clamav.yaml)
 # Ebook quarantine needs the writable library alias; keep it across upgrades
@@ -52,6 +53,9 @@ upgrade
 The helper never automatically rolls back or restores database state after a
 failed deployment. It preserves the rollback image tag and validated backup and
 prints them for explicit operator recovery.
+
+After an accepted upgrade it removes older rollback tags, keeping the newest
+BOOKGUARD_ROLLBACK_KEEP (default 3). A tag still used by a container is kept.
 EOF
 }
 
@@ -320,6 +324,58 @@ verify_current_deployment() {
   verify_deployment "$deployed_image_id" "$deployed_version" "$deployed_revision" "$deployed_image_id"
 }
 
+prune_rollback_tags() {
+  if ! [[ "$rollback_keep" =~ ^[0-9]+$ ]] || ((10#$rollback_keep < 1)); then
+    echo "Skipping rollback tag cleanup: BOOKGUARD_ROLLBACK_KEEP must be a whole number of 1 or more." >&2
+    return 0
+  fi
+  local keep=$((10#$rollback_keep))
+
+  # The tag this upgrade just made is always kept and counts towards $keep.
+  # Of the others, timestamped tags sort oldest first; keep the newest.
+  local tags tag
+  mapfile -t tags < <(
+    docker image ls --format '{{.Repository}}:{{.Tag}}' |
+      grep -E '^bookguard-bookguard:rollback-pre-upgrade-[0-9]{8}T[0-9]{6}Z$' |
+      grep -vxF -- "$rollback_tag" | sort
+  )
+  local remove_count=$((${#tags[@]} - (keep - 1)))
+  if ((remove_count <= 0)); then
+    return 0
+  fi
+
+  # Image IDs used by any container, running or stopped. Untagging an image
+  # that has another tag succeeds even while a container uses it, so check
+  # explicitly instead of relying on `docker image rm` refusing.
+  local in_use container_ids
+  mapfile -t container_ids < <(docker ps -aq)
+  in_use=""
+  if ((${#container_ids[@]} > 0)); then
+    in_use="$(docker inspect --format '{{.Image}}' "${container_ids[@]}" 2>/dev/null || true)"
+  fi
+
+  echo
+  echo "===== ROLLBACK TAG CLEANUP ====="
+  local image_id
+  for tag in "${tags[@]:0:remove_count}"; do
+    image_id="$(docker image inspect --format '{{.Id}}' "$tag" 2>/dev/null || true)"
+    if [[ -z "$image_id" ]]; then
+      echo "Kept rollback image (could not inspect it): $tag"
+      continue
+    fi
+    if grep -qxF -- "$image_id" <<<"$in_use"; then
+      echo "Kept rollback image (used by a container): $tag"
+      continue
+    fi
+    # No --force: Docker refuses anything it still considers in use.
+    if docker image rm "$tag" >/dev/null 2>&1; then
+      echo "Removed old rollback image: $tag"
+    else
+      echo "Kept rollback image (Docker refused removal): $tag"
+    fi
+  done
+}
+
 upgrade_failure_message() {
   local rc=$?
   echo >&2
@@ -393,6 +449,8 @@ run_upgrade() {
   echo "  revision:        $source_revision"
   echo "  rollback image:  $rollback_tag"
   echo "  database backup: $backup_bundle"
+
+  prune_rollback_tags
 }
 
 if [[ $# -lt 1 ]]; then

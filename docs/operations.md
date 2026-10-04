@@ -136,6 +136,12 @@ If a post-deployment check fails, the helper does **not** automatically restore
 the database or roll back the image. It preserves and prints both the rollback
 image tag and validated backup so recovery remains an explicit operator action.
 
+After an accepted upgrade, the helper removes older
+`bookguard-bookguard:rollback-pre-upgrade-*` tags and keeps the newest three,
+including the one it just made. Set `BOOKGUARD_ROLLBACK_KEEP` to keep a
+different number. A failed upgrade removes nothing. Each rollback image is about
+630 MB, so without this cleanup Unraid's `docker.img` eventually fills up.
+
 A deployed v0.6+ instance can be rechecked without redeploying:
 
 ```bash
