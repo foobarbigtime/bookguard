@@ -5,6 +5,11 @@ Activity, System) are implemented; steps 6-7 are not yet.
 Mockups: <https://claude.ai/artifact/XAaZbvzFmJVCTgo8ZeX3Tp> (Home, Review,
 Replace, Setup, Activity, System, Settings).
 
+For current operator instructions, use the [user guide](../user-guide.md).
+Put back, the simple Review Replace action, Unmatched, Duplicates, and Review
+pagination have also shipped. Step 7 still refers to the proposed guided
+supervised replacement/setup flow, not the simple Replace action already on Review.
+
 ## Goal
 
 > Open BookGuard, immediately understand what is happening, deal with anything
@@ -57,6 +62,9 @@ Home  ·  Review  ·  Activity  ·  System                ⚙ Settings
 | **Settings** (gear) | Settings | All configuration, with *Show advanced* |
 
 ## Inventory of the current UI
+
+This is the planning inventory from before the redesign. The implementation
+notes below and the [user guide](../user-guide.md) describe the current pages.
 
 Legend: **Main** = main-page essential · **Detail** = secondary detail ·
 **Advanced** = advanced diagnostic · **Remove** = redundant as a separate place.
@@ -281,8 +289,12 @@ Step 4 as built:
   which values changed (the API key only as "changed"); every start stores
   the version and Git revision, so a start on a new revision reads as
   "BookGuard was updated to …".
-- Undo for an applied metadata fix is on its Activity entry. *Put back* for a
-  quarantined file is not built: BookGuard has no restore operation yet.
+- Undo for an applied metadata fix is on its Activity entry. **Put back** is
+  now implemented for eligible Triage/Review quarantines, using their recorded
+  paths and hashes. It checks the destination and bytes, restores the file,
+  and follows up with Bindery association and monitoring. It is not a general
+  undo for every automatic quarantine or replacement workflow. See
+  [Undo and Put back](../user-guide.md#undo-and-put-back).
 - Home's recent activity uses the same sentences. The Repairs tab stays
   until its repair proposals have a home in Review.
 
