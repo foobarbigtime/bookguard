@@ -277,3 +277,17 @@ def test_a_different_album_with_generic_tracks_still_does_not_match():
     assert not audio_title_supported("Later", {"album": "", "title": "Chapter 2"})
     # A subtitle split only happens after a real subtitle marker.
     assert not audio_title_supported("Night", {"album": "Night: Shift and Other Stories"})
+
+
+def test_whole_set_accepts_the_same_subtitle_form_as_the_samples():
+    probes = [
+        {"album": "Cross: Alex Cross, Book 12", "title": f"Chapter {n}", "artist": "James Patterson"}
+        for n in range(1, 4)
+    ]
+    summary = analyze_audio_identity_set("Cross", "James Patterson", probes)
+    assert summary["titleMismatchCount"] == 0
+    assert summary["hasEmbeddedContradiction"] is False
+    assert summary["mixedContent"] is False
+
+    other = analyze_audio_identity_set("Cross", "James Patterson", [{"album": "Kiss the Girls: A Novel", "artist": "James Patterson"}])
+    assert other["titleMismatchCount"] == 1

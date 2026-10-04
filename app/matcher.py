@@ -222,9 +222,10 @@ def analyze_audio_identity_set(
     for probe in readable:
         title = _sample_work_title(probe)
         author = _sample_author(probe)
-        title_supported = bool(
-            title and catalogue_member_title_match(expected_title, title)
-        )
+        title_supported = bool(title and (
+            catalogue_member_title_match(expected_title, title)
+            or _strict_title_equivalent(expected_title, _audio_main_title(title))
+        ))
         author_supported = bool(author and author_match(expected_author, author))
 
         if title:
