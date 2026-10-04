@@ -264,9 +264,9 @@ class Settings:
     # for the next full library scan. Reads Bindery's database read-only.
     watch_imports: bool = _bool("BOOKGUARD_WATCH_IMPORTS", True)
     watch_imports_minutes: int = _clamp(_int("BOOKGUARD_WATCH_IMPORTS_MINUTES", 5), 1, 60)
-    # Hide proven duplicate Bindery entries and join split ebook/audiobook entries
-    # every hour (only while actions are on). Everything can be undone in Bindery.
-    fix_duplicates: bool = _bool("BOOKGUARD_FIX_DUPLICATES", True)
+    # Hide proven empty duplicate Bindery entries every hour. Off unless turned on
+    # (and only while actions are on); Fix now on the Duplicates page works anyway.
+    fix_duplicates: bool = _bool("BOOKGUARD_FIX_DUPLICATES", False)
     # Optional scheduled full scan, in the container's local time. Off by default.
     scan_schedule: str = _scan_schedule(os.getenv("BOOKGUARD_SCAN_SCHEDULE", "off"))
     scan_schedule_time: str = _clock(os.getenv("BOOKGUARD_SCAN_SCHEDULE_TIME", "03:00"))

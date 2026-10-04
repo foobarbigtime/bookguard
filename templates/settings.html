@@ -58,12 +58,11 @@
           <label class="field" data-weekly-only{% if settings.scan_schedule != 'weekly' %} hidden{% endif %}><span>Weekly scan day</span><select name="scan_schedule_day">
             {% for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] %}<option value="{{ loop.index0 }}"{% if settings.scan_schedule_day == loop.index0 %} selected{% endif %}>{{ day }}</option>{% endfor %}
           </select></label>
+          <label class="check-field"><input name="fix_duplicates" type="checkbox" {% if settings.fix_duplicates %}checked{% endif %}><span>Fix duplicate Bindery entries every hour</span></label>
+          <small class="muted span-2">Off by default. When on (and actions are on), hides empty extra entries that are proven duplicates of a book you have. Nothing with files is changed. Every change is in Activity and can be undone in Bindery. Fix now on the Duplicates page works either way.</small>
           <h4 class="settings-group">New imports</h4>
           <label class="check-field"><input name="watch_imports" type="checkbox" {% if settings.watch_imports %}checked{% endif %}><span>Check each new Bindery import</span></label>
           <label class="field"><span>Look for new imports every (minutes)</span><input name="watch_imports_minutes" type="number" min="1" max="60" value="{{ settings.watch_imports_minutes }}"><small>New files are scanned and verified soon after Bindery imports them.</small></label>
-          <h4 class="settings-group">Duplicates</h4>
-          <label class="check-field"><input name="fix_duplicates" type="checkbox" {% if settings.fix_duplicates %}checked{% endif %}><span>Fix duplicate Bindery entries automatically</span></label>
-          <small class="muted span-2">Every hour, when actions are on: hides empty extra entries and joins an ebook and audiobook split over two entries, only when they are proven one book. Every change is in Activity and can be undone in Bindery.</small>
           <h4 class="settings-group">Advanced</h4>
           <label class="field"><span>Audio samples per association</span><input name="sample_files" type="number" min="1" max="50" value="{{ settings.sample_files }}"><small>Samples are spread across the audiobook.</small></label>
           <label class="field"><span>Progress update interval</span><input name="progress_every" type="number" min="1" max="100" value="{{ settings.progress_every }}"></label>

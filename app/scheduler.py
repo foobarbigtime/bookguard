@@ -289,9 +289,9 @@ def scheduled_tasks(now: datetime | None = None) -> list[dict[str, Any]]:
         {
             "key": "duplicate_fix",
             "name": "Fix duplicate entries",
-            "about": "Hides proven duplicate Bindery entries and joins split ebook/audiobook entries",
+            "about": "Hides proven empty duplicate entries in Bindery",
             "schedule": "Every hour" if settings.fix_duplicates and settings.allow_actions
-            else "Off (turn on actions and duplicate fixing in Settings)",
+            else "Off (turn it on in Settings → Schedule)",
             "lastAt": duplicate_last.isoformat() if duplicate_last else "",
             "last": "",
             "nextAt": "",
