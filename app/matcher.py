@@ -222,9 +222,10 @@ def analyze_audio_identity_set(
     for probe in readable:
         title = _sample_work_title(probe)
         author = _sample_author(probe)
-        title_supported = bool(
-            title and catalogue_member_title_match(expected_title, title)
-        )
+        title_supported = bool(title and (
+            catalogue_member_title_match(expected_title, title)
+            or _strict_title_equivalent(expected_title, _audio_main_title(title))
+        ))
         author_supported = bool(author and author_match(expected_author, author))
 
         if title:
@@ -320,6 +321,45 @@ def _strong_mismatch_evidence(
     return True, detected_title, detected_author
 
 
+# What may follow a main title in an audio tag: "Cross: Alex Cross, Book 12",
+# "The Order: A Novel", "Holly - Unabridged". Only then is the part before the
+# separator read as the title on its own.
+_AUDIO_SUBTITLE = re.compile(
+    r"\b(?:a novel|novel|book\s*\d+|series|unabridged|abridged|volume\s*\d+|vol\.?\s*\d+|part\s*\d+)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _audio_main_title(observed: str) -> str:
+    for separator in (":", " - "):
+        head, found, rest = observed.partition(separator)
+        if found and head.strip() and _AUDIO_SUBTITLE.search(rest):
+            return head.strip()
+    return ""
+
+
+def audio_title_supported(expected: str, sample: dict) -> bool:
+    """Do this file's tags name the expected title?
+
+    Album and track title are judged on their own as well as together: joined,
+    a short title like "Cujo" (album) plus "Chapter 01" (track) no longer looks
+    like "Cujo". A generic track title ("Chapter 01", "Track 3") is never
+    evidence by itself.
+    """
+    album = str(sample.get("album") or "").strip()
+    track = str(sample.get("title") or "").strip()
+    if track and GENERIC_AUDIO_TITLES.match(track):
+        track = ""
+    candidates = [value for value in (album, track, " ".join(filter(None, [album, track]))) if value]
+    for value in candidates:
+        if title_match(expected, value):
+            return True
+        head = _audio_main_title(value)
+        if head and _strict_title_equivalent(expected, head):
+            return True
+    return False
+
+
 def classify_audio(
     expected_title: str,
     expected_author: str,
@@ -346,7 +386,7 @@ def classify_audio(
                 ],
             )
         )
-        any_title = any_title or title_match(expected_title, title_text)
+        any_title = any_title or audio_title_supported(expected_title, sample)
         any_author = any_author or author_match(expected_author, credits)
         # Some commercial audiobooks tag the narrator as Artist while embedding
         # the author's full name in Album. Accept the full author/alias there,
