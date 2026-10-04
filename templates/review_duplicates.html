@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard Duplicates</title>
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
+</head>
+<body>
+{% from "_layout.html" import site_header %}
+{{ site_header("review", "duplicates", version) }}
+
+<main class="unmatched-main">
+  <div class="unmatched-header">
+    <div>
+      <h1>Books Bindery lists twice</h1>
+      <p class="muted">The same book by the same author, spelled two ways (“Nightingale” and “The Nightingale”). The empty extra entry stays Wanted, so Bindery keeps searching for it, and BookGuard can't tell which entry a file belongs to. Hiding uses Bindery's own exclude: the entry is kept, never searched for or added again, and you can include it again on the book's page in Bindery. Nothing on disk changes.</p>
+    </div>
+    <div class="unmatched-run">
+      {% if hideable and allow_actions %}
+      <button type="button" class="primary" data-duplicates-hide-all>Hide {{ hideable }} empty extra entries</button>
+      {% endif %}
+      <small class="muted">{% if error %}Can't read Bindery: {{ error }}{% else %}{{ total }} books listed twice{% endif %}</small>
+    </div>
+  </div>
+
+  {% for key, label, items in groups if items %}
+  <section class="table-card unmatched-group duplicates-{{ key|lower }}">
+    <div class="section-title"><h2>{{ label }} <span class="muted">{{ items|length }}</span></h2></div>
+    {% for group in items %}
+    <article class="unmatched-item">
+      <div class="unmatched-item-head">
+        <div><strong>{{ group.entries[0].title }}</strong> <small class="muted">{{ group.author }}</small></div>
+      </div>
+      <ul class="unmatched-evidence">
+        {% for entry in group.entries %}
+        <li>
+          <b>“{{ entry.title }}”</b>{% if entry.year %} ({{ entry.year }}){% endif %} · Bindery book {{ entry.id }} ·
+          {% if entry.ebooks or entry.audiobooks or entry.other %}
+            {% if entry.ebooks %}ebook: {{ entry.ebooks|join(', ') }}{% endif %}
+            {% if entry.audiobooks %}{% if entry.ebooks %}; {% endif %}audiobook: {{ entry.audiobooks|join(', ') }}{% endif %}
+            {% if entry.other %} {{ entry.other|join(', ') }}{% endif %}
+          {% else %}<span class="muted">no files</span>{% endif %}
+          {% if entry.id in group.hideable and allow_actions %}
+            <button type="button" data-duplicate-hide="{{ entry.id }}" data-title="{{ entry.title }}">Hide this empty entry</button>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% if group.kind == 'EMPTY_EXTRA' and not group.yearsAgree %}
+        <p class="muted">The entries have different years, so they may be different books. BookGuard won't hide either; check them in Bindery.</p>
+      {% elif group.kind == 'SPLIT' %}
+        <p class="muted">The ebook is on one entry and the audiobook on the other. Nothing is lost; Bindery just shows them as two books.</p>
+      {% elif group.kind == 'TWO_COPIES' %}
+        <p class="muted">Both entries have a file of the same kind, so there are two copies on disk. Pick the one to keep in Bindery.</p>
+      {% elif group.kind == 'ALL_EMPTY' %}
+        <p class="muted">Neither entry has a file. Bindery is searching for both; exclude one in Bindery if you like.</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </section>
+  {% endfor %}
+  {% if not total and not error %}<p class="empty">Bindery lists no book twice.</p>{% endif %}
+</main>
+<script src="{{ static_url('duplicates.js') }}" defer></script>
+</body>
+</html>

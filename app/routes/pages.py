@@ -18,6 +18,7 @@ from ..activity import RESULTS, WHAT, WHO, activity_events, activity_totals, fil
 from ..history import operation_detail
 from ..put_back import put_back_preview
 from ..unmatched import VERDICTS, check_status, stored_checks
+from ..duplicates import KINDS as DUPLICATE_KINDS, find_duplicates
 from ..db import (
     latest_counts,
     latest_reason_counts,
@@ -67,6 +68,28 @@ def unmatched_page(request: Request):
             "groups": groups,
             "total": len(items),
             "status": check_status(),
+            "allow_actions": settings.allow_actions,
+            "version": __version__,
+        },
+    )
+
+
+@router.get("/review/duplicates", response_class=HTMLResponse)
+def duplicates_page(request: Request):
+    error = ""
+    try:
+        found = find_duplicates()
+    except Exception as exc:  # Bindery's database unreadable: say so on the page
+        found, error = [], str(exc)
+    groups = [(key, label, [g for g in found if g["kind"] == key]) for key, label in DUPLICATE_KINDS.items()]
+    return templates.TemplateResponse(
+        request=request,
+        name="review_duplicates.html",
+        context={
+            "groups": groups,
+            "total": len(found),
+            "hideable": sum(len(g["hideable"]) for g in found),
+            "error": error,
             "allow_actions": settings.allow_actions,
             "version": __version__,
         },
