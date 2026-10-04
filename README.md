@@ -23,7 +23,7 @@ it does not reassign, delete, move, or rewrite media, request a scan, or start a
 download. Both filenames remain in place. A full proof is persisted before the
 request, then BookGuard verifies the retained ebook, both books' remaining file
 registrations, audiobook paths, hard-link identity, and SHA-256 after the request.
-No writable library alias, admission gate, or automatic-reacquisition gate is
+No writable library alias is
 required for this database-only operation; the existing Bindery action gate
 still applies and stays off by default.
 
@@ -39,8 +39,7 @@ staging name is unregistered everywhere and still shares the exact recorded
 inode and SHA-256 with the protected final EPUB. **Remove unregistered staging
 link** is a separate explicit action. It requires the existing Bindery action
 gate, `BOOKGUARD_EBOOK_ACTIONS_ENABLED=true`, and the opt-in
-`compose.actions.yaml` writable alias; `/books` remains read-only. No admission
-or automatic-reacquisition gate is needed.
+`compose.actions.yaml` writable alias; `/books` remains read-only.
 
 Cleanup unlinks only the exact proven staging name through the writable alias,
 using directory handles with symlink following disabled. It does not change
@@ -155,7 +154,7 @@ a trusted LAN; use an HTTPS reverse proxy or VPN for remote access, and do not
 publish BookGuard directly to the internet.
 
 State-changing repair, undo, scan, reset, detach, quarantine, remediation,
-admission, and reconciliation requests also require an explicit
+and reconciliation requests also require an explicit
 operation-specific confirmation in the JSON body. Authentication and
 confirmation serve different purposes and both are enforced by the server.
 
@@ -166,7 +165,7 @@ BOOKGUARD_ALLOW_ACTIONS=false
 ```
 
 This controls every media-changing operation, including Detach, Quarantine,
-direct admission, and admission reconciliation. `PASS` results remain protected
+Replace and Put back. `PASS` results remain protected
 from destructive actions.
 
 ### Metadata repair
@@ -491,7 +490,7 @@ fail-closed security result. The temporary files are deleted automatically and
 no test file is written to the ebook library, staging, or quarantine paths.
 
 A deterministic failure produces an `UNSAFE_FILE` verdict before content identity is evaluated.
-Unsafe files cannot pass staged verification or controlled admission. Plain-text and legacy formats
+Unsafe files are never treated as the right book. Plain-text and legacy formats
 without a reliable fixed signature are reported as not applicable instead of being guessed.
 An EPUB whose valid `mimetype` entry is merely compressed, not first, or padded with a UTF-8
 BOM or ASCII whitespace receives a visible conformance warning rather than an unsafe verdict;
@@ -641,11 +640,9 @@ Before a release or live acceptance test, run:
 ./scripts/smoke-test.sh
 ```
 
-The command builds the current source and validates the normal Compose topology,
-each opt-in writable alias, and their combined topology. It then exercises the complete ebook
-workflow—acquisition, external-handoff enforcement, staged-byte verification,
-atomic admission, registration, and finalization—against a fake Bindery client
-and temporary files.
+The command builds the current source, checks that the image runs with a
+read-only root filesystem, and validates the normal Compose topology, the
+writable action alias overlay, and the ClamAV overlay.
 
 The production Compose service runs BookGuard as a non-root UID/GID
 (default `99:100` on Unraid), drops all Linux capabilities, and uses a read-only
@@ -654,16 +651,12 @@ directories therefore need normal filesystem ownership/permissions for that
 runtime identity; BookGuard does not bypass DAC permissions with capabilities.
 
 Writable state is limited to the explicit `/config`, `/staging`, and `/quarantine`
-mounts plus any deliberately enabled action/admission alias. `/tmp` is a
+mounts plus the action alias when deliberately enabled. `/tmp` is a
 bounded tmpfs mounted with `nosuid`, `nodev`, and `noexec`; application code,
 Python packages, and system binaries remain immutable at runtime.
 
-The workflow container uses `--network none`, a read-only root filesystem, and
-the same bounded no-exec temporary filesystem. It does not mount `/config`, `/books`,
-`/staging`, the Bindery database, the download client, or any other live host
-path. The temporary library and audit database are removed when the command
-finishes. A successful run therefore replaces most of the long manual CLI
-checks; a live test is still appropriate once per release milestone.
+The smoke containers use `--network none` and mount no live host path. A live
+test is still appropriate once per release milestone.
 
 After scanner/matcher upgrades, run a **new scan**. Historical scan rows are kept and are not silently reclassified.
 
@@ -689,8 +682,7 @@ uvicorn app.main:app --reload --port 8788
 ```
 
 The test suite includes end-to-end synthetic EPUB tests covering preview, safe
-repair, verification, repair-history persistence, Undo, staged-byte safety
-gates, and the isolated acquisition-to-finalization lifecycle.
+repair, verification, repair-history persistence and Undo.
 
 ### Project structure
 
@@ -715,11 +707,7 @@ app/media_evidence.py       Unified ebook/audiobook media evidence (E2)
 app/audiobook_verification.py Audiobook identity and readability verification
 app/recovery_classifier.py  Failure classification into recovery kinds
 app/recovery_planner.py     Durable recovery plans and step definitions
-app/acquisition_admission_*.py Verified-acquisition admission preflight, execution, and scan
-app/publication_*.py        Publication proof, recovery, and registration scan
-app/alternate_*.py          Alternate candidate review and durable operator selection
-app/automatic_quarantine*.py Unsafe-media quarantine and post-quarantine grab
-app/quarantine_*.py         Quarantine filesystem moves, selection, handoff, and final-state proof
+app/quarantine_fs.py        Quarantine filesystem moves with verified cross-mount copies
 app/catalogue_relationship.py How a misfiled ebook relates to the book it really is
 app/catalogue_move.py       Guarded move of a misfiled ebook to the right book
 app/attention.py            Attention queue assembly
@@ -730,9 +718,9 @@ app/import_watch.py         Checks each new Bindery import soon after it appears
 app/health.py               System health checks with how-to-fix guidance
 app/scheduler.py            Optional scheduled library scan and the task list
 app/library_review.py       Open items grouped by the decision they need
-app/attention_execution.py  Attention entries for interrupted E4 receipts
+app/attention_execution.py  Attention entries for interrupted automatic steps from older versions
 app/operator_guidance.py    Read-only operator guidance for Attention items
-tools/smoke_test.py         Isolated workflow and Compose safety harness
+tools/smoke_test.py         Isolated root-filesystem and Compose safety checks
 tools/clamav_acceptance.py  Live ClamAV clean/EICAR acceptance test
 scripts/smoke-test.sh       One-command containerized smoke-test runner
 compose.clamav.yaml         Optional private ClamAV deployment overlay

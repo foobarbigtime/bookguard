@@ -13,9 +13,7 @@ The goal is **less manual setup, not less testing**.
 scripts/acceptance/run --list
 scripts/acceptance/run selftest
 BOOKGUARD_ACCEPTANCE_EXPECTED_SHA=<reviewed-full-sha> \
-  scripts/acceptance/run acquisition-progress
-BOOKGUARD_ACCEPTANCE_EXPECTED_SHA=<reviewed-full-sha> \
-  scripts/acceptance/run acquisition-admission
+  scripts/acceptance/run quarantine-copy-fault
 ```
 
 For a mutation PR, pin the exact commit that was reviewed/built:
@@ -103,23 +101,3 @@ scenarios that need Docker peers, injected crashes, or a realistic fake Bindery 
 run explicitly as acceptance evidence. As reusable fake services mature, deterministic
 parts of those scenarios can be promoted into CI without removing the local acceptance
 pass.
-
-## Known acquisition progression
-
-The `acquisition-progress` scenario uses disposable BookGuard data and a read-only fake
-Bindery API. It checks Observe planning, empty-allowlist refusal, staged observation,
-independent verification on a second plan, unchanged staged bytes, absence of library
-publication, and an idle post-verification replay. It never calls a Bindery mutation route.
-
-The `acquisition-admission` scenario uses a separate writable disposable admission root
-and fake Bindery. It proves an empty allowlist publishes nothing, exact allowlisting
-publishes one verified ebook without overwrite or scan, and a seeded interrupted
-journal adopts exact published bytes without another publication. The Bindery scan
-remains a separate allowlisted mutation.
-It never mounts or reads the production library.
-
-The `prepublication-retirement` scenario seeds a failed admission before any publication,
-requires a separate exact allowlist to retire only its local journal, and proves that
-the refreshed acquisition plan still cannot publish with that retirement allowlist.
-It retains staged bytes and never requests a Bindery scan.
-It also checks adoption of an interrupted local retirement after Observe and restart.
