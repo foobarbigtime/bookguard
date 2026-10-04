@@ -14,13 +14,19 @@
   <div class="unmatched-header">
     <div>
       <h1>Books Bindery lists twice</h1>
-      <p class="muted">The same book by the same author, spelled two ways (“Nightingale” and “The Nightingale”). The empty extra entry stays Wanted, so Bindery keeps searching for it, and BookGuard can't tell which entry a file belongs to. Hiding uses Bindery's own exclude: the entry is kept, never searched for or added again, and you can include it again on the book's page in Bindery. Nothing on disk changes.</p>
+      <p class="muted">The same book by the same author, spelled two ways (“Nightingale” and “The Nightingale”). The empty extra entry stays Wanted, so Bindery keeps searching for it. When BookGuard can prove two entries are one book, it hides the empty extra (Bindery's own exclude: kept, never searched for again, and can be included again on the book's page) and joins an ebook and audiobook split over two entries with Bindery's Fix match. Every change is in Activity. Nothing is deleted.</p>
     </div>
     <div class="unmatched-run">
-      {% if hideable and allow_actions %}
-      <button type="button" class="primary" data-duplicates-hide-all>Hide {{ hideable }} empty extra entries</button>
+      {% if allow_actions %}
+      <button type="button" class="primary" data-duplicates-fix{% if status.running or not fixable %} disabled{% endif %}>{{ 'Fixing…' if status.running else 'Fix now' }}</button>
       {% endif %}
-      <small class="muted">{% if error %}Can't read Bindery: {{ error }}{% else %}{{ total }} books listed twice{% endif %}</small>
+      <small class="muted">
+        {% if error %}Can't read Bindery: {{ error }}
+        {% elif not allow_actions %}Turn on actions in Settings to let BookGuard fix these.
+        {% elif fix_duplicates %}Fixed automatically every hour. {{ fixable }} can be fixed now.
+        {% else %}Automatic fixing is off in Settings. {{ fixable }} can be fixed now.{% endif %}
+        {% if status.finishedAt %}<br>Last run: hid {{ status.hidden }}, joined {{ status.merged }}{% if status.problems %}, {{ status.problems|length }} left alone{% endif %}.{% endif %}
+      </small>
     </div>
   </div>
 
@@ -41,20 +47,17 @@
             {% if entry.audiobooks %}{% if entry.ebooks %}; {% endif %}audiobook: {{ entry.audiobooks|join(', ') }}{% endif %}
             {% if entry.other %} {{ entry.other|join(', ') }}{% endif %}
           {% else %}<span class="muted">no files</span>{% endif %}
-          {% if entry.id in group.hideable and allow_actions %}
-            <button type="button" data-duplicate-hide="{{ entry.id }}" data-title="{{ entry.title }}">Hide this empty entry</button>
-          {% endif %}
+          {% if entry.id == group.keep %}<span class="muted"> · kept</span>{% elif entry.id in group.hideable %}<span class="muted"> · will be hidden</span>{% endif %}
         </li>
         {% endfor %}
       </ul>
-      {% if group.kind == 'EMPTY_EXTRA' and not group.yearsAgree %}
-        <p class="muted">The entries have different years, so they may be different books. BookGuard won't hide either; check them in Bindery.</p>
-      {% elif group.kind == 'SPLIT' %}
-        <p class="muted">The ebook is on one entry and the audiobook on the other. Nothing is lost; Bindery just shows them as two books.</p>
-      {% elif group.kind == 'TWO_COPIES' %}
-        <p class="muted">Both entries have a file of the same kind, so there are two copies on disk. Pick the one to keep in Bindery.</p>
-      {% elif group.kind == 'ALL_EMPTY' %}
-        <p class="muted">Neither entry has a file. Bindery is searching for both; exclude one in Bindery if you like.</p>
+      {% if group.blocked %}
+        <p class="muted">Left for you: {{ group.blocked }}. Check them in Bindery.</p>
+      {% endif %}
+      {% if group.kind == 'TWO_COPIES' and group.proof %}
+        <p class="muted">Two copies of the same kind are on disk. One book because of {{ group.proof }}; the file clean-up will keep the better copy.</p>
+      {% elif group.hideable or group.moves %}
+        <p class="muted">One book because of {{ group.proof }}. BookGuard keeps Bindery book {{ group.keep }}{% if group.moves %}, moves the other entry's files onto it{% endif %} and hides the rest.</p>
       {% endif %}
     </article>
     {% endfor %}

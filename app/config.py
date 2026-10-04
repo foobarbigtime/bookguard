@@ -264,6 +264,9 @@ class Settings:
     # for the next full library scan. Reads Bindery's database read-only.
     watch_imports: bool = _bool("BOOKGUARD_WATCH_IMPORTS", True)
     watch_imports_minutes: int = _clamp(_int("BOOKGUARD_WATCH_IMPORTS_MINUTES", 5), 1, 60)
+    # Hide proven duplicate Bindery entries and join split ebook/audiobook entries
+    # every hour (only while actions are on). Everything can be undone in Bindery.
+    fix_duplicates: bool = _bool("BOOKGUARD_FIX_DUPLICATES", True)
     # Optional scheduled full scan, in the container's local time. Off by default.
     scan_schedule: str = _scan_schedule(os.getenv("BOOKGUARD_SCAN_SCHEDULE", "off"))
     scan_schedule_time: str = _clock(os.getenv("BOOKGUARD_SCAN_SCHEDULE_TIME", "03:00"))
@@ -361,7 +364,7 @@ class Settings:
             "quarantine_root", "repair_audio_genre_value",
         }
         bool_fields = {
-            "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks", "watch_imports",
+            "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks", "watch_imports", "fix_duplicates",
             "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
             "verification_enabled", "verification_use_tika",
             "verification_file_signatures", "verification_archive_safety",
@@ -441,6 +444,7 @@ class Settings:
             "scan_on_start": self.scan_on_start,
             "watch_imports": self.watch_imports,
             "watch_imports_minutes": self.watch_imports_minutes,
+            "fix_duplicates": self.fix_duplicates,
             "scan_schedule": self.scan_schedule,
             "scan_schedule_time": self.scan_schedule_time,
             "scan_schedule_day": self.scan_schedule_day,

@@ -132,6 +132,25 @@ def run_due_tasks(now: datetime | None = None) -> str | None:
     return scan_id
 
 
+DUPLICATE_FIX_EVERY = timedelta(hours=1)
+
+
+def run_duplicate_fix(now: datetime | None = None) -> bool:
+    """Fix proven duplicate Bindery entries once an hour, when it is on and actions are on."""
+    from .duplicates import start_fix
+
+    if not (settings.fix_duplicates and settings.allow_actions):
+        return False
+    now = now or local_now()
+    last = _last_started("duplicate_fix")
+    if last is not None and now - last < DUPLICATE_FIX_EVERY:
+        return False
+    if start_fix(auto=True):
+        _set_last_started("duplicate_fix", now)
+        return True
+    return False
+
+
 def _parse(value: str) -> datetime | None:
     try:
         at = datetime.fromisoformat(str(value))
@@ -169,6 +188,10 @@ class Scheduler:
                 self.failure = None
         except Exception as exc:  # noqa: BLE001 - shown in Health and on the task
             self.failure = {"at": datetime.now(timezone.utc).isoformat(), "error": str(exc)[:500] or type(exc).__name__}
+        try:
+            run_duplicate_fix(now)
+        except Exception:  # noqa: BLE001 - its own status shows on the Duplicates page
+            pass
 
     def last_failure(self) -> dict[str, str] | None:
         """Why the scheduled scan last failed to start, until a scan starts after it.
@@ -237,6 +260,7 @@ def scheduled_tasks(now: datetime | None = None) -> list[dict[str, Any]]:
     except ConfigurationError:
         mode = "invalid"
 
+    duplicate_last = _last_started("duplicate_fix")
     return [
         {
             "key": "library_scan",
@@ -261,6 +285,18 @@ def scheduled_tasks(now: datetime | None = None) -> list[dict[str, Any]]:
             "nextAt": imports_next,
             "running": False,
             "action": "imports" if imports["enabled"] else "",
+        },
+        {
+            "key": "duplicate_fix",
+            "name": "Fix duplicate entries",
+            "about": "Hides proven duplicate Bindery entries and joins split ebook/audiobook entries",
+            "schedule": "Every hour" if settings.fix_duplicates and settings.allow_actions
+            else "Off (turn on actions and duplicate fixing in Settings)",
+            "lastAt": duplicate_last.isoformat() if duplicate_last else "",
+            "last": "",
+            "nextAt": "",
+            "running": False,
+            "action": "",
         },
         {
             "key": "observe_check",

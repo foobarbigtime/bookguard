@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ..actions import ActionError, detach_missing, missing_detach_preview, resolve_bindery_api_key
 from ..bindery_client import BinderyClient
+from ..config import settings
 from ..catalogue_move import (
     CatalogueMoveError,
     list_moves,
@@ -15,7 +16,7 @@ from ..db import latest_results, latest_scan, result_by_id
 from ..put_back import put_back
 from ..replace import triage_replace
 from ..unmatched import attach as attach_unmatched, check_status, start_check
-from ..duplicates import hide_all_empty, hide_empty
+from ..duplicates import fix_status, start_fix
 from ..scanner import start_scan
 from ..services.dashboard import latest_missing_cleanup
 from ..verifier import verify_result
@@ -187,29 +188,15 @@ def api_unmatched_attach(row_id: int, payload: ConfirmationRequest):
     return {"ok": True, "message": message}
 
 
-@router.post("/duplicates/{book_id}/hide")
-def api_duplicate_hide(book_id: int, payload: ConfirmationRequest):
-    """Exclude one empty extra Bindery entry (Bindery can include it again)."""
-    require_confirmation(payload, "HIDE_DUPLICATE")
-    try:
-        message = hide_empty(book_id)
-    except ActionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    return {"ok": True, "message": message}
-
-
-@router.post("/duplicates/hide-all")
-def api_duplicate_hide_all(payload: ConfirmationRequest):
-    """Exclude every empty extra Bindery entry that is safe to hide, each checked again."""
-    require_confirmation(payload, "HIDE_ALL_DUPLICATES")
-    try:
-        done = hide_all_empty()
-    except ActionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    message = f"Hid {done['hidden']} empty extra entries in Bindery."
-    if done["problems"]:
-        message += f" {len(done['problems'])} were left alone: " + " ".join(done["problems"][:3])
-    return {"ok": True, "message": message, **done}
+@router.post("/duplicates/fix", status_code=202)
+def api_duplicate_fix(payload: ConfirmationRequest):
+    """Fix every proven duplicate now, in the background (the same as the automatic run)."""
+    require_confirmation(payload, "FIX_DUPLICATES")
+    if not settings.allow_actions:
+        raise HTTPException(status_code=409, detail="Actions are disabled. Turn them on in Settings to fix duplicates.")
+    started = start_fix()
+    return {"ok": True, "started": started, "status": fix_status(),
+            "message": "Fixing duplicates in Bindery." if started else "Duplicates are already being fixed."}
 
 
 @router.post("/triage/{result_id}/replace")
