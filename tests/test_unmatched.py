@@ -164,6 +164,120 @@ class FakeClient:
         self.adopted.append((row_id, book_id))
 
 
+def _complete_recording(lib, monkeypatch, overrides):
+    folder = lib["audio"] / "James Patterson/Lights Out"
+    folder.mkdir(parents=True)
+    names = [f"{n:03}.mp3" for n in range(1, len(overrides) + 1)]
+    probes = {}
+    for name, override in zip(names, overrides):
+        (folder / name).write_bytes(b"ID3")
+        probes[name] = {"audio_stream_count": 1, "duration_seconds": 1800,
+                        "album": "Lights Out", "title": "Track 01",
+                        "artist": "James Patterson", **override}
+    calls = []
+
+    def probe(path):
+        calls.append(Path(path).name)
+        return {"path": path, **probes[Path(path).name]}, False
+
+    monkeypatch.setattr(unmatched, "cached_or_probe_audio_file", probe)
+    monkeypatch.setattr(unmatched, "disc_track_sequence_warnings", lambda probes: [])
+    monkeypatch.setattr(unmatched, "_silent", lambda path: False)
+    return row("James Patterson/Lights Out", "audiobook", kind="folder", members=names), probes, calls
+
+
+@pytest.mark.parametrize("conflict", [
+    {"album": "Ricket", "artist": "Mark Wayne McGinnis"},
+    {"artist": "Mark Wayne McGinnis"},
+    {"album": "Another Work"},
+])
+def test_unmatched_never_adopts_a_folder_with_conflicting_track_identity(lib, monkeypatch, conflict):
+    item, _, calls = _complete_recording(lib, monkeypatch, [{}, conflict])
+
+    outcome = unmatched.check_item(item, lib["library"], None)
+
+    assert outcome["verdict"] == "UNSURE"
+    assert len(calls) == 2
+    assert next(e for e in outcome["evidence"] if e["check"] == "Whole recording identity")["result"] == "warn"
+
+
+def test_unmatched_checks_identity_beyond_the_old_sixty_track_limit(lib, monkeypatch):
+    item, _, calls = _complete_recording(lib, monkeypatch, [{}] * 60 + [{"album": "Another Work"}])
+
+    outcome = unmatched.check_item(item, lib["library"], None)
+
+    assert outcome["verdict"] == "UNSURE"
+    assert len(calls) == 61
+
+
+def test_unmatched_checks_unreadable_tracks_beyond_the_old_limit(lib, monkeypatch):
+    item, _, calls = _complete_recording(lib, monkeypatch, [{}] * 60 + [{"audio_stream_count": 0}])
+
+    outcome = unmatched.check_item(item, lib["library"], None)
+
+    assert outcome["verdict"] == "JUNK"
+    assert len(calls) == 61
+
+
+def test_generic_or_missing_track_tags_do_not_invent_a_conflict(lib, monkeypatch):
+    item, _, calls = _complete_recording(lib, monkeypatch, [
+        {"album": "CD 1"}, {}, {"album": "", "artist": ""},
+    ])
+
+    outcome = unmatched.check_item(item, lib["library"], None)
+
+    assert (outcome["verdict"], outcome["bookId"]) == ("BELONGS", 7236)
+    assert len(calls) == 3
+
+
+def test_attach_rechecks_identity_of_later_tracks(lib, monkeypatch):
+    item, probes, _ = _complete_recording(lib, monkeypatch, [{}, {}])
+    client = FakeClient([item])
+    monkeypatch.setattr(unmatched, "library_books", lambda: list(lib["library"].books.values()))
+    monkeypatch.setattr(unmatched, "BinderyClient", lambda **kwargs: client)
+    monkeypatch.setattr(unmatched, "resolve_bindery_api_key", lambda: "key")
+    monkeypatch.setattr(settings, "allow_actions", True)
+    unmatched.check_unmatched(client)
+    assert unmatched.stored_checks()[0]["verdict"] == "BELONGS"
+    probes["002.mp3"]["album"] = "Another Work"
+
+    with pytest.raises(unmatched.ActionError, match="changed since the last check"):
+        unmatched.attach(item["id"])
+
+    assert client.adopted == []
+    assert unmatched.stored_checks()[0]["verdict"] == "UNSURE"
+
+
+@pytest.mark.parametrize("catalogue, observed", [
+    ("Murder House: Part 5", "Murder House"),
+    ("Murder House", "Murder House: Part 5"),
+    ("NYPD Red 5", "NYPD Red 2"),
+    ("The Bad Guys #5", "The Bad Guys in Alien vs Bad Guys (The Bad Guys #6)"),
+    ("Example (Volume 3)", "Example (Volume 4)"),
+])
+def test_unmatched_preserves_work_divisions_before_shortening_titles(catalogue, observed):
+    library = unmatched.Library([{"id": 10, "title": catalogue, "author": "James Patterson"}])
+
+    assert library.find(observed, "James Patterson") == (None, [])
+
+
+def test_unmatched_whole_ebook_does_not_belong_to_a_catalogue_part(lib):
+    make_epub(lib["root"] / "James Patterson/Murder House/Murder House - James Patterson.epub",
+              title="Murder House", author="James Patterson")
+    library = unmatched.Library([{"id": 7401, "title": "Murder House: Part 5", "author": "James Patterson"}])
+
+    outcome = unmatched.check_item(
+        row("James Patterson/Murder House/Murder House - James Patterson.epub"), library, None)
+
+    assert outcome["verdict"] != "BELONGS"
+
+
+def test_unmatched_still_matches_the_same_work_part():
+    library = unmatched.Library([{"id": 7401, "title": "Murder House: Part 5", "author": "James Patterson"}])
+
+    assert library.find("Murder House: Part 5", "James Patterson")[0]["id"] == 7401
+
+
 def test_check_all_then_attach_only_a_proven_file(lib, monkeypatch):
     make_epub(lib["root"] / "James Patterson/Lights Out (2015)/Lights Out - James Patterson.epub",
               title="Lights Out", author="James Patterson")

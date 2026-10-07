@@ -41,9 +41,10 @@ an operator opts in.
 - **Attention** collects items that need an operator, including E4 execution
   receipts left running after an interruption, with read-only guidance.
 
-See [Observe Mode](advanced-workflows.md#observe-mode-v06-foundation) and
-[Supervised Automatic Mode (E4)](advanced-workflows.md#supervised-automatic-mode-e4) for
-configuration and endpoints.
+These entries describe historical workflows; supervised executors and direct
+admission have since been removed. See [Observe Mode](advanced-workflows.md#observe-mode-v06-foundation)
+and [current architecture](architecture.md#the-automation-boundaries) for the
+supported behavior and boundaries.
 
 ## What v0.5 added
 

@@ -46,7 +46,7 @@ from .verification_status import malware_scan_inconclusive, verification_is_inco
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "26"
+VERIFIER_VERSION = "27"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -151,6 +151,20 @@ def _verification_signature(result: dict, target_path: str, fingerprint: str) ->
             "pdfPages": settings.verification_pdf_pages,
             "useTika": settings.verification_use_tika,
             "tikaUrl": settings.verification_tika_url,
+            "identity": {
+                "titleMinSharedWords": settings.title_min_shared_words,
+                "allowAuthorSurnameMatch": settings.allow_author_surname_match,
+                "authorAliases": settings.author_aliases,
+                "musicGenres": settings.music_genres,
+                "rejectMusicMismatch": settings.reject_music_mismatch,
+                "rejectStrongMismatch": settings.reject_strong_mismatch,
+                "strongMismatchMinSamples": settings.strong_mismatch_min_samples,
+                "strongMismatchConsensusPercent": settings.strong_mismatch_consensus_percent,
+                "seriesNames": (
+                    bindery_series_names(result.get("book_id"))
+                    if result.get("format") == "ebook" else []
+                ),
+            },
         },
         sort_keys=True,
     )
@@ -176,8 +190,10 @@ def _verification_for_fingerprint(
     signature = _verification_signature(result, target, fingerprint)
     with local_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM content_verifications WHERE signature=? LIMIT 1",
-            (signature,),
+            """SELECT * FROM content_verifications
+               WHERE signature=? OR signature GLOB ?
+               ORDER BY updated_at DESC, id DESC LIMIT 1""",
+            (signature, signature + ":*"),
         ).fetchone()
     if not row:
         return None
@@ -226,7 +242,9 @@ def _save_verification(
     evidence: dict,
 ) -> dict:
     init_verification_db()
-    signature = _verification_signature(result, target_path, fingerprint)
+    # The prefix identifies reusable evidence; the suffix owns one result's
+    # receipt. Reusing proof must not move an older scan's record to a new scan.
+    signature = _verification_signature(result, target_path, fingerprint) + f":{int(result['id'])}"
     now = _utc_now()
     with local_conn() as conn:
         conn.execute(
@@ -272,6 +290,20 @@ def _save_verification(
     item = _decode_row(row)
     item["cached"] = False
     return item
+
+
+def _record_cached_verification(result: dict, cached: dict) -> dict:
+    """Link unchanged evidence to this result while retaining historical receipts."""
+    if cached["result_id"] == result["id"] and cached["scan_id"] == result["scan_id"]:
+        return cached
+    evidence = dict(cached["evidence"])
+    evidence["cacheReuse"] = {"verificationId": cached["id"], "scanId": cached["scan_id"]}
+    current = _save_verification(
+        result, cached["target_path"], cached["file_fingerprint"],
+        cached["verdict"], cached["confidence"], cached["source"], evidence,
+    )
+    current["cached"] = True
+    return current
 
 
 def _snapshot_failure_result(
@@ -341,7 +373,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
         if not force:
             cached = _verification_for_fingerprint(result, target, fingerprint)
             if cached:
-                return cached
+                return _record_cached_verification(result, cached)
         audiobook = build_audiobook_evidence(result, target)
         return _save_verification(
             result,
@@ -365,7 +397,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
         if not force:
             cached = _verification_for_fingerprint(result, target, fingerprint)
             if cached:
-                return cached
+                return _record_cached_verification(result, cached)
         evidence = {
             "expected": {
                 "title": result.get("title", ""),
@@ -402,7 +434,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
         if precheck.startswith("sha256:"):
             cached = _verification_for_fingerprint(result, target, precheck)
             if cached:
-                return cached
+                return _record_cached_verification(result, cached)
     snapshot_root = Path(settings.config_dir) / ".verification-snapshots"
     try:
         with verification_snapshot(
@@ -416,7 +448,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
                 cached = _verification_for_fingerprint(result, target, fingerprint)
                 if cached:
                     assert_snapshot_source_current(snapshot)
-                    return cached
+                    return _record_cached_verification(result, cached)
 
             media_kind = detect_file_media_kind(str(snapshot.path))
             if media_kind.get("kind") == "audiobook":

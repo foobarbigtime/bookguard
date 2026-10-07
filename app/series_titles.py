@@ -27,7 +27,7 @@ import re
 import sqlite3
 from typing import Iterable
 
-from .matcher import meaningful_words, normalize, title_match, title_number_conflict
+from .title_matching import meaningful_words, normalize, title_match, title_number_conflict
 
 _NUMBER = r"\d+(?:\.\d+)?"
 _KEYWORD = r"(?:book|bk|volume|vol|no|number|part)"
