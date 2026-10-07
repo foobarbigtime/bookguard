@@ -27,7 +27,7 @@ import re
 import sqlite3
 from typing import Iterable
 
-from .matcher import meaningful_words, normalize
+from .matcher import meaningful_words, normalize, title_match, title_number_conflict
 
 _NUMBER = r"\d+(?:\.\d+)?"
 _KEYWORD = r"(?:book|bk|volume|vol|no|number|part)"
@@ -39,6 +39,8 @@ _TRAILING_PART = re.compile(r"^(?P<base>.+?)\s*(?::|\(|\[)\s*(?P<tail>[^:()\[\]]
 _NUMBERED_PREFIX = re.compile(rf"^(?P<series>[^#:]+?)\s+{_NUMBER}\s*[#:]\s*(?P<base>.+)$")
 _LEADING_NUMBER = re.compile(rf"^(?:{_KEYWORD}\s+)?{_NUMBER}\s+")
 _ARTICLES = {"a", "an", "the"}
+_WORK_PART = re.compile(r"\bpart\.?\s*#?\s*(\d+(?:\.\d+)?|[ivxlcdm]+)\s*[)\]]?\s*$", re.IGNORECASE)
+_BARE_DIVISION = re.compile(r"(part|volume|vol|book|bk)\.?\s*#?\s*(\d+(?:\.\d+)?|[ivxlcdm]+)", re.IGNORECASE)
 
 
 def _without_article(normalized: str) -> str:
@@ -86,7 +88,13 @@ def expected_title_variants(title: str, series_names: Iterable[str] = ()) -> lis
     if trailing:
         tail = trailing.group("tail").strip()
         tail_key = _without_article(normalize(re.sub(rf"[\s,#]*{_NUMBER}\s*$", "", tail)))
-        if _TRAILING_DESIGNATION.search(tail) or (tail_key and tail_key in keys):
+        designation = _TRAILING_DESIGNATION.search(tail)
+        # "Alex Cross, Book 11" is a series annotation. Bare "Part 5" or
+        # "Volume 3" distinguishes the work itself and must never disappear.
+        numbered_series = designation and meaningful_words(tail[:designation.start()])
+        if not _WORK_PART.search(full) and (
+            numbered_series or (tail_key and tail_key in keys)
+        ):
             add(trailing.group("base"))
 
     normalized_full = _without_article(normalize(full))
@@ -101,6 +109,36 @@ def expected_title_variants(title: str, series_names: Iterable[str] = ()) -> lis
         add(numbered.group("base"))
 
     return variants
+
+
+def _work_division(title: str) -> str:
+    part = _WORK_PART.search(title)
+    if part:
+        return "part " + normalize(part.group(1))
+    trailing = _TRAILING_PART.match(title)
+    division = _BARE_DIVISION.fullmatch(trailing.group("tail").strip()) if trailing else None
+    if division:
+        return normalize(division.group(1)).replace("volume", "vol") + " " + normalize(division.group(2))
+    return ""
+
+
+def ebook_title_conflict(expected: str, observed: str) -> bool:
+    """Keep explicit volume conflicts and a part/full-work distinction visible."""
+    if not expected or not observed:
+        return False
+    return title_number_conflict(expected, observed) or _work_division(expected) != _work_division(observed)
+
+
+def ebook_title_match(expected: str, observed: str, series_names: Iterable[str] = ()) -> bool:
+    """Match catalogue variants only after checking the original designations."""
+    if ebook_title_conflict(expected, observed):
+        return False
+    names = list(series_names)
+    return any(
+        title_match(candidate, embedded)
+        for candidate in expected_title_variants(expected, names)
+        for embedded in expected_title_variants(observed, names)
+    )
 
 
 def bindery_series_names(book_id: int | None) -> list[str]:

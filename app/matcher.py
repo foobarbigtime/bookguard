@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 import re
 import unicodedata
+from typing import Iterable
 
 from .config import settings
 
@@ -97,6 +98,12 @@ def title_match(expected: str, metadata_text: str) -> bool:
     if len(ew) >= minimum and ew.issubset(mw):
         return True
     return False
+
+
+def title_number_conflict(expected: str, observed: str) -> bool:
+    """Explicit volume numbers cannot be discarded by catalogue normalization."""
+    e, o = normalize(expected), normalize(observed)
+    return _conflicting_title_number(e, o) or _conflicting_title_number(o, e)
 
 
 def _author_alias_group(expected: str) -> list[str]:
@@ -497,10 +504,14 @@ def classify_ebook(
     expected_title: str,
     expected_author: str,
     metadata: dict,
+    *,
+    series_names: Iterable[str] = (),
 ) -> tuple[str, int, str, list[str]]:
+    from .series_titles import ebook_title_match
+
     title = str(metadata.get("title") or "")
     author = str(metadata.get("author") or "")
-    tm = title_match(expected_title, title)
+    tm = ebook_title_match(expected_title, title, series_names)
     am = author_match(expected_author, author)
     if tm and am:
         return "PASS", 5, "MATCH", [

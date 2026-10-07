@@ -175,3 +175,10 @@ The smoke containers use `--network none` and mount no live host path. A live
 test is still appropriate once per release milestone.
 
 After scanner/matcher upgrades, run a **new scan**. Historical scan rows are kept and are not silently reclassified.
+
+Ebook scans accept a named, numbered series suffix when the main title and author
+agree, and use Bindery's recorded series for unnumbered catalogue labels. Without
+those records, an unnumbered prefix or subtitle stays in review. Conflicting
+volume numbers and a part-versus-whole-work distinction stay unresolved even
+when the series-free title appears on the front page; normalization alone does
+not prove which volume or part is present.

@@ -12,6 +12,7 @@ from .language_detection import LANGUAGE_NAMES, ebook_languages, normalize_langu
 from .matcher import classify_audio, classify_ebook
 from .media_discovery import representative_items, resolve_ebook_target
 from .metadata import audio_metadata_summary, ebook_metadata
+from .series_titles import bindery_series_names
 
 
 _scan_lock = threading.Lock()
@@ -194,7 +195,8 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
         return _language_override(base, language)
 
     classification, score, reason_code, reasons = classify_ebook(
-        row["title"], row["author"], md
+        row["title"], row["author"], md,
+        series_names=bindery_series_names(row.get("book_id")),
     )
     if md.get("error") and reason_code == "NO_METADATA":
         reasons = [*reasons, f"Metadata parser reported: {md['error']}"]
