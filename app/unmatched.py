@@ -42,7 +42,7 @@ from .ebook_extraction import extract_ebook_identity
 from .ebook_security import inspect_ebook_security
 from .file_safety import sha256_file
 from .isbn_evidence import file_isbns
-from .matcher import analyze_audio_identity_set, audio_work_identity
+from .matcher import _sample_author, analyze_audio_identity_set, audio_work_identity
 from .pdf_probe import probe_pdf
 from .scanner import map_path
 from .series_titles import ebook_title_conflict
@@ -581,14 +581,15 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
                 "evidence": evidence}
 
     if audio:
-        # Use the first credit field that names a person by this module's own
-        # name rule. A placeholder in an earlier field is skipped, never allowed
-        # to blank a real credit in a later field.
+        # Use the first credit field that names a person by BOTH placeholder
+        # rules: this module's name rule and the shared analyser's (which also
+        # drops "None"/"Null"). A credit either rule ignores must not be chosen,
+        # or it would blank a real credit in a later field.
         identity_probes = []
         for probe in facts["audio_probes"]:
             credit = next((value for value in (str(probe.get(field) or "").strip()
                                                for field in ("author", "album_artist", "artist", "composer"))
-                           if _surname(value)), "")
+                           if _surname(value) and _sample_author({"author": value})), "")
             identity_probes.append({**probe, "author": credit,
                                     "album_artist": "", "artist": "", "composer": ""})
         agreement = analyze_audio_identity_set(best["title"], best["author"], identity_probes)

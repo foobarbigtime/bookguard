@@ -100,14 +100,16 @@ Unmatched adoption checks identity across every discovered audio file, using
 the shared whole-set title analyser. Unmatched applies an additional conservative
 credit check: each track’s selected informative credit must support the expected author, whereas
 audiobook verification can accept other author evidence when Artist names a
-narrator. Placeholder credits are skipped in favour of the next credit field.
+narrator. Placeholder credits ("Unknown", "None", "-", "1") are skipped in favour of the
+next credit field.
 Generic chapter labels, including Prologue and Chapter One, do not prove another
 work. Original volume and part designations are checked before shortened title
 keys select an entry. Numeric, Roman, and English cardinal division labels are
 equivalent (Part Five / Part V / Part 5). A bracketed `(Book N)` label is a series
 position; `: Book N`, bare Part/Volume labels, and ambiguous named Part labels
 remain work distinctions, as does a label with a total (`Volume One of Two`).
-`(Book N of Series)` in brackets is a series position. Unknown division labels
+`(Book N of Series)` in brackets is a series position when N is a number
+(`1`, `One`, `IV`); `(Book First)` or `(Book Deluxe)` is an unknown division. Unknown division labels
 (`Part Million`) require manual review; phrases that only begin with a label
 (`Book Club Edition`, `Part of the … Series`) are not divisions.
 Attach repeats these checks and reports changes to files, catalogue, or rules.

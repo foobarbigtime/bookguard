@@ -47,10 +47,15 @@ _BARE_DIVISION = re.compile(rf"(part|volume|vol|book|bk)\.?\s*#?\s*({NUMBER_LABE
 
 
 def _bracketed_book_label(title: str, tail: str) -> bool:
-    """'(Book N)' and '(Book N of Series)' are series positions; ': Book N' remains a work division."""
-    return bool(title.rstrip().endswith((")", "]")) and re.fullmatch(
-        r"(?:book|bk)\.?\s*#?\s*\S+(?:\s+of\s+.+)?", tail, re.IGNORECASE,
-    ) and not re.fullmatch(r"(?:book|bk)\.?\s+(?:of|the|a|an|and|club)\b.*", tail, re.IGNORECASE))
+    """'(Book N)' and '(Book N of Series)' are series positions; ': Book N' remains a work division.
+
+    N must be a number number_label can read ("1", "One", "IV"). "(Book First)"
+    or "(Book Deluxe)" are not known positions and stay unknown divisions.
+    """
+    if not title.rstrip().endswith((")", "]")):
+        return False
+    match = re.fullmatch(r"(?:book|bk)\.?\s*#?\s*(?P<position>\S+)(?:\s+of\s+.+)?", tail, re.IGNORECASE)
+    return bool(match and number_label(match.group("position")))
 
 
 # A division label names one position: "Part Million", "Volume One of Two".
