@@ -754,3 +754,23 @@ def test_books_excluded_in_bindery_are_not_in_the_library(tmp_path, monkeypatch)
     monkeypatch.setattr(settings, "bindery_db", str(db))
 
     assert [b["title"] for b in unmatched.library_books()] == ["The Firm"]
+
+
+@pytest.mark.parametrize("placeholder", ["Unknown", "Author's", "-", "?", "1", "N/A", "Jr."])
+def test_placeholder_credit_never_masks_a_later_conflicting_credit(lib, monkeypatch, placeholder):
+    item, _, _ = _complete_recording(lib, monkeypatch, [{}, {
+        "album": "CD 2", "title": "Track 05", "author": placeholder, "artist": "Mark Wayne McGinnis"}])
+
+    outcome = unmatched.check_item(item, lib["library"], None)
+
+    assert outcome["verdict"] == "UNSURE"
+
+
+@pytest.mark.parametrize("placeholder", ["-", "?", "1"])
+def test_placeholder_credit_falls_through_to_the_matching_author(lib, monkeypatch, placeholder):
+    item, _, _ = _complete_recording(lib, monkeypatch, [{}, {
+        "album": "CD 2", "title": "Track 05", "author": placeholder, "artist": "James Patterson"}])
+
+    outcome = unmatched.check_item(item, lib["library"], None)
+
+    assert (outcome["verdict"], outcome["bookId"]) == ("BELONGS", 7236)

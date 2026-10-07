@@ -142,7 +142,10 @@ def _sample_author(sample: dict) -> str:
                     "various", "various artists", "anonymous", "va", "none", "null", "n a"}
     for field in ("author", "album_artist", "artist", "composer"):
         credit = str(sample.get(field) or "").strip()
-        if credit and normalize(credit) not in placeholders:
+        key = normalize(credit)
+        # A credit needs at least one name-like word: "-", "?" or "1" are
+        # uploader placeholders and must not hide a real credit in a later field.
+        if key and key not in placeholders and any(len(w) >= 2 and w.isalpha() for w in key.split()):
             return credit
     return ""
 

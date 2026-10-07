@@ -581,13 +581,15 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
                 "evidence": evidence}
 
     if audio:
-        # The shared analyser treats every nonempty credit as informative. Here
-        # uploader placeholders ("Author's", "Unknown") already mean no author;
-        # keep that meaning when checking the complete set as well.
+        # Use the first credit field that names a person by this module's own
+        # name rule. A placeholder in an earlier field is skipped, never allowed
+        # to blank a real credit in a later field.
         identity_probes = []
         for probe in facts["audio_probes"]:
-            _, credit = audio_work_identity(probe)
-            identity_probes.append({**probe, "author": credit if _surname(credit) else "",
+            credit = next((value for value in (str(probe.get(field) or "").strip()
+                                               for field in ("author", "album_artist", "artist", "composer"))
+                           if _surname(value)), "")
+            identity_probes.append({**probe, "author": credit,
                                     "album_artist": "", "artist": "", "composer": ""})
         agreement = analyze_audio_identity_set(best["title"], best["author"], identity_probes)
         conflicting = (
