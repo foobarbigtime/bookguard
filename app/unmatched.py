@@ -42,8 +42,11 @@ from .ebook_extraction import extract_ebook_identity
 from .ebook_security import inspect_ebook_security
 from .file_safety import sha256_file
 from .isbn_evidence import file_isbns
+from .matcher import analyze_audio_identity_set, audio_work_identity
 from .pdf_probe import probe_pdf
 from .scanner import map_path
+from .series_titles import ebook_title_conflict
+from .title_matching import title_number_conflict
 
 VERDICTS = {
     "JUNK": "Junk",
@@ -58,7 +61,6 @@ AUDIO_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".aac", ".flac", ".ogg", ".opus", ".
 MIN_BOOK_WORDS = 300  # fewer readable words than this is not a book
 SAMPLE_MAX_WORDS = 25000  # a "free sample" notice in a text this short means a sample
 MIN_AUDIO_SECONDS = 5 * 60
-MAX_AUDIO_FILES = 60
 SAMPLE_TEXT = re.compile(
     r"(this is a (free )?sample|end of (this )?(free )?sample|you have reached the end of (this|the) (preview|sample)"
     r"|buy (now|the (full|complete) (book|ebook))|to (continue|keep) reading,? (purchase|buy))",
@@ -300,7 +302,8 @@ class Library:
         found: dict[int, dict] = {}
         for key in _title_keys(title):
             for book in self.by_title.get(key, []):
-                found[int(book["id"])] = book
+                if not ebook_title_conflict(book["title"], title):
+                    found[int(book["id"])] = book
         return list(found.values())
 
     def find(self, title: str, author: str) -> tuple[dict | None, list[dict]]:
@@ -308,7 +311,8 @@ class Library:
         surname = _surname(author)
         if not surname:
             return None, []
-        exact = [b for b in self.exact.get(_norm(title), []) if _surname(b["author"]) == surname]
+        exact = [b for b in self.exact.get(_norm(title), [])
+                 if _surname(b["author"]) == surname and not ebook_title_conflict(b["title"], title)]
         if len(exact) == 1:
             return exact[0], []
         if exact:
@@ -455,7 +459,9 @@ def _ebook_facts(path: Path, evidence: list) -> dict:
 
 def _audio_facts(files: list[Path], evidence: list) -> dict:
     facts: dict[str, Any] = {"junk": "", "identities": [], "front": "", "isbns": []}
-    probes = [cached_or_probe_audio_file(str(f))[0] for f in files[:MAX_AUDIO_FILES]]
+    # Identity authorization covers the complete unit, not a display sample.
+    probes = [cached_or_probe_audio_file(str(f))[0] for f in files]
+    facts["audio_probes"] = probes
     broken = [PurePosixPath(p["path"]).name for p in probes if p.get("probe_error") or not p.get("audio_stream_count")]
     if broken:
         _check(evidence, "Audio files", "fail", f"Can't be read as audio: {', '.join(broken[:5])}")
@@ -486,11 +492,12 @@ def _audio_facts(files: list[Path], evidence: list) -> dict:
         facts["junk"] = facts["junk"] or "The audio is silent."
     elif any(s is False for s in silent):
         _check(evidence, "Silence", "pass", "The sampled audio has sound.")
-    first = probes[0]
-    title = first.get("album") or first.get("title") or ""
-    author = first.get("author") or first.get("album_artist") or first.get("artist") or ""
-    if title:
-        facts["identities"].append(("Audio tags", title, author))
+    seen: set[tuple[str, str]] = set()
+    for probe in probes:
+        title, author = audio_work_identity(probe)
+        if title and (title, author) not in seen:
+            facts["identities"].append(("Audio tags", title, author))
+            seen.add((title, author))
     return facts
 
 
@@ -572,6 +579,27 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
     if not best:
         return {"verdict": "UNSURE", "reason": "It reads as a real book, but no two sources agree on what it is.",
                 "evidence": evidence}
+
+    if audio:
+        # The shared analyser treats every nonempty credit as informative. Here
+        # uploader placeholders ("Author's", "Unknown") already mean no author;
+        # keep that meaning when checking the complete set as well.
+        identity_probes = []
+        for probe in facts["audio_probes"]:
+            _, credit = audio_work_identity(probe)
+            identity_probes.append({**probe, "author": credit if _surname(credit) else "",
+                                    "album_artist": "", "artist": "", "composer": ""})
+        agreement = analyze_audio_identity_set(best["title"], best["author"], identity_probes)
+        conflicting = (
+            agreement["hasEmbeddedContradiction"]
+            or agreement["authorMatchCount"] < agreement["informativeAuthorCount"]
+        )
+        _check(evidence, "Whole recording identity", "warn" if conflicting else "pass",
+               f"Checked identity across all {len(facts['audio_probes'])} audio files.")
+        if conflicting:
+            return {"verdict": "UNSURE", "evidence": evidence, "reason": (
+                "The audio files name conflicting works or authors. A matching first track "
+                "does not prove the whole folder belongs to one book; review it before attaching.")}
 
     title, author, sources = best["title"], best["author"], " + ".join(sorted(best["sources"]))
     folder_surname = _surname(folder_author)
@@ -666,6 +694,29 @@ def _folder_title(item: dict, folder_author: str) -> str:
 SOURCE_RANK = {"ISBN lookup": 3, "Embedded metadata": 2, "Audio tags": 2, "Folder names": 1, "File name": 0}
 
 
+def _source_title_conflict(source: str, title: str, other_source: str, other_title: str) -> bool:
+    """Release names may annotate a named work with its series book number.
+
+    Only name corroboration can ignore a trailing '(Book N)' label. Original
+    explicit number conflicts remain blocking, and catalogue lookup still uses
+    the original titles and work-division guard.
+    """
+    if title_number_conflict(title, other_title):
+        return True
+    book_number = r"\b(?:book|bk)\.?\s*(\d+)\s*[)\]]?\s*$"
+    left = re.search(book_number, title, re.IGNORECASE)
+    right = re.search(book_number, other_title, re.IGNORECASE)
+    if left and right and int(left.group(1)) != int(right.group(1)):
+        return True
+
+    def reading(label: str, value: str) -> str:
+        if label in NAME_SOURCES:
+            return re.sub(r"\s*\((?:book|bk)\.?\s*\d+\)\s*$", "", value, flags=re.IGNORECASE)
+        return value
+
+    return ebook_title_conflict(reading(source, title), reading(other_source, other_title))
+
+
 def _best_identity(identities: list[tuple[str, str, str]], front: str) -> dict | None:
     """The identity most sources agree on, if it is proven.
 
@@ -680,15 +731,17 @@ def _best_identity(identities: list[tuple[str, str, str]], front: str) -> dict |
     for source, title, author, keys, surname in read:
         if not surname:
             continue
-        support = {s for s, _, _, k, n in read if k & keys and n in ("", surname)}
+        supporting = [(s, t, k, n) for s, t, _, k, n in read
+                      if k & keys and n in ("", surname) and not _source_title_conflict(source, title, s, t)]
+        support = {s for s, _, _, _ in supporting}
         if padded and surname in padded.split() and any(f" {key} " in padded for key in keys if len(key) >= 4):
             support.add("Title page")
         if len(support) < 2 or not support - NAME_SOURCES - {"Title page"}:
             continue
         rank = (len(support), SOURCE_RANK.get(source, 0))
         if best is None or rank > best["rank"]:
-            named_by = {s for s, _, _, k, n in read if k & keys and n == surname}
-            titles = [title] + [t for s, t, _, k, n in read if k & keys and n in ("", surname) and t != title]
+            named_by = {s for s, _, _, n in supporting if n == surname}
+            titles = [title] + [t for _, t, _, _ in supporting if t != title]
             best = {"title": title, "author": author, "surname": surname, "sources": support, "rank": rank,
                     "named_by": named_by, "titles": list(dict.fromkeys(titles))}
     return best
@@ -707,7 +760,7 @@ def _other_language(language: str, book: dict, identities: list[tuple[str, str, 
 
 # ---- running it ---------------------------------------------------------------
 
-CHECK_VERSION = 6  # raise when the checks change, so stored verdicts are worked out again
+CHECK_VERSION = 7  # raise when the checks change, so stored verdicts are worked out again
 
 
 def _signature(item: dict) -> str:

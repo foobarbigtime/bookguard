@@ -86,6 +86,104 @@ def test_changed_book_is_checked_again(env, snapshot_calls):
     assert len(snapshot_calls) == 2
 
 
+def test_cached_proof_is_visible_in_the_new_scan_without_changing_history(env, snapshot_calls, monkeypatch):
+    from app.library_review import latest_verifications
+
+    result, _source = env
+    old = verifier.verify_result(result)
+    current_result = {**result, "id": 2, "scan_id": "scan-2"}
+
+    current = verifier.verify_result(current_result)
+    repeated = verifier.verify_result(current_result)
+
+    assert current["cached"] is True
+    assert current["id"] != old["id"]
+    assert (current["result_id"], current["scan_id"]) == (2, "scan-2")
+    assert repeated["id"] == current["id"]
+    assert len(snapshot_calls) == 1
+    with verifier.local_conn() as conn:
+        historical = conn.execute("SELECT * FROM content_verifications WHERE id=?", (old["id"],)).fetchone()
+        assert (historical["result_id"], historical["scan_id"]) == (1, "scan-1")
+        assert conn.execute("SELECT COUNT(*) FROM content_verifications").fetchone()[0] == 2
+    assert latest_verifications([2])[2]["verdict"] == current["verdict"]
+    monkeypatch.setattr(verifier, "latest_scan", lambda: {"id": "scan-2"})
+    assert verifier.verification_summary() == {current["verdict"]: 1}
+
+
+def test_cached_audio_proof_gets_a_current_scan_receipt(env, monkeypatch):
+    result, source = env
+    result = {**result, "format": "audiobook"}
+    calls = []
+    monkeypatch.setattr(verifier, "media_set_fingerprint", lambda path: "audio:unchanged")
+
+    def evidence(row, target):
+        calls.append(target)
+        return {"verdict": "VERIFIED_CORRECT", "confidence": 95,
+                "source": "audiobook-evidence", "evidence": {"explanation": "Tags agree."}}
+
+    monkeypatch.setattr(verifier, "build_audiobook_evidence", evidence)
+    old = verifier.verify_result(result)
+    current = verifier.verify_result({**result, "id": 2, "scan_id": "scan-2"})
+
+    assert current["cached"] is True
+    assert (current["result_id"], current["scan_id"]) == (2, "scan-2")
+    assert current["id"] != old["id"]
+    assert calls == [str(source)]
+
+
+def test_newer_inconclusive_check_does_not_fall_back_to_an_older_cached_proof(env, monkeypatch):
+    result, _source = env
+    result = {**result, "format": "audiobook"}
+    calls = []
+    monkeypatch.setattr(verifier, "media_set_fingerprint", lambda path: "audio:unchanged")
+
+    def evidence(row, target):
+        calls.append(row["id"])
+        return {"verdict": "VERIFIED_CORRECT" if len(calls) == 1 else "INSUFFICIENT_EVIDENCE",
+                "confidence": 95 if len(calls) == 1 else 0, "source": "audiobook-evidence",
+                "evidence": {} if len(calls) == 1 else {"malwareScanInconclusive": True}}
+
+    monkeypatch.setattr(verifier, "build_audiobook_evidence", evidence)
+    verifier.verify_result(result)
+    verifier.verify_result({**result, "id": 2, "scan_id": "scan-2"}, force=True)
+
+    current = verifier.verify_result({**result, "id": 3, "scan_id": "scan-3"})
+
+    assert current["cached"] is False
+    assert current["verdict"] == "INSUFFICIENT_EVIDENCE"
+    assert calls == [1, 2, 3]
+
+
+@pytest.mark.parametrize("attribute, value", [
+    ("title_min_shared_words", 99),
+    ("allow_author_surname_match", False),
+    ("author_aliases", ["Ann Patchett=A. Patchett"]),
+])
+def test_matching_policy_change_does_not_reuse_an_old_verdict(env, snapshot_calls, monkeypatch, attribute, value):
+    result, _source = env
+    # Make both sides of the policy transition explicit, independent of host defaults.
+    monkeypatch.setattr(settings, attribute, {"title_min_shared_words": 2,
+                        "allow_author_surname_match": True, "author_aliases": []}[attribute])
+    verifier.verify_result(result)
+    monkeypatch.setattr(settings, attribute, value)
+
+    again = verifier.verify_result(result)
+
+    assert again["cached"] is False
+    assert len(snapshot_calls) == 2
+
+
+def test_series_context_change_does_not_reuse_an_old_verdict(env, snapshot_calls, monkeypatch):
+    result, _source = env
+    verifier.verify_result(result)
+    monkeypatch.setattr(verifier, "bindery_series_names", lambda _id: ["A recorded series"])
+
+    again = verifier.verify_result(result)
+
+    assert again["cached"] is False
+    assert len(snapshot_calls) == 2
+
+
 def test_forced_check_always_takes_the_full_path(env, snapshot_calls):
     result, _source = env
 

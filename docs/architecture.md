@@ -23,8 +23,9 @@ flowchart TD
 
 The diagram shows responsibility and data flow, not automatic authorization.
 Reading a page does not run an action. Import checks can add new scan results
-and verification records; the supervised automation route uses a separate
-allowlisted execution path.
+and verification records. Observe produces recommendations; its legacy
+`/api/automatic` routes do not execute them. Mutations use the individual
+operator action paths and their current-state checks.
 
 ## Find the right module
 
@@ -33,6 +34,7 @@ allowlisted execution path.
 | Application startup | [`main.py`](../app/main.py): initialize journals, apply saved settings, start/stop the import watcher and scheduler |
 | HTTP transport | [`routes/`](../app/routes/): parse requests, check confirmations and current results, invoke feature operations, and assemble responses |
 | Library scan | [`scanner.py`](../app/scanner.py), [`matcher.py`](../app/matcher.py), [`metadata.py`](../app/metadata.py): read associations, inspect metadata, classify, and persist scan results |
+| Shared title rules | [`title_matching.py`](../app/title_matching.py) owns normalization and number conflicts; [`series_titles.py`](../app/series_titles.py) derives catalogue variants without discarding work divisions. `matcher.py` retains author and audio identity rules and re-exports the common title API |
 | Content verification | [`verifier.py`](../app/verifier.py) coordinates jobs, cached records, and verified repairs; [`verification_engine.py`](../app/verification_engine.py) classifies ebook identity |
 | Evidence and byte safety | [`file_snapshot.py`](../app/file_snapshot.py), [`ebook_security.py`](../app/ebook_security.py), [`ebook_extraction.py`](../app/ebook_extraction.py), [`media_evidence.py`](../app/media_evidence.py), and audio/PDF/MOBI helpers |
 | Read models and presentation | [`home.py`](../app/home.py), [`library_review.py`](../app/library_review.py), [`activity.py`](../app/activity.py), [`health.py`](../app/health.py), [`services/dashboard.py`](../app/services/dashboard.py), templates, and static controllers |
@@ -78,6 +80,21 @@ These are different records and should not be treated as interchangeable:
 
 `verification_status.py` identifies inconclusive scanner failures so they do
 not become evidence for unsafe-file quarantine.
+
+Cached verification has two identities: a reusable proof key covers the file
+fingerprint, expected book, verifier version, and verification/matching policy;
+a result suffix gives each scan result its own receipt. Reusing unchanged
+evidence writes a receipt for the current result without moving the old scan's
+record. Review and summaries can therefore find the proof by current result or
+scan ID. Recorded ebook series names are part of the policy key. Inconclusive
+scanner failures are not reused as conclusive evidence.
+
+Unmatched adoption checks identity across every discovered audio file, using
+the same whole-set analysis as audiobook verification. Generic chapter tags
+do not prove another work; conflicting informative titles or authors block
+adoption. Original volume and part designations are checked before shortened
+title keys are allowed to select a catalogue entry. Attach repeats these checks
+at its mutation boundary.
 
 ## The automation boundaries
 

@@ -4,6 +4,21 @@ Run host-side commands from the BookGuard Git checkout. The default Unraid
 checkout is `/mnt/cache/appdata/bookguard`; persistent application state is
 in a separate directory. See [installation](getting-started.md) for paths.
 
+## Identity and cache updates
+
+After an identity-rule update, run a BookGuard library scan and content
+verification to refresh the review evidence. A library scan alone does not
+replace saved content-verification records. Verification version 27 invalidates
+older proof keys and includes matching settings and recorded ebook series in
+the key. Later unchanged scans can reuse proof while recording it against the
+new scan result; historical receipts remain available.
+
+Run **Review → Unmatched → Check now** to refresh unmatched decisions. Check
+version 7 inspects every discovered audio track and preserves volume/part
+conflicts. Attach also rechecks the complete unit before calling Bindery.
+BookGuard's checks do not change Bindery's own automatic reconciliation rules;
+correcting those rules is a separate upstream task.
+
 ## Backup and validation
 
 BookGuard's persistent application state lives in `/config/bookguard.db`. The

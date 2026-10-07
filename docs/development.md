@@ -106,8 +106,14 @@ the authoritative list rather than assuming every available scenario runs in CI.
   behavior in its feature module.
 - Reuse current-scan, filesystem, and verification checks at mutation boundaries.
   A UI preview is not permission to reuse stale evidence when applying an action.
-- Keep the serialized automation entry point in `automatic_runner.py` distinct
-  from individual executors and the core execution journal.
+- Keep Observe recommendations separate from operator action execution. The
+  former `automatic_runner.py` and supervised executors have been removed;
+  legacy automatic routes only expose Observe behavior.
+- Keep normalization and number-conflict rules in `title_matching.py`,
+  catalogue variants in `series_titles.py`, and audio/author rules in `matcher.py`.
+  Do not make the pure catalogue helpers import the matcher orchestration again.
+- Cache reuse must remain visible to the current scan result and preserve older
+  receipts. Cover file, policy, and recorded-series changes when updating keys.
 - Cover the meaningful failure and restart cases when changing a workflow that
   has external effects. Preserve the evidence needed for reconciliation.
 - Update the corresponding guide and design status when behavior changes.
