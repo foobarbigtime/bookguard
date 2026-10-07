@@ -14,8 +14,10 @@ the key. Later unchanged scans can reuse proof while recording it against the
 new scan result; historical receipts remain available and point to the original
 proof. Activity shows actual verification runs rather than each reuse receipt.
 If Bindery's series data is unavailable, ebook verification is postponed;
-retry when the catalogue is readable. An outage does not replace existing proof
-with records keyed to an empty series list.
+retry when the catalogue is readable. In a verification job only the affected
+books are postponed: the job continues, and its status reports how many were
+postponed and why. An outage does not replace existing proof with records keyed
+to an empty series list.
 
 Run **Review → Unmatched → Check now** to refresh unmatched decisions. Check
 version 8 inspects every discovered audio track and preserves volume/part

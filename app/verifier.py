@@ -68,6 +68,8 @@ _job_state: dict = {
     "current": "",
     "error": None,
     "cacheHits": 0,
+    "postponed": 0,
+    "postponedReason": "",
     "elapsedSeconds": 0,
 }
 
@@ -839,18 +841,32 @@ def start_verification_job(classification: str = "REVIEW", reason_code: str | No
             "current": "",
             "error": None,
             "cacheHits": 0,
+            "postponed": 0,
+            "postponedReason": "",
             "elapsedSeconds": 0,
         })
 
     def worker() -> None:
         counts: dict[str, int] = {}
         cache_hits = 0
+        postponed = 0
         job_started = time.monotonic()
         try:
             for index, row in enumerate(rows, start=1):
                 with _job_lock:
                     _job_state["current"] = f"{row['author']} — {row['title']}"
-                verification = verify_result(row)
+                try:
+                    verification = verify_result(row)
+                except CatalogueUnavailable as exc:
+                    # One unreadable catalogue lookup postpones this book only;
+                    # the rest of the batch still runs. No record is written.
+                    postponed += 1
+                    with _job_lock:
+                        _job_state["processed"] = index
+                        _job_state["postponed"] = postponed
+                        _job_state["postponedReason"] = str(exc)[:1000]
+                        _job_state["elapsedSeconds"] = round(time.monotonic() - job_started)
+                    continue
                 verdict = str(verification.get("verdict") or "INSUFFICIENT_EVIDENCE")
                 counts[verdict] = counts.get(verdict, 0) + 1
                 if verification.get("cached"):

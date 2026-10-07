@@ -91,8 +91,9 @@ shows actual verifications, excluding reuse receipts before applying feed
 limits. Receipts remain stored with scan history; there is no automatic history
 retention policy. Recorded ebook series names are part of the policy key and
 are read once per verification, then used for both the key and classification.
-An unavailable catalogue postpones ebook verification; it does not mean a
-known empty series list. Inconclusive scanner failures are not reused as
+An unavailable catalogue postpones ebook verification for that book (a batch
+job continues and counts it as postponed); it does not mean a known empty
+series list. Inconclusive scanner failures are not reused as
 conclusive evidence.
 
 Unmatched adoption checks identity across every discovered audio file, using

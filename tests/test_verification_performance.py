@@ -337,3 +337,54 @@ def test_verification_job_reports_cache_hits_and_elapsed_time(monkeypatch):
     assert status["processed"] == 3
     assert status["cacheHits"] == 2
     assert isinstance(status["elapsedSeconds"], int)
+
+
+def test_catalogue_outage_postpones_one_book_and_the_job_continues(monkeypatch):
+    rows = [{"author": "A", "title": str(i)} for i in range(3)]
+    monkeypatch.setattr(verifier, "latest_scan", lambda: {"id": "s", "status": "complete"})
+    monkeypatch.setattr(verifier, "latest_results", lambda **kw: rows)
+    monkeypatch.setattr(verifier, "triage_state", lambda row: {})
+    seen = []
+
+    def verify(row):
+        seen.append(row["title"])
+        if row["title"] == "0":
+            raise verifier.CatalogueUnavailable("Bindery series data is unavailable.")
+        return {"verdict": "VERIFIED_CORRECT", "cached": False}
+
+    monkeypatch.setattr(verifier, "verify_result", verify)
+    with verifier._job_lock:
+        verifier._job_state["status"] = "idle"
+
+    assert verifier.start_verification_job("REVIEW")
+    for _ in range(200):
+        if verifier.verification_job_status()["status"] != "running":
+            break
+        time.sleep(0.01)
+    status = verifier.verification_job_status()
+
+    assert status["status"] == "complete"
+    assert seen == ["0", "1", "2"]
+    assert status["processed"] == 3
+    assert status["postponed"] == 1
+    assert "unavailable" in status["postponedReason"]
+    assert status["counts"] == {"VERIFIED_CORRECT": 2}
+    assert status["error"] is None
+
+
+def test_other_errors_still_fail_the_job(monkeypatch):
+    rows = [{"author": "A", "title": "0"}, {"author": "A", "title": "1"}]
+    monkeypatch.setattr(verifier, "latest_scan", lambda: {"id": "s", "status": "complete"})
+    monkeypatch.setattr(verifier, "latest_results", lambda **kw: rows)
+    monkeypatch.setattr(verifier, "triage_state", lambda row: {})
+    monkeypatch.setattr(verifier, "verify_result", lambda row: (_ for _ in ()).throw(RuntimeError("boom")))
+    with verifier._job_lock:
+        verifier._job_state["status"] = "idle"
+
+    assert verifier.start_verification_job("REVIEW")
+    for _ in range(200):
+        if verifier.verification_job_status()["status"] != "running":
+            break
+        time.sleep(0.01)
+
+    assert verifier.verification_job_status()["status"] == "failed"
