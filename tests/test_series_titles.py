@@ -119,6 +119,7 @@ def test_bindery_series_names_reads_series_read_only(tmp_path, monkeypatch):
 
     assert bindery_series_names(7) == ["The Hardy Boys", "Hardy Boys Digest"]
     assert bindery_series_names(99) == []
+    assert series_titles.bindery_series_context(99) == []
     assert bindery_series_names(None) == []
 
 

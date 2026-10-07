@@ -30,6 +30,7 @@ def _result(path: Path) -> dict:
 
 
 def test_verifier_sends_security_and_identity_the_same_private_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(verifier, "bindery_series_context", lambda _id: [])
     source = tmp_path / "book.txt"
     source.write_text("Bel Canto by Ann Patchett", encoding="utf-8")
     config = tmp_path / "config"
@@ -89,6 +90,7 @@ def test_verifier_sends_security_and_identity_the_same_private_snapshot(tmp_path
 
 
 def test_verifier_fails_closed_if_source_changes_while_snapshot_is_parsed(tmp_path, monkeypatch):
+    monkeypatch.setattr(verifier, "bindery_series_context", lambda _id: [])
     source = tmp_path / "book.txt"
     source.write_text("Bel Canto by Ann Patchett", encoding="utf-8")
     config = tmp_path / "config"
