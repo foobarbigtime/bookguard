@@ -428,11 +428,37 @@ async function pollVerificationJob() {
     return;
   }
   if (job.status === 'complete') {
-    const counts = job.counts || {};
-    status.textContent = `Complete: ${job.processed || 0} verified`;
+    const summary = verificationCompleteSummary(job);
+    status.textContent = summary.status;
     await loadCachedVerifications();
-    alert(`Content verification complete.\n\nVerified correct: ${counts.VERIFIED_CORRECT || 0}\nMetadata errors: ${counts.METADATA_ERROR || 0}\nWrong content: ${counts.WRONG_CONTENT || 0}\nWrong media type: ${counts.WRONG_MEDIA_TYPE || 0}\nUnsafe files: ${counts.UNSAFE_FILE || 0}\nInsufficient evidence: ${counts.INSUFFICIENT_EVIDENCE || 0}`);
+    alert(summary.message);
   }
+}
+
+// Postponed books (catalogue unavailable) were not verified: never count them
+// as verified, and say so in the completion message.
+function verificationCompleteSummary(job) {
+  const counts = job.counts || {};
+  const postponed = Number(job.postponed || 0);
+  const verified = Math.max(0, Number(job.processed || 0) - postponed);
+  const lines = [
+    'Content verification complete.',
+    '',
+    `Verified correct: ${counts.VERIFIED_CORRECT || 0}`,
+    `Metadata errors: ${counts.METADATA_ERROR || 0}`,
+    `Wrong content: ${counts.WRONG_CONTENT || 0}`,
+    `Wrong media type: ${counts.WRONG_MEDIA_TYPE || 0}`,
+    `Unsafe files: ${counts.UNSAFE_FILE || 0}`,
+    `Insufficient evidence: ${counts.INSUFFICIENT_EVIDENCE || 0}`,
+  ];
+  if (postponed) {
+    lines.push('', `Postponed: ${postponed} (${job.postponedReason || 'catalogue unavailable'})`,
+      'Run verification again when Bindery is readable.');
+  }
+  return {
+    status: postponed ? `Complete: ${verified} verified, ${postponed} postponed` : `Complete: ${verified} verified`,
+    message: lines.join('\n'),
+  };
 }
 
 async function repairVerified(id) {

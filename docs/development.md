@@ -114,6 +114,9 @@ the authoritative list rather than assuming every available scenario runs in CI.
   Do not make the pure catalogue helpers import the matcher orchestration again.
 - Cache reuse must remain visible to the current scan result and preserve older
   receipts. Cover file, policy, and recorded-series changes when updating keys.
+  A receipt references the original proof and must not appear as a fresh Activity
+  verification. Read the series context once for key creation and classification;
+  unavailable data is distinct from a known empty series list.
 - Cover the meaningful failure and restart cases when changing a workflow that
   has external effects. Preserve the evidence needed for reconciliation.
 - Update the corresponding guide and design status when behavior changes.

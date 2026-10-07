@@ -119,12 +119,14 @@ def test_bindery_series_names_reads_series_read_only(tmp_path, monkeypatch):
 
     assert bindery_series_names(7) == ["The Hardy Boys", "Hardy Boys Digest"]
     assert bindery_series_names(99) == []
+    assert series_titles.bindery_series_context(99) == []
     assert bindery_series_names(None) == []
 
 
 def test_bindery_series_names_is_empty_when_bindery_db_is_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "bindery_db", str(tmp_path / "missing.db"))
     assert series_titles.bindery_series_names(7) == []
+    assert series_titles.bindery_series_context(7) is None
 
 
 # --- series tags in the file's own title -------------------------------------

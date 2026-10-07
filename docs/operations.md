@@ -8,13 +8,19 @@ in a separate directory. See [installation](getting-started.md) for paths.
 
 After an identity-rule update, run a BookGuard library scan and content
 verification to refresh the review evidence. A library scan alone does not
-replace saved content-verification records. Verification version 27 invalidates
+replace saved content-verification records. Verification version 28 invalidates
 older proof keys and includes matching settings and recorded ebook series in
 the key. Later unchanged scans can reuse proof while recording it against the
-new scan result; historical receipts remain available.
+new scan result; historical receipts remain available and point to the original
+proof. Activity shows actual verification runs rather than each reuse receipt.
+If Bindery's series data is unavailable, ebook verification is postponed;
+retry when the catalogue is readable. In a verification job only the affected
+books are postponed: the job continues, and Review shows how many were
+postponed and why (for example "Complete: 40 verified, 2 postponed"). An outage does not replace existing proof with records keyed
+to an empty series list.
 
 Run **Review → Unmatched → Check now** to refresh unmatched decisions. Check
-version 7 inspects every discovered audio track and preserves volume/part
+version 8 inspects every discovered audio track and preserves volume/part
 conflicts. Attach also rechecks the complete unit before calling Bindery.
 BookGuard's checks do not change Bindery's own automatic reconciliation rules;
 correcting those rules is a separate upstream task.

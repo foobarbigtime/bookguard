@@ -9,8 +9,70 @@ from .config import settings
 
 STOPWORDS = {
     "the", "a", "an", "and", "of", "to", "in", "on", "for", "with",
-    "book", "volume", "vol", "part", "edition", "unabridged", "audiobook",
+    "book", "bk", "volume", "vol", "part", "edition", "unabridged", "audiobook",
 }
+
+_SMALL_NUMBERS = dict(zip(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split(),
+    range(20),
+))
+_TENS = dict(zip("twenty thirty forty fifty sixty seventy eighty ninety".split(), range(20, 100, 10)))
+_NUMBER_WORDS = "|".join([*_SMALL_NUMBERS, *_TENS, "hundred", "thousand", "and"])
+NUMBER_LABEL = rf"(?:\d+(?:\.\d+)?|[ivxlcdm]+|(?:{_NUMBER_WORDS})(?:[ -]+(?:{_NUMBER_WORDS}))*)"
+_TITLE_DESIGNATION = re.compile(
+    rf"\b(part|volume|vol|book|bk)\.?\s*#?\s*({NUMBER_LABEL})(?=\s*[)\]]?\s*$)", re.IGNORECASE,
+)
+
+
+def number_label(value: str) -> str:
+    """Canonical digits for numeric, Roman, and English cardinal labels."""
+    value = value.strip().lower()
+    if re.fullmatch(r"\d+(?:\.\d+)?", value):
+        whole, dot, fraction = value.partition(".")
+        fraction = fraction.rstrip("0")
+        return str(int(whole)) + (dot + fraction if fraction else "")
+    if value and re.fullmatch(r"m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})", value):
+        roman = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
+        return str(sum(-roman[c] if i + 1 < len(value) and roman[c] < roman[value[i + 1]] else roman[c]
+                       for i, c in enumerate(value)))
+    words = value.replace("-", " ").split()
+    if not words or words[0] == "and" or words[-1] == "and":
+        return ""
+    def small(parts: list[str]) -> int | None:
+        hundreds = 0
+        if len(parts) >= 2 and parts[1] == "hundred" and 1 <= _SMALL_NUMBERS.get(parts[0], 0) <= 9:
+            hundreds = _SMALL_NUMBERS[parts[0]] * 100
+            parts = parts[2:]
+            if parts[:1] == ["and"]:
+                parts = parts[1:]
+        if not parts:
+            return hundreds
+        if len(parts) == 1 and parts[0] in {**_SMALL_NUMBERS, **_TENS}:
+            return hundreds + {**_SMALL_NUMBERS, **_TENS}[parts[0]]
+        if len(parts) == 2 and parts[0] in _TENS and 1 <= _SMALL_NUMBERS.get(parts[1], 0) <= 9:
+            return hundreds + _TENS[parts[0]] + _SMALL_NUMBERS[parts[1]]
+        return None
+
+    if words.count("thousand") == 1:
+        index = words.index("thousand")
+        thousands = small(words[:index])
+        remainder = words[index + 1:]
+        if remainder[:1] == ["and"]:
+            remainder = remainder[1:]
+        rest = small(remainder)
+        return str(thousands * 1000 + rest) if thousands and rest is not None else ""
+    number = small(words)
+    return str(number) if number is not None else ""
+
+
+def canonical_title_designations(title: str | None) -> str:
+    """Normalize division labels without converting number words in work titles."""
+    def replace(match: re.Match) -> str:
+        number = number_label(match.group(2))
+        label = "Book" if match.group(1).lower() == "bk" else match.group(1)
+        return f"{label} {number}" if number else match.group(0)
+
+    return _TITLE_DESIGNATION.sub(replace, title or "")
 
 
 def normalize(value: str | None) -> str:
@@ -53,8 +115,8 @@ def _conflicting_title_number(expected: str, observed: str) -> bool:
 
 
 def title_match(expected: str, metadata_text: str) -> bool:
-    e = normalize(expected)
-    m = normalize(metadata_text)
+    e = normalize(canonical_title_designations(expected))
+    m = normalize(canonical_title_designations(metadata_text))
     if not e or not m:
         return False
     if e == m:
@@ -84,5 +146,5 @@ def title_match(expected: str, metadata_text: str) -> bool:
 
 def title_number_conflict(expected: str, observed: str) -> bool:
     """Explicit volume numbers cannot be discarded by catalogue normalization."""
-    e, o = normalize(expected), normalize(observed)
+    e, o = normalize(canonical_title_designations(expected)), normalize(canonical_title_designations(observed))
     return _conflicting_title_number(e, o) or _conflicting_title_number(o, e)

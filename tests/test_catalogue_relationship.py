@@ -132,6 +132,7 @@ class _Extracted:
 
 
 def test_library_verification_records_the_relationship(library, tmp_path, monkeypatch):
+    monkeypatch.setattr(verifier, "bindery_series_context", lambda _id: [])
     config = tmp_path / "config"
     config.mkdir()
     monkeypatch.setattr(settings, "config_dir", str(config))

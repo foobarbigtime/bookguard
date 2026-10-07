@@ -63,6 +63,7 @@ def test_audiobook_verification_persists_unified_evidence(monkeypatch, tmp_path)
 
 
 def test_ebook_directory_of_audio_is_recorded_as_wrong_media_type(monkeypatch, tmp_path):
+    monkeypatch.setattr(verifier, "bindery_series_context", lambda _id: [])
     original = settings.config_dir
     settings.config_dir = str(tmp_path / "config")
     init_local_db()

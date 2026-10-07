@@ -6,6 +6,7 @@ from typing import Iterable
 
 from .config import settings
 from .title_matching import (
+    NUMBER_LABEL,
     meaningful_words,
     normalize,
     title_match as title_match,
@@ -14,7 +15,8 @@ from .title_matching import (
 
 
 GENERIC_AUDIO_TITLES = re.compile(
-    r"^(?:chapter|track|disc|disk|cd|part|section|file)\s*[\divxlc\-_.]*$|^\d+$",
+    rf"^(?:(?:chapter|track|disc|disk|cd|part|section|file)\s*(?:{NUMBER_LABEL}|[\divxlc\-_.]*)"
+    r"|\d+|prologue|epilogue|preface|foreword|afterword|introduction|opening credits|closing credits)$",
     flags=re.IGNORECASE,
 )
 
@@ -136,13 +138,16 @@ def _sample_work_title(sample: dict) -> str:
 
 
 def _sample_author(sample: dict) -> str:
-    return str(
-        sample.get("author")
-        or sample.get("album_artist")
-        or sample.get("artist")
-        or sample.get("composer")
-        or ""
-    ).strip()
+    placeholders = {"unknown", "unknown author", "author", "authors", "author s",
+                    "various", "various artists", "anonymous", "va", "none", "null", "n a"}
+    for field in ("author", "album_artist", "artist", "composer"):
+        credit = str(sample.get(field) or "").strip()
+        key = normalize(credit)
+        # A credit needs at least one name-like word: "-", "?" or "1" are
+        # uploader placeholders and must not hide a real credit in a later field.
+        if key and key not in placeholders and any(len(w) >= 2 and w.isalpha() for w in key.split()):
+            return credit
+    return ""
 
 
 def audio_work_identity(sample: dict) -> tuple[str, str]:

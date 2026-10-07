@@ -86,15 +86,33 @@ fingerprint, expected book, verifier version, and verification/matching policy;
 a result suffix gives each scan result its own receipt. Reusing unchanged
 evidence writes a receipt for the current result without moving the old scan's
 record. Review and summaries can therefore find the proof by current result or
-scan ID. Recorded ebook series names are part of the policy key. Inconclusive
-scanner failures are not reused as conclusive evidence.
+scan ID. Receipts carry the original verification ID and timestamp; Activity
+shows actual verifications, excluding reuse receipts before applying feed
+limits. Receipts remain stored with scan history; there is no automatic history
+retention policy. Recorded ebook series names are part of the policy key and
+are read once per verification, then used for both the key and classification.
+An unavailable catalogue postpones ebook verification for that book (a batch
+job continues and counts it as postponed); it does not mean a known empty
+series list. Inconclusive scanner failures are not reused as
+conclusive evidence.
 
 Unmatched adoption checks identity across every discovered audio file, using
-the same whole-set analysis as audiobook verification. Generic chapter tags
-do not prove another work; conflicting informative titles or authors block
-adoption. Original volume and part designations are checked before shortened
-title keys are allowed to select a catalogue entry. Attach repeats these checks
-at its mutation boundary.
+the shared whole-set title analyser. Unmatched applies an additional conservative
+credit check: each track’s selected informative credit must support the expected author, whereas
+audiobook verification can accept other author evidence when Artist names a
+narrator. Placeholder credits ("Unknown", "None", "-", "1") are skipped in favour of the
+next credit field.
+Generic chapter labels, including Prologue and Chapter One, do not prove another
+work. Original volume and part designations are checked before shortened title
+keys select an entry. Numeric, Roman, and English cardinal division labels are
+equivalent (Part Five / Part V / Part 5). A bracketed `(Book N)` label is a series
+position; `: Book N`, bare Part/Volume labels, and ambiguous named Part labels
+remain work distinctions, as does a label with a total (`Volume One of Two`).
+`(Book N of Series)` in brackets is a series position when N is a number
+(`1`, `One`, `IV`); `(Book First)` or `(Book Deluxe)` is an unknown division. Unknown division labels
+(`Part Million`) require manual review; phrases that only begin with a label
+(`Book Club Edition`, `Part of the … Series`) are not divisions.
+Attach repeats these checks and reports changes to files, catalogue, or rules.
 
 ## The automation boundaries
 
