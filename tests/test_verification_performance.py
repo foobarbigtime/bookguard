@@ -131,6 +131,29 @@ def test_cached_audio_proof_gets_a_current_scan_receipt(env, monkeypatch):
     assert calls == [str(source)]
 
 
+def test_newer_inconclusive_check_does_not_fall_back_to_an_older_cached_proof(env, monkeypatch):
+    result, _source = env
+    result = {**result, "format": "audiobook"}
+    calls = []
+    monkeypatch.setattr(verifier, "media_set_fingerprint", lambda path: "audio:unchanged")
+
+    def evidence(row, target):
+        calls.append(row["id"])
+        return {"verdict": "VERIFIED_CORRECT" if len(calls) == 1 else "INSUFFICIENT_EVIDENCE",
+                "confidence": 95 if len(calls) == 1 else 0, "source": "audiobook-evidence",
+                "evidence": {} if len(calls) == 1 else {"malwareScanInconclusive": True}}
+
+    monkeypatch.setattr(verifier, "build_audiobook_evidence", evidence)
+    verifier.verify_result(result)
+    verifier.verify_result({**result, "id": 2, "scan_id": "scan-2"}, force=True)
+
+    current = verifier.verify_result({**result, "id": 3, "scan_id": "scan-3"})
+
+    assert current["cached"] is False
+    assert current["verdict"] == "INSUFFICIENT_EVIDENCE"
+    assert calls == [1, 2, 3]
+
+
 @pytest.mark.parametrize("attribute, value", [
     ("title_min_shared_words", 99),
     ("allow_author_surname_match", False),
