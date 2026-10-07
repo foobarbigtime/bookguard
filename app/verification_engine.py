@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from .matcher import author_match_strict, author_mentioned_in_text, meaningful_words, normalize
-from .series_titles import expected_title_variants
+from .series_titles import ebook_title_conflict, expected_title_variants
 from .verification_constants import FRONT_TEXT_CHARS
 
 PROXIMITY_CHARS = 3_000
@@ -193,6 +193,16 @@ def _classify_identity_base(
         "notes": notes,
     }
 
+    if ebook_title_conflict(expected_title, embedded_title):
+        evidence["metadata_matches_expected"] = False
+        evidence["reasonCode"] = "TITLE_DESIGNATION_CONFLICT"
+        evidence["explanation"] = (
+            "The original catalogue and embedded titles disagree on a volume number "
+            "or on whether this is one part of a work. Series-free title evidence "
+            "cannot resolve that distinction."
+        )
+        return "INSUFFICIENT_EVIDENCE", 60, evidence
+
     if metadata_matches_expected and expected["strong_identity"]:
         evidence["explanation"] = (
             "Embedded metadata matches the expected book and front-of-book content "
@@ -267,6 +277,8 @@ def _looks_collection_like(title: str) -> bool:
 def _metadata_title_matches(evidence: dict, title: str) -> bool:
     """Does the file's own title (or a series-free variant) match ``title``?"""
     embedded = evidence.get("embedded", {})
+    if ebook_title_conflict(title, str(embedded.get("title") or "")):
+        return False
     candidates = [str(embedded.get("title") or ""), *embedded.get("titleVariants", [])]
     targets = expected_title_variants(title) or [title]
     return any(
