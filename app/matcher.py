@@ -44,6 +44,31 @@ def _strict_title_equivalent(expected: str, observed: str) -> bool:
     return bool(ew) and ew == ow
 
 
+def _conflicting_title_number(expected: str, observed: str) -> bool:
+    """A number after the same title words identifies a different volume.
+
+    Extra chapter/CD numbers are allowed, but cannot supply a missing book
+    number: "NYPD Red 2 - Part 5" must not support "NYPD Red 5".
+    """
+    ew = [word for word in expected.split() if word not in STOPWORDS]
+    mw = [word for word in observed.split() if word not in STOPWORDS]
+    for index, number in enumerate(ew):
+        if not number.isdecimal() or index == 0:
+            continue
+        prefix = ew[max(0, index - 3):index]
+        if any(word.isdecimal() for word in prefix):
+            continue
+        for position in range(len(prefix), len(mw)):
+            candidate = mw[position]
+            if (
+                candidate.isdecimal()
+                and mw[position - len(prefix):position] == prefix
+                and int(candidate) != int(number)
+            ):
+                return True
+    return False
+
+
 def title_match(expected: str, metadata_text: str) -> bool:
     e = normalize(expected)
     m = normalize(metadata_text)
@@ -51,6 +76,8 @@ def title_match(expected: str, metadata_text: str) -> bool:
         return False
     if e == m:
         return True
+    if _conflicting_title_number(e, m):
+        return False
     if len(e) >= 6 and f" {e} " in f" {m} ":
         return True
 

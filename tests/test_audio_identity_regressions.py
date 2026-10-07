@@ -13,6 +13,8 @@ from app.matcher import classify_audio, classify_ebook, title_match
         ("NYPD Red 5", "NYPD Red 2"),
         ("NYPD Red 3", "NYPD Red 4"),
         ("NYPD Red, Book 5", "NYPD Red, Book 2"),
+        ("NYPD Red 5", "NYPD Red 2 - Part 5"),
+        ("NYPD Red, Book 5", "NYPD Red, Book 2 - CD 5"),
         ("All-American Expedition", "All-American Murder"),
         ("All-American Expedition", "All-American Murder - The Rise and Fall of Aaron Hernandez"),
     ],
