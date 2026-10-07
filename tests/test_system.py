@@ -195,6 +195,8 @@ def test_schedule_settings_are_validated():
 
 
 def test_system_page_shows_health_tasks_and_about(system, monkeypatch):
+    # Keep the fixture's virus definitions current regardless of the run date.
+    monkeypatch.setattr(scheduler, "local_now", lambda: NOW)
     monkeypatch.setattr("app.routes.pages._malware_report", lambda: scanner_up())
     monkeypatch.setattr(settings, "watch_imports", True)
     app = FastAPI()

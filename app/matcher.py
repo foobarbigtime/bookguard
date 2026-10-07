@@ -44,6 +44,31 @@ def _strict_title_equivalent(expected: str, observed: str) -> bool:
     return bool(ew) and ew == ow
 
 
+def _conflicting_title_number(expected: str, observed: str) -> bool:
+    """A number after the same title words identifies a different volume.
+
+    Extra chapter/CD numbers are allowed, but cannot supply a missing book
+    number: "NYPD Red 2 - Part 5" must not support "NYPD Red 5".
+    """
+    ew = [word for word in expected.split() if word not in STOPWORDS]
+    mw = [word for word in observed.split() if word not in STOPWORDS]
+    for index, number in enumerate(ew):
+        if not number.isdecimal() or index == 0:
+            continue
+        prefix = ew[max(0, index - 3):index]
+        if any(word.isdecimal() for word in prefix):
+            continue
+        for position in range(len(prefix), len(mw)):
+            candidate = mw[position]
+            if (
+                candidate.isdecimal()
+                and mw[position - len(prefix):position] == prefix
+                and int(candidate) != int(number)
+            ):
+                return True
+    return False
+
+
 def title_match(expected: str, metadata_text: str) -> bool:
     e = normalize(expected)
     m = normalize(metadata_text)
@@ -51,6 +76,8 @@ def title_match(expected: str, metadata_text: str) -> bool:
         return False
     if e == m:
         return True
+    if _conflicting_title_number(e, m):
+        return False
     if len(e) >= 6 and f" {e} " in f" {m} ":
         return True
 
@@ -63,9 +90,11 @@ def title_match(expected: str, metadata_text: str) -> bool:
     if ew and ew == mw:
         return True
 
-    shared = ew & mw
     minimum = settings.title_min_shared_words
-    if len(ew) >= minimum and len(shared) >= minimum:
+    # Shared series words are not an identity: "NYPD Red 5" is not
+    # "NYPD Red 2", and "All-American Expedition" is not "All-American
+    # Murder". Every meaningful expected word (including numbers) must occur.
+    if len(ew) >= minimum and ew.issubset(mw):
         return True
     return False
 
@@ -166,7 +195,7 @@ def genre_is_music(genre: str | None) -> bool:
 
 def _sample_work_title(sample: dict) -> str:
     album = str(sample.get("album") or "").strip()
-    if album:
+    if album and not GENERIC_AUDIO_TITLES.match(album):
         return album
     title = str(sample.get("title") or "").strip()
     if not title or GENERIC_AUDIO_TITLES.match(title):
@@ -190,7 +219,10 @@ def catalogue_member_title_match(expected: str, observed: str) -> bool:
         return True
     expected_normalized = normalize(expected)
     observed_normalized = normalize(observed)
-    if not expected_normalized or len(observed_normalized) < 4:
+    # Reverse containment is only evidence for an explicitly listed collection,
+    # not for shorter, different titles ("Cross" inside "Cross Justice").
+    collection = re.search(r"\b(?:collection|box set|books)\b", expected_normalized) or " / " in expected
+    if not collection or not expected_normalized or len(observed_normalized) < 4:
         return False
     return f" {observed_normalized} " in f" {expected_normalized} "
 
@@ -222,10 +254,7 @@ def analyze_audio_identity_set(
     for probe in readable:
         title = _sample_work_title(probe)
         author = _sample_author(probe)
-        title_supported = bool(title and (
-            catalogue_member_title_match(expected_title, title)
-            or _strict_title_equivalent(expected_title, _audio_main_title(title))
-        ))
+        title_supported = bool(title and audio_title_supported(expected_title, {"album": title}))
         author_supported = bool(author and author_match(expected_author, author))
 
         if title:
@@ -346,17 +375,31 @@ def audio_title_supported(expected: str, sample: dict) -> bool:
     like "Cujo". A generic track title ("Chapter 01", "Track 3") is never
     evidence by itself.
     """
+    # Catalogue series suffixes are not part of the work title. Keep numbered
+    # main titles intact, and only remove a separately delimited designation.
+    from .series_titles import expected_title_variants
+
+    expected_titles = expected_title_variants(expected)
+    bare_series = re.fullmatch(r"(.+?)\s*[:]?\s*\([^()]*[a-zA-Z][^()]*\s+\d+\)\s*", expected)
+    if bare_series:
+        expected_titles.append(bare_series.group(1).rstrip(" :"))
+
     album = str(sample.get("album") or "").strip()
     track = str(sample.get("title") or "").strip()
+    if album and GENERIC_AUDIO_TITLES.match(album):
+        album = ""
     if track and GENERIC_AUDIO_TITLES.match(track):
         track = ""
     candidates = [value for value in (album, track, " ".join(filter(None, [album, track]))) if value]
     for value in candidates:
-        if title_match(expected, value):
+        if catalogue_member_title_match(expected, value):
             return True
-        head = _audio_main_title(value)
-        if head and _strict_title_equivalent(expected, head):
-            return True
+        for title in expected_titles:
+            if title_match(title, value):
+                return True
+            head = _audio_main_title(value)
+            if head and _strict_title_equivalent(title, head):
+                return True
     return False
 
 
@@ -372,6 +415,7 @@ def classify_audio(
     any_title = False
     any_author = False
     any_music = False
+    any_pair = False
 
     for sample in readable:
         title_text = " ".join(filter(None, [sample.get("album"), sample.get("title")]))
@@ -386,18 +430,18 @@ def classify_audio(
                 ],
             )
         )
-        any_title = any_title or audio_title_supported(expected_title, sample)
-        any_author = any_author or author_match(expected_author, credits)
+        title_supported = audio_title_supported(expected_title, sample)
         # Some commercial audiobooks tag the narrator as Artist while embedding
         # the author's full name in Album. Accept the full author/alias there,
         # but deliberately do not use surname-only matching in descriptive text.
-        any_author = any_author or author_mentioned_in_text(expected_author, title_text)
+        author_supported = (
+            author_match(expected_author, credits)
+            or author_mentioned_in_text(expected_author, title_text)
+        )
+        any_title = any_title or title_supported
+        any_author = any_author or author_supported
+        any_pair = any_pair or (title_supported and author_supported)
         any_music = any_music or genre_is_music(sample.get("genre"))
-
-    if any_title and any_author:
-        return "PASS", 5, "MATCH", [
-            "Embedded title and author metadata support the Bindery assignment."
-        ]
 
     # A music file can coincidentally share a book title. If it is explicitly
     # music-like and there is no author support, title alone is not enough to
@@ -405,6 +449,20 @@ def classify_audio(
     if settings.reject_music_mismatch and any_music and not any_author:
         return "REJECT", 100, "MUSIC_MISMATCH", [
             "Metadata looks like music and does not match the expected author; a title-only coincidence is not treated as audiobook evidence."
+        ]
+
+    whole_set = analyze_audio_identity_set(expected_title, expected_author, readable)
+    if whole_set["mixedContent"]:
+        return "REVIEW", 80, "MIXED_AUDIO_CONTENT", [
+            "Readable audio files identify multiple works that do not all match the Bindery assignment."
+        ]
+    if any_title and any_author:
+        if whole_set["hasEmbeddedContradiction"] or not any_pair:
+            return "REVIEW", 65, "CONFLICTING_AUDIO_IDENTITY", [
+                "Audio metadata has conflicting work titles or only supports the expected title and author in different files."
+            ]
+        return "PASS", 5, "MATCH", [
+            "Embedded title and author metadata support the Bindery assignment."
         ]
 
     if (

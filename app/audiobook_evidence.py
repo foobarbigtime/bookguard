@@ -176,7 +176,7 @@ def build_audiobook_evidence(result: dict[str, Any], path: str) -> dict[str, Any
     identity_classification, risk_score, reason_code, reasons = classify_audio(
         expected_title,
         expected_author,
-        samples,
+        probes,
     )
 
     technical_summary = {
