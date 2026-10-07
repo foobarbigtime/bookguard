@@ -15,8 +15,8 @@ new scan result; historical receipts remain available and point to the original
 proof. Activity shows actual verification runs rather than each reuse receipt.
 If Bindery's series data is unavailable, ebook verification is postponed;
 retry when the catalogue is readable. In a verification job only the affected
-books are postponed: the job continues, and its status reports how many were
-postponed and why. An outage does not replace existing proof with records keyed
+books are postponed: the job continues, and Review shows how many were
+postponed and why (for example "Complete: 40 verified, 2 postponed"). An outage does not replace existing proof with records keyed
 to an empty series list.
 
 Run **Review → Unmatched → Check now** to refresh unmatched decisions. Check
