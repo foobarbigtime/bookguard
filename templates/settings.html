@@ -74,7 +74,7 @@
       <section class="settings-section">
         <div class="settings-section-title"><h3>Matching</h3><p>These settings affect future classifications. Existing scan results are not rewritten.</p></div>
         <div class="form-grid">
-          <label class="field"><span>Minimum shared title words</span><input name="title_min_shared_words" type="number" min="1" max="5" value="{{ settings.title_min_shared_words }}"><small>Default 2. Lower values are more permissive.</small></label>
+          <label class="field"><span>Minimum shared title words</span><input name="title_min_shared_words" type="number" min="1" max="5" value="{{ settings.title_min_shared_words }}"><small>Default 2. All meaningful title words, including book numbers, must match; this minimum controls word-order variations.</small></label>
           <div class="field checks-stack"><span>Author matching</span><label class="check-field"><input name="allow_author_surname_match" type="checkbox" {% if settings.allow_author_surname_match %}checked{% endif %}><span>Allow surname-only author matches</span></label></div>
           <label class="field span-2"><span>Author aliases / pen names</span><textarea name="author_aliases" rows="6">{{ settings.author_aliases|join('\n') }}</textarea><small>One group per line: <code>Canonical Name = Alias One | Alias Two</code>.</small></label>
           <div class="field checks-stack span-2 option-panel"><span>Strong semantic mismatch</span><label class="check-field"><input name="reject_strong_mismatch" type="checkbox" {% if settings.reject_strong_mismatch %}checked{% endif %}><span>Promote confident wrong spoken-word imports to REJECT</span></label></div>

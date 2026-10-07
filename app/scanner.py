@@ -157,7 +157,7 @@ def _scan_one(row: dict, audiobook_progress=None) -> dict:
         summary = audio_metadata_summary(samples)
         language = _audiobook_language_from_probes(probes, settings.sample_files)
         classification, score, reason_code, reasons = classify_audio(
-            row["title"], row["author"], samples
+            row["title"], row["author"], probes
         )
         base.update(
             classification=classification,
