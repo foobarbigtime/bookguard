@@ -9,7 +9,7 @@ from .config import settings
 
 STOPWORDS = {
     "the", "a", "an", "and", "of", "to", "in", "on", "for", "with",
-    "book", "volume", "vol", "part", "edition", "unabridged", "audiobook",
+    "book", "bk", "volume", "vol", "part", "edition", "unabridged", "audiobook",
 }
 
 _SMALL_NUMBERS = dict(zip(
@@ -69,7 +69,8 @@ def canonical_title_designations(title: str | None) -> str:
     """Normalize division labels without converting number words in work titles."""
     def replace(match: re.Match) -> str:
         number = number_label(match.group(2))
-        return f"{match.group(1)} {number}" if number else match.group(0)
+        label = "Book" if match.group(1).lower() == "bk" else match.group(1)
+        return f"{label} {number}" if number else match.group(0)
 
     return _TITLE_DESIGNATION.sub(replace, title or "")
 

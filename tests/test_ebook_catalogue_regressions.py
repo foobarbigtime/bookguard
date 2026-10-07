@@ -150,3 +150,21 @@ def test_volume_of_total_labels_are_equivalent():
     from app.series_titles import ebook_title_conflict
     assert not ebook_title_conflict("Lights Out: Volume 1 of 2", "Lights Out: Volume One of Two")
     assert ebook_title_conflict("Lights Out: Volume 1 of 2", "Lights Out: Volume Two of Two")
+
+
+@pytest.mark.parametrize("catalogue,embedded", [
+    ("Lights Out: Bk One", "Lights Out: Book 1"),
+    ("Lights Out: Bk. 3", "Lights Out: Book Three"),
+    ("Lights Out: Bk 2", "Lights Out: Bk Two"),
+])
+def test_bk_and_book_labels_are_the_same_division(catalogue, embedded):
+    from app.series_titles import ebook_title_conflict, ebook_title_match
+    from app.title_matching import title_match
+    assert not ebook_title_conflict(catalogue, embedded)
+    assert title_match(catalogue, embedded)
+    assert ebook_title_match(catalogue, embedded)
+
+
+def test_bk_label_with_a_different_number_still_conflicts():
+    from app.series_titles import ebook_title_conflict
+    assert ebook_title_conflict("Lights Out: Bk One", "Lights Out: Book 2")
