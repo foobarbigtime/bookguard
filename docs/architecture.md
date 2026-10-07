@@ -106,7 +106,10 @@ work. Original volume and part designations are checked before shortened title
 keys select an entry. Numeric, Roman, and English cardinal division labels are
 equivalent (Part Five / Part V / Part 5). A bracketed `(Book N)` label is a series
 position; `: Book N`, bare Part/Volume labels, and ambiguous named Part labels
-remain work distinctions. Unknown division labels require manual review.
+remain work distinctions, as does a label with a total (`Volume One of Two`).
+`(Book N of Series)` in brackets is a series position. Unknown division labels
+(`Part Million`) require manual review; phrases that only begin with a label
+(`Book Club Edition`, `Part of the … Series`) are not divisions.
 Attach repeats these checks and reports changes to files, catalogue, or rules.
 
 ## The automation boundaries

@@ -47,10 +47,19 @@ _BARE_DIVISION = re.compile(rf"(part|volume|vol|book|bk)\.?\s*#?\s*({NUMBER_LABE
 
 
 def _bracketed_book_label(title: str, tail: str) -> bool:
-    """'(Book N)' is a series position; ': Book N' remains a work division."""
+    """'(Book N)' and '(Book N of Series)' are series positions; ': Book N' remains a work division."""
     return bool(title.rstrip().endswith((")", "]")) and re.fullmatch(
-        rf"(?:book|bk)\.?\s*#?\s*{NUMBER_LABEL}", tail, re.IGNORECASE,
-    ))
+        r"(?:book|bk)\.?\s*#?\s*\S+(?:\s+of\s+.+)?", tail, re.IGNORECASE,
+    ) and not re.fullmatch(r"(?:book|bk)\.?\s+(?:of|the|a|an|and|club)\b.*", tail, re.IGNORECASE))
+
+
+# A division label names one position: "Part Million", "Volume One of Two".
+# Words that only start with a label are not divisions: "Book Club Edition",
+# "Part of the Black Book Series".
+_UNKNOWN_DIVISION = re.compile(
+    r"(?P<label>part|volume|vol|book|bk)\.?\s+(?P<position>\S+)(?:\s+of\s+.+)?", re.IGNORECASE,
+)
+_NOT_A_POSITION = {"of", "the", "a", "an", "and", "club"}
 
 
 def _without_article(normalized: str) -> str:
@@ -136,9 +145,14 @@ def _work_division(title: str) -> str:
     if trailing:
         # An unrecognised label is still a division, not permission to attach
         # the whole work. Leave equivalence of such labels to manual review.
-        unknown = re.fullmatch(r"(part|volume|vol|book|bk)\.?\s+(.+)", trailing.group("tail").strip(), re.IGNORECASE)
-        if unknown:
-            return normalize(unknown.group(1)).replace("volume", "vol").replace("bk", "book") + " " + normalize(unknown.group(2))
+        tail = trailing.group("tail").strip()
+        unknown = _UNKNOWN_DIVISION.fullmatch(tail)
+        if unknown and normalize(unknown.group("position")) not in _NOT_A_POSITION:
+            if _bracketed_book_label(title, tail):
+                return ""
+            position = unknown.group("position")
+            return (normalize(unknown.group("label")).replace("volume", "vol").replace("bk", "book")
+                    + " " + (number_label(position) or normalize(position)))
     return ""
 
 

@@ -774,3 +774,28 @@ def test_placeholder_credit_falls_through_to_the_matching_author(lib, monkeypatc
     outcome = unmatched.check_item(item, lib["library"], None)
 
     assert (outcome["verdict"], outcome["bookId"]) == ("BELONGS", 7236)
+
+
+@pytest.mark.parametrize("catalogue", [
+    "Lights Out (Book Club Edition)", "Lights Out (Part of the Black Book Series)",
+    "Lights Out (Book One of the Black Book Series)", "Lights Out: Book Club",
+])
+def test_phrases_that_only_start_with_a_label_are_not_divisions(lib, catalogue):
+    rel = "James Patterson/Lights Out/Lights Out - James Patterson.epub"
+    make_epub(lib["root"] / rel, title="Lights Out", author="James Patterson")
+    library = unmatched.Library([{"id": 7236, "title": catalogue, "author": "James Patterson"}])
+
+    outcome = unmatched.check_item(row(rel), library, None)
+
+    assert (outcome["verdict"], outcome["bookId"]) == ("BELONGS", 7236)
+
+
+@pytest.mark.parametrize("catalogue", [
+    "Lights Out: Volume One of Two", "Lights Out: Book One of the Black Book Series",
+])
+def test_labelled_positions_with_of_remain_divisions(lib, catalogue):
+    rel = "James Patterson/Lights Out/Lights Out - James Patterson.epub"
+    make_epub(lib["root"] / rel, title="Lights Out", author="James Patterson")
+    library = unmatched.Library([{"id": 7236, "title": catalogue, "author": "James Patterson"}])
+
+    assert unmatched.check_item(row(rel), library, None)["verdict"] == "UNSURE"

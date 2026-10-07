@@ -144,3 +144,9 @@ def test_scan_uses_bindery_recorded_series(tmp_path, monkeypatch):
     assert scanner._scan_one(row)["classification"] == "PASS"
     monkeypatch.setattr(settings, "bindery_db", str(tmp_path / "unavailable.db"))
     assert scanner._scan_one(row)["classification"] == "REVIEW"
+
+
+def test_volume_of_total_labels_are_equivalent():
+    from app.series_titles import ebook_title_conflict
+    assert not ebook_title_conflict("Lights Out: Volume 1 of 2", "Lights Out: Volume One of Two")
+    assert ebook_title_conflict("Lights Out: Volume 1 of 2", "Lights Out: Volume Two of Two")
