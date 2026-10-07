@@ -278,6 +278,15 @@ def test_unmatched_still_matches_the_same_work_part():
     assert library.find("Murder House: Part 5", "James Patterson")[0]["id"] == 7401
 
 
+def test_release_annotation_does_not_hide_a_conflicting_series_number():
+    identities = [
+        ("Audio tags", "Never and Forever: The Wizards of Once, Book 4", "Cressida Cowell"),
+        ("Folder names", "Never and Forever (Book 5)", "Cressida Cowell"),
+    ]
+
+    assert unmatched._best_identity(identities, "") is None
+
+
 def test_check_all_then_attach_only_a_proven_file(lib, monkeypatch):
     make_epub(lib["root"] / "James Patterson/Lights Out (2015)/Lights Out - James Patterson.epub",
               title="Lights Out", author="James Patterson")

@@ -46,6 +46,7 @@ from .matcher import analyze_audio_identity_set, audio_work_identity
 from .pdf_probe import probe_pdf
 from .scanner import map_path
 from .series_titles import ebook_title_conflict
+from .title_matching import title_number_conflict
 
 VERDICTS = {
     "JUNK": "Junk",
@@ -580,7 +581,15 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
                 "evidence": evidence}
 
     if audio:
-        agreement = analyze_audio_identity_set(best["title"], best["author"], facts["audio_probes"])
+        # The shared analyser treats every nonempty credit as informative. Here
+        # uploader placeholders ("Author's", "Unknown") already mean no author;
+        # keep that meaning when checking the complete set as well.
+        identity_probes = []
+        for probe in facts["audio_probes"]:
+            _, credit = audio_work_identity(probe)
+            identity_probes.append({**probe, "author": credit if _surname(credit) else "",
+                                    "album_artist": "", "artist": "", "composer": ""})
+        agreement = analyze_audio_identity_set(best["title"], best["author"], identity_probes)
         conflicting = (
             agreement["hasEmbeddedContradiction"]
             or agreement["authorMatchCount"] < agreement["informativeAuthorCount"]
@@ -685,6 +694,29 @@ def _folder_title(item: dict, folder_author: str) -> str:
 SOURCE_RANK = {"ISBN lookup": 3, "Embedded metadata": 2, "Audio tags": 2, "Folder names": 1, "File name": 0}
 
 
+def _source_title_conflict(source: str, title: str, other_source: str, other_title: str) -> bool:
+    """Release names may annotate a named work with its series book number.
+
+    Only name corroboration can ignore a trailing '(Book N)' label. Original
+    explicit number conflicts remain blocking, and catalogue lookup still uses
+    the original titles and work-division guard.
+    """
+    if title_number_conflict(title, other_title):
+        return True
+    book_number = r"\b(?:book|bk)\.?\s*(\d+)\s*[)\]]?\s*$"
+    left = re.search(book_number, title, re.IGNORECASE)
+    right = re.search(book_number, other_title, re.IGNORECASE)
+    if left and right and int(left.group(1)) != int(right.group(1)):
+        return True
+
+    def reading(label: str, value: str) -> str:
+        if label in NAME_SOURCES:
+            return re.sub(r"\s*\((?:book|bk)\.?\s*\d+\)\s*$", "", value, flags=re.IGNORECASE)
+        return value
+
+    return ebook_title_conflict(reading(source, title), reading(other_source, other_title))
+
+
 def _best_identity(identities: list[tuple[str, str, str]], front: str) -> dict | None:
     """The identity most sources agree on, if it is proven.
 
@@ -700,7 +732,7 @@ def _best_identity(identities: list[tuple[str, str, str]], front: str) -> dict |
         if not surname:
             continue
         supporting = [(s, t, k, n) for s, t, _, k, n in read
-                      if k & keys and n in ("", surname) and not ebook_title_conflict(title, t)]
+                      if k & keys and n in ("", surname) and not _source_title_conflict(source, title, s, t)]
         support = {s for s, _, _, _ in supporting}
         if padded and surname in padded.split() and any(f" {key} " in padded for key in keys if len(key) >= 4):
             support.add("Title page")
