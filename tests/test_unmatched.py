@@ -287,6 +287,57 @@ def test_release_annotation_does_not_hide_a_conflicting_series_number():
     assert unmatched._best_identity(identities, "") is None
 
 
+@pytest.mark.parametrize("catalogue", [
+    "Lights Out: Part One", "Lights Out (Part One)", "Lights Out: Part Five",
+    "Lights Out (Volume Three)", "Lights Out: Book Five",
+    "Lights Out: Part Million", "Lights Out: Part First",
+])
+def test_whole_work_never_adopts_into_a_spelled_out_division(lib, catalogue):
+    rel = "James Patterson/Lights Out/Lights Out - James Patterson.epub"
+    make_epub(lib["root"] / rel, title="Lights Out", author="James Patterson")
+    library = unmatched.Library([{"id": 7236, "title": catalogue, "author": "James Patterson"}])
+
+    outcome = unmatched.check_item(row(rel), library, None)
+
+    assert outcome["verdict"] == "UNSURE"
+
+
+@pytest.mark.parametrize("catalogue", ["Lights Out (Book 1)", "Lights Out [Book One]"])
+def test_bracketed_series_position_matches_the_whole_work(lib, catalogue):
+    rel = "James Patterson/Lights Out/Lights Out - James Patterson.epub"
+    make_epub(lib["root"] / rel, title="Lights Out", author="James Patterson")
+    library = unmatched.Library([{"id": 7236, "title": catalogue, "author": "James Patterson"}])
+
+    outcome = unmatched.check_item(row(rel), library, None)
+
+    assert (outcome["verdict"], outcome["bookId"]) == ("BELONGS", 7236)
+
+
+@pytest.mark.parametrize("placeholder", ["Unknown", "Author's", "unknown author"])
+@pytest.mark.parametrize("field", ["album_artist", "artist", "composer"])
+def test_placeholder_credit_never_hides_a_later_conflicting_credit(lib, monkeypatch, placeholder, field):
+    item, _, _ = _complete_recording(lib, monkeypatch, [{}, {
+        "album": "CD 2", "title": "Track 05", "author": placeholder,
+        "album_artist": "Unknown", "artist": "Unknown", "composer": "Unknown",
+        field: "Mark Wayne McGinnis",
+    }])
+
+    assert unmatched.check_item(item, lib["library"], None)["verdict"] == "UNSURE"
+
+
+def test_chapter_labels_do_not_block_or_expand_evidence_for_a_complete_recording(lib, monkeypatch):
+    labels = ["Prologue", "Chapter One", "Chapter Twenty-One", "Epilogue"]
+    item, _, calls = _complete_recording(lib, monkeypatch, [{}] + [
+        {"album": "", "title": title} for title in labels * 75
+    ])
+
+    outcome = unmatched.check_item(item, lib["library"], None)
+
+    assert (outcome["verdict"], outcome["bookId"]) == ("BELONGS", 7236)
+    assert len(calls) == 301
+    assert len([e for e in outcome["evidence"] if e["check"] == "Audio tags"]) == 1
+
+
 def test_check_all_then_attach_only_a_proven_file(lib, monkeypatch):
     make_epub(lib["root"] / "James Patterson/Lights Out (2015)/Lights Out - James Patterson.epub",
               title="Lights Out", author="James Patterson")

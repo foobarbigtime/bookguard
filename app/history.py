@@ -243,7 +243,9 @@ def _verification_events(conn, limit: int) -> list[dict[str, Any]]:
         SELECT id, verdict, confidence, source, author, title, target_path,
                created_at, updated_at
         FROM content_verifications
-        ORDER BY id DESC
+        WHERE CASE WHEN json_valid(evidence_json)
+                   THEN json_type(evidence_json, '$.cacheReuse') END IS NULL
+        ORDER BY updated_at DESC, id DESC
         LIMIT ?
         """,
         (limit,),

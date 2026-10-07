@@ -58,6 +58,35 @@ def test_bare_work_designations_are_not_removed(title):
     assert expected_title_variants(title) == [title]
 
 
+@pytest.mark.parametrize(("title", "embedded"), [
+    ("Lights Out: Part One", "Lights Out"),
+    ("Lights Out: Part Five", "Lights Out: Part Six"),
+    ("Lights Out (Volume Three)", "Lights Out"),
+    ("Lights Out: Book Five", "Lights Out"),
+])
+def test_spelled_out_work_divisions_block_ebook_matches(title, embedded):
+    assert not ebook_title_match(title, embedded)
+    assert not ebook_title_match(embedded, title)
+    assert classify_ebook(title, "James Patterson", {"title": embedded, "author": "James Patterson"})[0] == "REVIEW"
+
+
+@pytest.mark.parametrize(("title", "embedded"), [
+    ("Lights Out: Part Five", "Lights Out: Part 5"),
+    ("Lights Out: Part V", "Lights Out: Part Five"),
+    ("Lights Out (Volume Twenty-One)", "Lights Out (Volume 21)"),
+    ("Lights Out: Part 5.0", "Lights Out: Part 5"),
+    ("Lights Out (Book One)", "Lights Out"),
+])
+def test_equivalent_divisions_and_bracketed_series_positions_match(title, embedded):
+    assert ebook_title_match(title, embedded)
+    assert ebook_title_match(embedded, title)
+
+
+def test_number_word_in_a_real_title_is_not_rewritten():
+    assert expected_title_variants("One Shot") == ["One Shot"]
+    assert not ebook_title_match("One Shot", "1 Shot")
+
+
 def test_ebook_author_support_is_still_required():
     assert classify_ebook("Karen's Big Weekend (Baby-Sitters Little Sister #44)", "Ann M. Martin", {
         "title": "Karen's Big Weekend", "author": "James Patterson",

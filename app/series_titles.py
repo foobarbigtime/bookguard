@@ -27,7 +27,10 @@ import re
 import sqlite3
 from typing import Iterable
 
-from .title_matching import meaningful_words, normalize, title_match, title_number_conflict
+from .title_matching import (
+    NUMBER_LABEL, canonical_title_designations, meaningful_words, normalize,
+    number_label, title_match, title_number_conflict,
+)
 
 _NUMBER = r"\d+(?:\.\d+)?"
 _KEYWORD = r"(?:book|bk|volume|vol|no|number|part)"
@@ -39,8 +42,15 @@ _TRAILING_PART = re.compile(r"^(?P<base>.+?)\s*(?::|\(|\[)\s*(?P<tail>[^:()\[\]]
 _NUMBERED_PREFIX = re.compile(rf"^(?P<series>[^#:]+?)\s+{_NUMBER}\s*[#:]\s*(?P<base>.+)$")
 _LEADING_NUMBER = re.compile(rf"^(?:{_KEYWORD}\s+)?{_NUMBER}\s+")
 _ARTICLES = {"a", "an", "the"}
-_WORK_PART = re.compile(r"\bpart\.?\s*#?\s*(\d+(?:\.\d+)?|[ivxlcdm]+)\s*[)\]]?\s*$", re.IGNORECASE)
-_BARE_DIVISION = re.compile(r"(part|volume|vol|book|bk)\.?\s*#?\s*(\d+(?:\.\d+)?|[ivxlcdm]+)", re.IGNORECASE)
+_WORK_PART = re.compile(rf"\bpart\.?\s*#?\s*({NUMBER_LABEL})\s*[)\]]?\s*$", re.IGNORECASE)
+_BARE_DIVISION = re.compile(rf"(part|volume|vol|book|bk)\.?\s*#?\s*({NUMBER_LABEL})", re.IGNORECASE)
+
+
+def _bracketed_book_label(title: str, tail: str) -> bool:
+    """'(Book N)' is a series position; ': Book N' remains a work division."""
+    return bool(title.rstrip().endswith((")", "]")) and re.fullmatch(
+        rf"(?:book|bk)\.?\s*#?\s*{NUMBER_LABEL}", tail, re.IGNORECASE,
+    ))
 
 
 def _without_article(normalized: str) -> str:
@@ -71,11 +81,12 @@ def _usable(base: str, full: str, series_keys: list[str]) -> bool:
 
 def expected_title_variants(title: str, series_names: Iterable[str] = ()) -> list[str]:
     """Return the full title first, then any unambiguous series-free titles."""
-    full = str(title or "").strip()
+    original = str(title or "").strip()
+    full = canonical_title_designations(original)
     if not full:
         return []
     keys = _series_keys(series_names)
-    variants = [full]
+    variants = list(dict.fromkeys([original, full]))
 
     def add(candidate: str) -> None:
         candidate = candidate.strip(" -\u2013\u2014:;,#")
@@ -93,7 +104,7 @@ def expected_title_variants(title: str, series_names: Iterable[str] = ()) -> lis
         # "Volume 3" distinguishes the work itself and must never disappear.
         numbered_series = designation and meaningful_words(tail[:designation.start()])
         if not _WORK_PART.search(full) and (
-            numbered_series or (tail_key and tail_key in keys)
+            numbered_series or _bracketed_book_label(full, tail) or (tail_key and tail_key in keys)
         ):
             add(trailing.group("base"))
 
@@ -112,13 +123,22 @@ def expected_title_variants(title: str, series_names: Iterable[str] = ()) -> lis
 
 
 def _work_division(title: str) -> str:
+    title = canonical_title_designations(title)
     part = _WORK_PART.search(title)
     if part:
-        return "part " + normalize(part.group(1))
+        return "part " + number_label(part.group(1))
     trailing = _TRAILING_PART.match(title)
     division = _BARE_DIVISION.fullmatch(trailing.group("tail").strip()) if trailing else None
     if division:
-        return normalize(division.group(1)).replace("volume", "vol") + " " + normalize(division.group(2))
+        if _bracketed_book_label(title, trailing.group("tail").strip()):
+            return ""
+        return normalize(division.group(1)).replace("volume", "vol").replace("bk", "book") + " " + number_label(division.group(2))
+    if trailing:
+        # An unrecognised label is still a division, not permission to attach
+        # the whole work. Leave equivalence of such labels to manual review.
+        unknown = re.fullmatch(r"(part|volume|vol|book|bk)\.?\s+(.+)", trailing.group("tail").strip(), re.IGNORECASE)
+        if unknown:
+            return normalize(unknown.group(1)).replace("volume", "vol").replace("bk", "book") + " " + normalize(unknown.group(2))
     return ""
 
 
@@ -126,7 +146,7 @@ def ebook_title_conflict(expected: str, observed: str) -> bool:
     """Keep explicit volume conflicts and a part/full-work distinction visible."""
     if not expected or not observed:
         return False
-    return title_number_conflict(expected, observed) or _work_division(expected) != _work_division(observed)
+    return title_number_conflict(canonical_title_designations(expected), canonical_title_designations(observed)) or _work_division(expected) != _work_division(observed)
 
 
 def ebook_title_match(expected: str, observed: str, series_names: Iterable[str] = ()) -> bool:
@@ -141,8 +161,8 @@ def ebook_title_match(expected: str, observed: str, series_names: Iterable[str] 
     )
 
 
-def bindery_series_names(book_id: int | None) -> list[str]:
-    """Series titles Bindery records for one book, read-only; [] if unavailable."""
+def bindery_series_context(book_id: int | None) -> list[str] | None:
+    """Recorded series, distinguishing a known empty list from unavailable data."""
     if not book_id:
         return []
     # Imported here so the pure title helpers stay usable without a database.
@@ -161,5 +181,10 @@ def bindery_series_names(book_id: int | None) -> list[str]:
                 (int(book_id),),
             ).fetchall()
     except (sqlite3.Error, OSError, ValueError):
-        return []
+        return None
     return [str(row["title"]) for row in rows if str(row["title"] or "").strip()]
+
+
+def bindery_series_names(book_id: int | None) -> list[str]:
+    """Best-effort names for scan/display callers; [] if unavailable."""
+    return bindery_series_context(book_id) or []

@@ -39,7 +39,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(verifier, "extract_ebook_identity", lambda path: _Extracted(
         {"title": "Bel Canto", "author": "Ann Patchett"},
         "Bel Canto by Ann Patchett " * 40, [], [], "Bel Canto\nAnn Patchett", "test"))
-    monkeypatch.setattr(verifier, "bindery_series_names", lambda _id: [])
+    monkeypatch.setattr(verifier, "bindery_series_context", lambda _id: [])
     monkeypatch.setattr(verifier, "isbn_evidence", lambda _id, _ids: {})
     source = tmp_path / "Bel Canto - Ann Patchett.txt"
     source.write_text("Bel Canto by Ann Patchett", encoding="utf-8")
@@ -176,12 +176,112 @@ def test_matching_policy_change_does_not_reuse_an_old_verdict(env, snapshot_call
 def test_series_context_change_does_not_reuse_an_old_verdict(env, snapshot_calls, monkeypatch):
     result, _source = env
     verifier.verify_result(result)
-    monkeypatch.setattr(verifier, "bindery_series_names", lambda _id: ["A recorded series"])
+    monkeypatch.setattr(verifier, "bindery_series_context", lambda _id: ["A recorded series"])
 
     again = verifier.verify_result(result)
 
     assert again["cached"] is False
     assert len(snapshot_calls) == 2
+
+
+def test_rescan_receipts_keep_original_proof_without_flooding_activity(env, snapshot_calls):
+    from app.history import operation_history
+    from app.library_review import latest_verifications
+
+    result, _source = env
+    original = verifier.verify_result(result)
+    for n in range(2, 6):
+        receipt = verifier.verify_result({**result, "id": n, "scan_id": f"scan-{n}"})
+        assert receipt["evidence"]["cacheReuse"] == {
+            "verificationId": original["id"], "scanId": original["scan_id"], "verifiedAt": original["updated_at"],
+        }
+        assert latest_verifications([n])[n]["verdict"] == original["verdict"]
+    events = [e for e in operation_history(250)["items"] if e["kind"] == "verification"]
+    assert len(snapshot_calls) == 1
+    assert len(events) == 1
+    with verifier.local_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM content_verifications").fetchone()[0] == 5
+        # Filtering must precede the feed's source limit, even with many receipts.
+        from app.history import _verification_events
+        assert len(_verification_events(conn, 1)) == 1
+
+
+def test_forced_verification_is_still_a_real_activity_event(env, snapshot_calls):
+    from app.history import operation_history
+
+    result, _source = env
+    verifier.verify_result(result)
+    verifier.verify_result({**result, "id": 2, "scan_id": "scan-2"})
+    verifier.verify_result({**result, "id": 2, "scan_id": "scan-2"}, force=True)
+
+    events = [e for e in operation_history(250)["items"] if e["kind"] == "verification"]
+    assert len(snapshot_calls) == 2
+    assert len(events) == 2
+
+
+def test_legacy_cache_chain_resolves_to_original_proof(env):
+    import json
+
+    result, _source = env
+    original = verifier.verify_result(result)
+    second = verifier.verify_result({**result, "id": 2, "scan_id": "scan-2"})
+    third = verifier.verify_result({**result, "id": 3, "scan_id": "scan-3"})
+    # Reproduce the v27 chain format, without its original timestamp.
+    with verifier.local_conn() as conn:
+        for receipt, parent in [(second, original), (third, second)]:
+            evidence = {**receipt["evidence"], "cacheReuse": {
+                "verificationId": parent["id"], "scanId": parent["scan_id"],
+            }}
+            conn.execute("UPDATE content_verifications SET evidence_json=? WHERE id=?",
+                         (json.dumps(evidence), receipt["id"]))
+        conn.commit()
+
+    current = verifier.verify_result({**result, "id": 4, "scan_id": "scan-4"})
+
+    assert current["evidence"]["cacheReuse"] == {
+        "verificationId": original["id"], "scanId": "scan-1", "verifiedAt": original["updated_at"],
+    }
+
+
+def test_series_context_is_loaded_once_and_used_for_both_cache_and_evidence(env, monkeypatch):
+    result, _source = env
+    calls = []
+    classified = []
+    real_classify = verifier.classify_identity
+
+    def context(book_id):
+        calls.append(book_id)
+        return ["Recorded series"]
+
+    def classify(row, *args):
+        classified.append(row["series"])
+        return real_classify(row, *args)
+
+    monkeypatch.setattr(verifier, "bindery_series_context", context)
+    monkeypatch.setattr(verifier, "classify_identity", classify)
+
+    verifier.verify_result(result)
+
+    assert calls == [result["book_id"]]
+    assert classified == [["Recorded series"]]
+
+
+def test_unavailable_catalogue_postpones_verification_without_rekeying_history(env, snapshot_calls, monkeypatch):
+    result, _source = env
+    original = verifier.verify_result(result)
+    monkeypatch.setattr(verifier, "bindery_series_context", lambda _id: None)
+
+    with pytest.raises(verifier.CatalogueUnavailable, match="verification is postponed"):
+        verifier.verify_result({**result, "id": 2, "scan_id": "scan-2"})
+
+    assert verifier.verification_for_result(result) is None
+    assert len(snapshot_calls) == 1
+    with verifier.local_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM content_verifications").fetchone()[0] == 1
+    monkeypatch.setattr(verifier, "bindery_series_context", lambda _id: [])
+    current = verifier.verify_result({**result, "id": 2, "scan_id": "scan-2"})
+    assert current["cached"] is True
+    assert current["evidence"]["cacheReuse"]["verificationId"] == original["id"]
 
 
 def test_forced_check_always_takes_the_full_path(env, snapshot_calls):

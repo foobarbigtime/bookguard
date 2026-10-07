@@ -46,7 +46,7 @@ from .matcher import analyze_audio_identity_set, audio_work_identity
 from .pdf_probe import probe_pdf
 from .scanner import map_path
 from .series_titles import ebook_title_conflict
-from .title_matching import title_number_conflict
+from .title_matching import canonical_title_designations, title_number_conflict
 
 VERDICTS = {
     "JUNK": "Junk",
@@ -213,7 +213,7 @@ def _title_keys(title: str, *, numbered: bool = False) -> set[str]:
     Two titles name the same book when their readings share one. With numbered, also
     without a trailing number ("In the Tall Grass 1"): only for comparing one file's own
     sources, never library titles ("Alpha 2" is not "Alpha")."""
-    raw = str(title or "")
+    raw = canonical_title_designations(str(title or ""))
     forms = {raw, raw.split(":")[0]}
     parts = [p for p in re.split(r"\s+-\s+", raw) if p.strip()]
     if len(parts) >= 2:
@@ -633,6 +633,12 @@ def check_item(item: dict, library: Library, client: BinderyClient | None, ) -> 
                       f"({names}), so BookGuard won't pick one.")
         return {"verdict": "UNSURE", "reason": reason, "evidence": evidence}
     if book is None:
+        related = {int(b["id"]): b for key in _title_keys(title) for b in library.by_title.get(key, [])
+                   if _surname(b["author"]) == _surname(author) and ebook_title_conflict(b["title"], title)}
+        if related:
+            return {"verdict": "UNSURE", "evidence": evidence, "reason": (
+                f"The file identifies “{title}”, but the related catalogue entry has a different "
+                "part or volume designation. Check whether it names a work division or a series position.")}
         # The folder's author has a book by this title: likely a pen name ("Richard Bachman")
         # or a narrator in the author tag. A person should decide.
         alias = next((b for b in library.same_title(title)
@@ -701,6 +707,8 @@ def _source_title_conflict(source: str, title: str, other_source: str, other_tit
     explicit number conflicts remain blocking, and catalogue lookup still uses
     the original titles and work-division guard.
     """
+    title = canonical_title_designations(title)
+    other_title = canonical_title_designations(other_title)
     if title_number_conflict(title, other_title):
         return True
     book_number = r"\b(?:book|bk)\.?\s*(\d+)\s*[)\]]?\s*$"
@@ -760,7 +768,7 @@ def _other_language(language: str, book: dict, identities: list[tuple[str, str, 
 
 # ---- running it ---------------------------------------------------------------
 
-CHECK_VERSION = 7  # raise when the checks change, so stored verdicts are worked out again
+CHECK_VERSION = 8  # raise when the checks change, so stored verdicts are worked out again
 
 
 def _signature(item: dict) -> str:
@@ -855,7 +863,7 @@ def attach(row_id: int) -> str:
     outcome = check_item(item, Library(library_books()), client)
     _save(int(row_id), _signature(item), item, outcome)
     if _signature(item) != row["signature"] or outcome["verdict"] != "BELONGS" or outcome.get("bookId") != row["book_id"]:
-        raise ActionError("The files changed since the last check, so nothing was attached. "
+        raise ActionError("The files, catalogue, or identity rules changed since the last check, so nothing was attached. "
                           "The page shows the new result.")
     try:
         client.adopt_unmatched(int(row_id), int(row["book_id"]))

@@ -39,14 +39,14 @@ from .repair import (
     require_current_scan_result,
     verify_repair_changes,
 )
-from .series_titles import bindery_series_names
+from .series_titles import bindery_series_context
 from .triage import result_signature, triage_state
 from .tika_client import test_connection
 from .verification_status import malware_scan_inconclusive, verification_is_inconclusive
 from .verification_engine import classify_identity
 
 
-VERIFIER_VERSION = "27"
+VERIFIER_VERSION = "28"
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -134,7 +134,21 @@ def _file_fingerprint(path: str) -> str:
         return f"unsafe:{exc.code}"
 
 
+class CatalogueUnavailable(RuntimeError):
+    """Identity policy cannot be established while the catalogue is unavailable."""
+
+
+def _verification_context(result: dict) -> dict:
+    if "_verification_series" in result:
+        return result
+    names = bindery_series_context(result.get("book_id")) if result.get("format") == "ebook" else []
+    if names is None:
+        raise CatalogueUnavailable("Bindery series data is unavailable; verification is postponed. Try again when the catalogue is readable.")
+    return {**result, "_verification_series": names}
+
+
 def _verification_signature(result: dict, target_path: str, fingerprint: str) -> str:
+    result = _verification_context(result)
     policy = json.dumps(
         {
             "enabled": settings.verification_enabled,
@@ -160,10 +174,7 @@ def _verification_signature(result: dict, target_path: str, fingerprint: str) ->
                 "rejectStrongMismatch": settings.reject_strong_mismatch,
                 "strongMismatchMinSamples": settings.strong_mismatch_min_samples,
                 "strongMismatchConsensusPercent": settings.strong_mismatch_consensus_percent,
-                "seriesNames": (
-                    bindery_series_names(result.get("book_id"))
-                    if result.get("format") == "ebook" else []
-                ),
+                "seriesNames": result["_verification_series"],
             },
         },
         sort_keys=True,
@@ -218,6 +229,10 @@ def _ebook_directory_media_mismatch(result: dict) -> dict | None:
 
 
 def verification_for_result(result: dict) -> dict | None:
+    try:
+        result = _verification_context(result)
+    except CatalogueUnavailable:
+        return None
     if result.get("format") == "audiobook":
         target = str(result.get("local_path") or "")
         fingerprint = media_set_fingerprint(target)
@@ -297,13 +312,33 @@ def _record_cached_verification(result: dict, cached: dict) -> dict:
     if cached["result_id"] == result["id"] and cached["scan_id"] == result["scan_id"]:
         return cached
     evidence = dict(cached["evidence"])
-    evidence["cacheReuse"] = {"verificationId": cached["id"], "scanId": cached["scan_id"]}
+    evidence["cacheReuse"] = _original_verification(cached)
     current = _save_verification(
         result, cached["target_path"], cached["file_fingerprint"],
         cached["verdict"], cached["confidence"], cached["source"], evidence,
     )
     current["cached"] = True
     return current
+
+
+def _original_verification(cached: dict) -> dict:
+    """Carry original proof provenance, including legacy receipt chains."""
+    original = cached
+    visited = set()
+    while original["id"] not in visited:
+        visited.add(original["id"])
+        reuse = original["evidence"].get("cacheReuse") or {}
+        if reuse.get("verifiedAt"):
+            return {key: reuse[key] for key in ("verificationId", "scanId", "verifiedAt")}
+        if not reuse.get("verificationId"):
+            break
+        with local_conn() as conn:
+            row = conn.execute("SELECT * FROM content_verifications WHERE id=?", (reuse["verificationId"],)).fetchone()
+        if row is None:
+            break
+        original = _decode_row(row)
+    return {"verificationId": original["id"], "scanId": original["scan_id"],
+            "verifiedAt": original["updated_at"] or original["created_at"]}
 
 
 def _snapshot_failure_result(
@@ -366,6 +401,7 @@ def _snapshot_failure_result(
 def verify_result(result: dict, force: bool = False) -> dict:
     if not settings.verification_enabled:
         raise RuntimeError("Content verification is disabled in Settings.")
+    result = _verification_context(result)
 
     if result.get("format") == "audiobook":
         target = str(result.get("local_path") or "")
@@ -556,7 +592,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
             verdict, confidence, evidence = classify_identity(
                 {
                     **result,
-                    "series": bindery_series_names(result.get("book_id")),
+                    "series": result["_verification_series"],
                     "isbn_evidence": isbn_evidence(result.get("book_id"), extracted.identifiers),
                 },
                 extracted.metadata,
