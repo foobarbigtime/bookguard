@@ -4,7 +4,9 @@ import time
 import pytest
 
 from app import duplicates, library_check, scanner, unmatched, verifier
-from tests.test_home_review import library  # noqa: F401 -- fixture
+from tests import test_home_review
+
+library = test_home_review.library
 
 
 def wait_for(function):

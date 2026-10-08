@@ -158,10 +158,13 @@
   // One main action that fits the problem; everything else waits under "More".
   function actionsFor(item) {
     if (item.resolved) {
-      return { main: item.resolution === "KEEP" ? [button("Reopen decision", async () => {
+      return { main: item.resolution === "KEEP" ? [button("Reopen decision", async (node) => {
         if (!window.confirm("Reopen this decision? Files and Bindery stay as they are.")) return;
-        await post(`/api/triage/${item.id}/reopen`, "REOPEN");
-        window.location.reload();
+        node.disabled = true;
+        try {
+          await post(`/api/triage/${item.id}/reopen`, "REOPEN");
+          window.location.reload();
+        } catch (error) { status(error.message); node.disabled = false; }
       })] : [], more: [] };
     }
     const guarded = data.allowActions;

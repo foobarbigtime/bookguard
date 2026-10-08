@@ -10,7 +10,9 @@ import pytest
 
 from app import library_review
 from app.routes import pages, system
-from tests.test_home_review import library  # noqa: F401 -- fixture
+from tests import test_home_review
+
+library = test_home_review.library
 
 
 def test_review_has_batch_decisions_shared_files_and_one_check(library):
