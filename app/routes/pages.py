@@ -263,14 +263,15 @@ def review_page(request: Request, group: str = "", language: str = "", page: int
         return duplicates_page(request)
     items = open_review_items(include_resolved=True) if show_resolved else open_review_items()
     classification = classification.upper() if classification.upper() in TRIAGE_CLASSES else ""
+    items = [item for item in items
+             if (not classification or item["classification"] == classification)
+             and (not reason_code or item["reasonCode"] == reason_code)]
     known = {key for key, _, _ in GROUPS}
     selected = [key for key in group.split(",") if key in known]
     filtered = [
         item for item in items
         if (not selected or item["group"] in selected)
         and (language != "other" or item["language"]["otherLanguage"])
-        and (not classification or item["classification"] == classification)
-        and (not reason_code or item["reasonCode"] == reason_code)
     ]
     pages = max(1, (len(filtered) + REVIEW_PAGE_LIMIT - 1) // REVIEW_PAGE_LIMIT)
     page = min(max(1, page), pages)

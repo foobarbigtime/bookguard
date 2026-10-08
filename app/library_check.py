@@ -46,12 +46,13 @@ def library_check_status() -> dict:
         state = dict(_state)
     state["scan"] = latest_scan()
     state["scan_detail"] = current_scan_detail()
+    state["scan_running"] = scan_is_running()
     state["verification"] = verification_job_status()
     state["unmatched"] = check_status()
     if state["status"] != "running" and state.get("scan_id") and (state["scan"] or {}).get("id") != state["scan_id"]:
         state.update(status="idle", phase="idle", error=None)
     state["busy"] = (
-        state["status"] == "running" or scan_is_running()
+        state["status"] == "running" or state["scan_running"]
         or state["verification"]["status"] == "running"
         or state["unmatched"]["running"]
         or fix_status()["running"]

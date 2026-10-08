@@ -13,7 +13,7 @@
     const job = state.verification || {};
     const scan = state.scan || {};
     const unmatched = state.unmatched || {};
-    if (scan.status === "running" && state.busy && state.phase !== "verification" && state.phase !== "unmatched") {
+    if (state.scan_running) {
       return `Scanning assigned files: ${scan.processed || 0} of ${scan.total || 0}.`;
     }
     if (job.status === "running") return `Verifying unresolved results: ${job.processed || 0} of ${job.total || 0}. ${job.cacheHits || 0} saved proofs reused. ${job.postponed || 0} postponed. ${job.current || ""}`;

@@ -33,6 +33,7 @@ def test_review_has_batch_decisions_shared_files_and_one_check(library):
         items = json.loads(match[1])["items"]
         assert len(items) == 3
         assert all(item["classification"] == "REJECT" for item in items)
+        assert "All <b>3</b>" in filtered.text
 
 
 def test_unassigned_and_duplicates_share_the_workspace(library, monkeypatch):
