@@ -490,3 +490,14 @@ main > .notice { margin: 0 0 1rem; }
 .unmatched-evidence { margin: .4rem 0 0 1.1rem; display: grid; gap: .2rem; font-size: .88rem; }
 .unmatched-evidence .evidence-fail { color: #fca5a5; }
 .unmatched-evidence .evidence-warn { color: #fcd34d; }
+.review-workspace { margin-bottom:1.5rem; padding-bottom:1rem; border-bottom:1px solid var(--border); }
+.review-workspace h1 { margin-bottom:.3rem; }
+.review-workspace .chips { margin-top:1rem; }
+.review-advanced { padding:.8rem; margin-top:1rem; }
+.review-advanced summary { cursor:pointer; }
+.review-advanced .detail-actions { margin-top:.8rem; }
+.review-select-row { display:flex; align-items:center; gap:.5rem; }
+.review-select-row > input { flex:none; margin-left:.5rem; }
+.review-select-row .review-row { flex:1; min-width:0; }
+.review-bulk { display:flex; flex-wrap:wrap; align-items:center; gap:.7rem; padding:.7rem; border-bottom:1px solid var(--border); }
+.review-bulk small { flex-basis:100%; }

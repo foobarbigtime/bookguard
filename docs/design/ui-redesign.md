@@ -265,10 +265,18 @@ Steps 1-3 as built (one PR):
   metadata fix, mark reviewed, verify again), a separate danger zone (detach,
   quarantine) and technical details. It uses the existing guarded endpoints
   and confirmations.
-- Until later steps replace them, older pages are tabs under Review: Triage
-  (`/review/triage`, which keeps the supervised replacement and shared-file
-  panels until step 7), Repairs (until Undo moves to Activity in step 4) and
-  Scan results (`/review/scan-results`, the old dashboard).
+- Review now shares one workspace across books needing decisions, unassigned
+  files, and duplicate entries. The six legacy tabs are removed. Advanced
+  exposes reviewed books, repair previews/history, the detailed review table,
+  and raw scan results. Triage bookmarks redirect to Review with query filters
+  preserved. Bulk mark-reviewed and shared-file checks also live on Review.
+- **Check library** on Home and Review runs the scan, unresolved REVIEW/REJECT
+  verification, and unassigned-file check in order. It reuses compatible proof,
+  reports postponed books, and reserves the sequence against overlapping job
+  starts. Scheduled scans remain scan-only.
+- Mixed recording folders require a separate recording-group preview/apply
+  workflow. This change does not automate splitting or moving those recordings;
+  Review avoids making whole-folder replacement their primary action.
 - Old URLs redirect (307, query kept): `/triage` → `/review/triage`,
   `/attention` → `/`, `/?classification=…` → `/review/scan-results?…`,
   `/history` → `/activity`, `/diagnostics` → `/system`.

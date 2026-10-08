@@ -11,9 +11,11 @@
 {{ site_header("review", "duplicates", version) }}
 
 <main class="unmatched-main">
+  {% set review_view = 'duplicates' %}
+  {% include '_review_workspace.html' %}
   <div class="unmatched-header">
     <div>
-      <h1>Books Bindery lists twice</h1>
+      <h2>Duplicate catalogue entries</h2>
       <p class="muted">The same book by the same author, spelled two ways (“Nightingale” and “The Nightingale”). The empty extra entry stays Wanted, so Bindery keeps searching for it. When BookGuard can prove an empty entry is a duplicate of a book you have, Fix now hides it (Bindery's own exclude: kept, never searched for again, and can be included again on the book's page). Entries with files are never changed here. Every change is in Activity. Nothing is deleted.</p>
     </div>
     <div class="unmatched-run">

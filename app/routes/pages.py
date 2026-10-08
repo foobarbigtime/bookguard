@@ -208,7 +208,12 @@ def diagnostics_page(request: Request):
     )
 
 
-@router.get("/review/triage", response_class=HTMLResponse)
+@router.get("/review/triage")
+def triage_redirect(request: Request):
+    return _redirect_renamed(request, "/review")
+
+
+@router.get("/review/table", response_class=HTMLResponse)
 def triage_page(
     request: Request,
     classification: str = "REVIEW",
@@ -250,14 +255,22 @@ def triage_page(
 
 
 @router.get("/review", response_class=HTMLResponse)
-def review_page(request: Request, group: str = "", language: str = "", page: int = 1, book: int = 0):
-    items = open_review_items()
+def review_page(request: Request, group: str = "", language: str = "", page: int = 1, book: int = 0,
+                view: str = "", show_resolved: int = 0, classification: str = "", reason_code: str = ""):
+    if view == "unmatched":
+        return unmatched_page(request)
+    if view == "duplicates":
+        return duplicates_page(request)
+    items = open_review_items(include_resolved=True) if show_resolved else open_review_items()
+    classification = classification.upper() if classification.upper() in TRIAGE_CLASSES else ""
     known = {key for key, _, _ in GROUPS}
     selected = [key for key in group.split(",") if key in known]
     filtered = [
         item for item in items
         if (not selected or item["group"] in selected)
         and (language != "other" or item["language"]["otherLanguage"])
+        and (not classification or item["classification"] == classification)
+        and (not reason_code or item["reasonCode"] == reason_code)
     ]
     pages = max(1, (len(filtered) + REVIEW_PAGE_LIMIT - 1) // REVIEW_PAGE_LIMIT)
     page = min(max(1, page), pages)
@@ -274,6 +287,12 @@ def review_page(request: Request, group: str = "", language: str = "", page: int
             params["group"] = ",".join(selected)
         if language == "other":
             params["language"] = "other"
+        if show_resolved:
+            params["show_resolved"] = "1"
+        if classification:
+            params["classification"] = classification
+        if reason_code:
+            params["reason_code"] = reason_code
         return "/review?" + urlencode(params)
 
     return templates.TemplateResponse(
@@ -294,6 +313,9 @@ def review_page(request: Request, group: str = "", language: str = "", page: int
             "counts": group_counts(items),
             "group": ",".join(selected),
             "language_filter": language == "other",
+            "show_resolved": bool(show_resolved),
+            "classification": classification,
+            "reason_code": reason_code,
             "non_english": sum(1 for item in items if item["language"]["otherLanguage"]),
             "allow_actions": settings.allow_actions,
             "repair_mode": settings.metadata_repair_mode,

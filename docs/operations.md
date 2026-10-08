@@ -6,8 +6,9 @@ in a separate directory. See [installation](getting-started.md) for paths.
 
 ## Identity and cache updates
 
-After an identity-rule update, run a BookGuard library scan and content
-verification to refresh the review evidence. A library scan alone does not
+After an identity-rule update, use **Check library** on Home or Review. It runs
+a BookGuard scan, content verification of unresolved REVIEW/REJECT results,
+and the unassigned-file check in order. A library scan alone does not
 replace saved content-verification records. Verification version 28 invalidates
 older proof keys and includes matching settings and recorded ebook series in
 the key. Later unchanged scans can reuse proof while recording it against the
@@ -19,11 +20,20 @@ books are postponed: the job continues, and Review shows how many were
 postponed and why (for example "Complete: 40 verified, 2 postponed"). An outage does not replace existing proof with records keyed
 to an empty series list.
 
-Run **Review → Unmatched → Check now** to refresh unmatched decisions. Check
+The individual **Recheck unassigned files only** control remains available on
+Review → Unassigned files. Check
 version 8 inspects every discovered audio track and preserves volume/part
 conflicts. Attach also rechecks the complete unit before calling Bindery.
 BookGuard's checks do not change Bindery's own automatic reconciliation rules;
 correcting those rules is a separate upstream task.
+
+Check library never adopts files, fixes duplicate entries, or modifies media.
+It serializes scan, batch verification, and unassigned-check starts; a second
+scan cannot replace its scan while verification is running. Stopped or failed
+scans do not start verification. A later-stage failure retains completed
+results and names the failed stage. State is process-local: after a restart,
+start a new check rather than assuming the previous sequence resumed.
+Scheduled scans and the raw dashboard's scan-only control remain scan-only.
 
 ## Backup and validation
 

@@ -1,0 +1,31 @@
+<section class="review-workspace" aria-label="Library review">
+  <div class="row-between">
+    <div>
+      <h1>Review</h1>
+      <p class="muted">Check the library, inspect the evidence, then choose what to change.</p>
+    </div>
+    <button type="button" class="primary" data-library-check>Check library</button>
+  </div>
+  <p class="muted small-print">Scans assigned files, reuses compatible verification proofs, verifies unresolved results, and checks Bindery’s unassigned files. Books and media files stay as they are.</p>
+  <p data-library-check-status role="status" aria-live="polite">Loading check status…</p>
+  <nav class="chips" aria-label="Review queues">
+    {% for key, label, href in [
+      ('books', 'Books needing decisions', '/review'),
+      ('unmatched', 'Unassigned files', '/review?view=unmatched'),
+      ('duplicates', 'Duplicate entries', '/review?view=duplicates'),
+    ] %}
+    <a class="chip{% if review_view|default('books') == key %} active{% endif %}" href="{{ href }}"{% if review_view|default('books') == key %} aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  <details class="review-advanced">
+    <summary>Advanced</summary>
+    <div class="detail-actions">
+      <a class="button-link" href="/review?show_resolved=1">Include reviewed books</a>
+      <a class="button-link" href="/review?group=metadata">Verified metadata fixes</a>
+      <a class="button-link" href="/repairs">Repair previews and history</a>
+      <a class="button-link" href="/review/scan-results">Raw scan results</a>
+      <a class="button-link" href="/review/table">Advanced review table</a>
+    </div>
+  </details>
+</section>
+<script src="{{ static_url('library-check.js') }}" defer></script>

@@ -157,11 +157,19 @@
 
   // One main action that fits the problem; everything else waits under "More".
   function actionsFor(item) {
+    if (item.resolved) {
+      return { main: item.resolution === "KEEP" ? [button("Reopen decision", async () => {
+        if (!window.confirm("Reopen this decision? Files and Bindery stay as they are.")) return;
+        await post(`/api/triage/${item.id}/reopen`, "REOPEN");
+        window.location.reload();
+      })] : [], more: [] };
+    }
     const guarded = data.allowActions;
     const quarantine = guarded ? guardedAction(item, "quarantine") : null;
     const main = [];
     const more = [];
     if (item.group === "move") main.push(moveAction(item), quarantine);
+    else if (item.mixedAudio) more.push(quarantine);
     else if (item.group === "wrong") main.push(guarded ? replaceAction(item) : null, quarantine);
     else if (item.group === "language") main.push(guarded ? replaceAction(item) : null, quarantine);
     else if (item.group === "duplicate" || item.group === "unsafe") main.push(quarantine);
@@ -186,7 +194,7 @@
     for (const [label, value] of rows) dl.append(el("dt", { text: label }), el("dd", { text: value || "—" }));
     const links = el("div", { class: "detail-actions" });
     if (item.verificationId) links.append(el("a", { class: "button-link", href: `/activity/verification/${item.verificationId}`, text: "Verification record" }));
-    links.append(el("a", { class: "button-link", href: `/review/triage?classification=${encodeURIComponent(item.classification)}`, text: "Open in Triage" }));
+    links.append(el("a", { class: "button-link", href: `/review/scan-results?classification=${encodeURIComponent(item.classification)}`, text: "Raw scan results" }));
     return el("details", { class: "detail-section" }, el("summary", { text: "Technical details" }), dl, links);
   }
 
@@ -210,7 +218,7 @@
         el("span", { class: "detail-group", text: item.groupLabel }),
         el("h2", { text: item.title }),
         el("p", { class: "muted", text: [item.author, item.format].filter(Boolean).join(" · ") })),
-      section("What's wrong", el("p", { text: (WHAT_IS_WRONG[item.group] || WHAT_IS_WRONG.undecided)(item) })),
+      section(item.resolved ? "Recorded decision" : "What's wrong", el("p", { text: item.resolved ? `Reviewed: ${item.resolution.replaceAll("_", " ")}. The evidence below is retained for reference.` : item.mixedAudio ? "This folder contains recordings of multiple works. Its attachment does not describe everything in the folder." : (WHAT_IS_WRONG[item.group] || WHAT_IS_WRONG.undecided)(item) })),
       section("How BookGuard knows", evidence),
       section("Suggestion",
         language.otherLanguage && item.group !== "language" ? el("p", { class: "lang-warning", text: `This book is in ${language.label}, which is not one of your library languages.` }) : null,
@@ -239,6 +247,32 @@
       history.replaceState(null, "", `${location.pathname}${location.search}#book-${item.id}`);
     }
   });
+
+  const selectPage = document.getElementById("reviewSelectPage");
+  const keepSelected = document.getElementById("reviewKeepSelected");
+  const selections = () => Array.from(document.querySelectorAll(".review-select:checked"));
+  function selectionChanged() {
+    keepSelected.disabled = !selections().length;
+    const all = Array.from(document.querySelectorAll(".review-select"));
+    selectPage.checked = all.length > 0 && selections().length === all.length;
+    selectPage.indeterminate = selections().length > 0 && !selectPage.checked;
+  }
+  if (selectPage && keepSelected) {
+    selectPage.addEventListener("change", () => {
+      document.querySelectorAll(".review-select").forEach(input => { input.checked = selectPage.checked; });
+      selectionChanged();
+    });
+    document.querySelectorAll(".review-select").forEach(input => input.addEventListener("change", selectionChanged));
+    keepSelected.addEventListener("click", async () => {
+      const ids = selections().map(input => Number(input.value));
+      if (!ids.length || !window.confirm(`Mark ${ids.length} books reviewed? This records your decision in BookGuard; files and Bindery stay as they are.`)) return;
+      keepSelected.disabled = true;
+      try {
+        await request("/api/triage/keep-selected", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "KEEP", ids }) });
+        window.location.reload();
+      } catch (error) { window.alert(error.message); selectionChanged(); }
+    });
+  }
 
   const fromHash = Number((location.hash.match(/^#book-(\d+)$/) || [])[1]);
   // Activity links and old bookmarks may point to a book on another page.

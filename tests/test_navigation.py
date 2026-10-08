@@ -55,11 +55,16 @@ def test_settings_page_marks_only_the_gear_as_current():
     assert 'class="icon-link active" href="/settings"' in html
 
 
-def test_older_review_pages_stay_reachable_as_tabs_until_replaced():
+def test_review_queues_replace_the_six_overlapping_tabs():
     review = header("review", "books")
-    tabs = re.findall(r'<nav class="tabs".*?</nav>', review, re.S)[0]
-    assert re.findall(r'href="([^"]+)"', tabs) == ["/review", "/review/triage", "/repairs", "/review/unmatched", "/review/duplicates", "/review/scan-results"]
-    assert 'href="/review" class="active" aria-current="page"' in review
+    assert 'class="tabs"' not in review
+    workspace = Path("templates/_review_workspace.html").read_text()
+    assert "Books needing decisions" in workspace
+    assert "/review?view=unmatched" in workspace
+    assert "/review?view=duplicates" in workspace
+    assert "<summary>Advanced</summary>" in workspace
+    assert 'href="/repairs"' in workspace
+    assert 'href="/review/scan-results"' in workspace
     assert 'class="subbar"' not in header("home")
     assert 'class="subbar"' not in header("activity")
     system = header("system", "advanced")
@@ -85,6 +90,7 @@ def test_old_page_urls_redirect_and_keep_their_query():
         expected = {
             "/triage": "/review/triage",
             "/triage?classification=REJECT&reason_code=MISMATCH": "/review/triage?classification=REJECT&reason_code=MISMATCH",
+            "/review/triage?classification=REJECT&reason_code=MISMATCH&show_resolved=1": "/review?classification=REJECT&reason_code=MISMATCH&show_resolved=1",
             "/attention": "/",
             "/?classification=MISSING": "/review/scan-results?classification=MISSING",
             "/history": "/activity",

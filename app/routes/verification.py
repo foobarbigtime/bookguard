@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from ..config import settings
 from ..db import latest_results
 from ..repair import RepairError
+from ..library_check import start_allowed
 from ..verifier import (
     apply_verified_metadata_repair,
     start_verification_job,
@@ -86,6 +87,8 @@ def api_verification_get(result_id: int):
 
 @router.post("/{result_id}/run")
 def api_verification_run(result_id: int):
+    if not start_allowed():
+        raise HTTPException(status_code=409, detail="Check library is running. Wait for it to finish.")
     item = current_result(result_id)
     try:
         verification = verify_result(item, force=True)

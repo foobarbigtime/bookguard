@@ -175,6 +175,7 @@ def review_item(row: dict, verification: dict | None) -> dict[str, Any]:
         "format": str(row.get("format") or ""),
         "classification": str(row.get("classification") or ""),
         "reasonCode": str(row.get("reason_code") or "UNKNOWN"),
+        "mixedAudio": row.get("reason_code") == "MIXED_AUDIO_CONTENT",
         "riskScore": int(row.get("risk_score") or 0),
         "storedPath": str(row.get("stored_path") or ""),
         "language": language,
@@ -182,7 +183,9 @@ def review_item(row: dict, verification: dict | None) -> dict[str, Any]:
         "group": group,
         "groupLabel": GROUP_LABELS[group],
         "contains": _contains(row, verification),
-        "suggestion": _suggestion(group, verification, language),
+        "suggestion": ("This folder contains multiple works. Review its recordings before changing attachments."
+                       if row.get("reason_code") == "MIXED_AUDIO_CONTENT"
+                       else _suggestion(group, verification, language)),
         "verified": verification is not None,
         "verificationId": int((verification or {}).get("id") or 0),
         "verdict": str((verification or {}).get("verdict") or ""),
@@ -197,13 +200,17 @@ def review_item(row: dict, verification: dict | None) -> dict[str, Any]:
     }
 
 
-def open_review_items() -> list[dict[str, Any]]:
+def open_review_items(*, include_resolved: bool = False) -> list[dict[str, Any]]:
     """Unresolved REVIEW and REJECT items of the latest scan, most urgent group first."""
     rows = latest_review_results()
     states = triage_states(rows)
-    rows = [row for row in rows if not states[int(row["id"])]["resolved"]]
+    if not include_resolved:
+        rows = [row for row in rows if not states[int(row["id"])]["resolved"]]
     verifications = latest_verifications([int(row["id"]) for row in rows])
     items = [review_item(row, verifications.get(int(row["id"]))) for row in rows]
+    for item in items:
+        item["resolved"] = states[item["id"]]["resolved"]
+        item["resolution"] = states[item["id"]].get("resolution", "")
     order = {key: index for index, (key, _, _) in enumerate(GROUPS)}
     items.sort(key=lambda item: (order[item["group"]], -item["riskScore"], item["author"].casefold(), item["title"].casefold()))
     return items
