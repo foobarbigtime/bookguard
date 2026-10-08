@@ -10,24 +10,24 @@
 {% from "_layout.html" import site_header %}
 {{ site_header("review", "books", version) }}
 {% set selected = group.split(',') if group else [] %}
+{% set filter_tail = ('&show_resolved=1' if show_resolved else '') + ('&classification=' + classification if classification else '') + ('&reason_code=' + (reason_code|urlencode) if reason_code else '') %}
 
 <main class="review-page">
-  <div class="review-head">
-    <h1>Review</h1>
-    <p>Books from the latest scan that need a decision. Nothing changes until you choose an action.</p>
-  </div>
+  {% include '_review_workspace.html' %}
+  {% if show_resolved %}<p class="notice info">Reviewed books are included. <a href="/review">Show open decisions only</a>.</p>{% endif %}
+  {% if classification or reason_code %}<p class="notice info">Filtered by {{ classification }} {{ reason_code|replace('_', ' ') }}. <a href="/review{% if show_resolved %}?show_resolved=1{% endif %}">Clear scan filters</a>.</p>{% endif %}
 
   <nav class="chips" aria-label="Filter by what needs deciding">
-    <a class="chip{% if not selected and not language_filter %} active{% endif %}" href="/review"{% if not selected and not language_filter %} aria-current="page"{% endif %}>All <b>{{ items|length }}</b></a>
+    <a class="chip{% if not selected and not language_filter %} active{% endif %}" href="/review{{ '?' + filter_tail[1:] if filter_tail else '' }}"{% if not selected and not language_filter %} aria-current="page"{% endif %}>All <b>{{ items|length }}</b></a>
     {% for key, label, tone in groups %}
       {% if counts[key] or key in selected %}
-        <a class="chip{% if selected == [key] %} active{% endif %}" href="/review?group={{ key }}"{% if selected == [key] %} aria-current="page"{% endif %}>
+        <a class="chip{% if selected == [key] %} active{% endif %}" href="/review?group={{ key }}{{ filter_tail }}"{% if selected == [key] %} aria-current="page"{% endif %}>
           <span class="dot tone-bg-{{ tone }}" aria-hidden="true"></span>{{ label }} <b>{{ counts[key] }}</b>
         </a>
       {% endif %}
     {% endfor %}
     {% if non_english or language_filter %}
-      <a class="chip{% if language_filter %} active{% endif %}" href="/review?language=other"{% if language_filter %} aria-current="page"{% endif %}>
+      <a class="chip{% if language_filter %} active{% endif %}" href="/review?language=other{{ filter_tail }}"{% if language_filter %} aria-current="page"{% endif %}>
         <span class="lang-tag" aria-hidden="true">Aa</span>Other languages <b>{{ non_english }}</b>
       </a>
     {% endif %}
@@ -35,6 +35,11 @@
 
   <div class="review-layout">
     <section class="card review-list" aria-label="Books">
+      <div class="review-bulk">
+        <label><input type="checkbox" id="reviewSelectPage"> Select this page</label>
+        <button type="button" id="reviewKeepSelected" disabled>Mark selected reviewed</button>
+        <small class="muted">Records your decision in BookGuard; files and Bindery stay as they are.</small>
+      </div>
       {% if pagination.total %}
       <nav class="row-between" aria-label="Review pages">
         {% if pagination.previous %}<a href="{{ pagination.previous }}" rel="prev">← Previous</a>{% endif %}
@@ -43,13 +48,16 @@
       </nav>
       {% endif %}
       {% for item in shown %}
+        <div class="review-select-row">
+          {% if not item.resolved %}<input type="checkbox" class="review-select" value="{{ item.id }}" aria-label="Select {{ item.title }}">{% endif %}
         <button type="button" class="review-row" data-review-id="{{ item.id }}" aria-controls="reviewDetail">
           <span class="dot tone-bg-{{ tones[item.group] }}" aria-hidden="true"></span>
           <span class="review-row-text">
             <strong>{{ item.title }}</strong>{% if item.author %}<span class="muted"> · {{ item.author }}</span>{% endif %}
             {% if item.language.otherLanguage %}<span class="lang-tag">{{ item.language.label }}</span>{% endif %}
             <small>
-              {% if item.group == 'verified' %}Verified as the right book.
+              {% if item.resolved %}Reviewed · {{ item.resolution|replace('_', ' ') }}.
+              {% elif item.group == 'verified' %}Verified as the right book.
               {% elif item.contains and item.group in ['move', 'duplicate', 'wrong'] %}Contains {{ item.contains }}.
               {% elif item.explanation %}{{ item.explanation|truncate(140) }}
               {% elif not item.verified %}Not verified yet. {{ item.scanReasons|first|default('') }}
@@ -58,8 +66,9 @@
           </span>
           <span class="review-row-group">{{ item.groupLabel }}</span>
         </button>
+        </div>
       {% else %}
-        <p class="empty">{% if selected or language_filter %}Nothing matches this filter.{% else %}Nothing needs a decision. Every book in the latest scan passed or has been reviewed.{% endif %}</p>
+        <p class="empty">{% if selected or language_filter or classification or reason_code %}Nothing matches this filter.{% else %}No open decisions in the stored results. Check library to refresh them.{% endif %}</p>
       {% endfor %}
     </section>
 
@@ -78,6 +87,17 @@
     </div>
     <div id="moveBody" class="replacement-body"></div>
   </section>
+
+  <details class="table-card review-advanced">
+    <summary>Shared-file checks</summary>
+    <section id="hardlinkPanel" aria-live="polite">
+      <div class="section-title row-between">
+        <div><h2>Shared-file registration conflicts</h2><p>Check whether different books track hard links to the same ebook.</p></div>
+        <button id="checkHardlinks" type="button">Check shared files</button>
+      </div>
+      <div id="hardlinkResults" class="acquisition-body"><p class="muted">Checking registrations is read-only. Corrections require verified content and confirmation.</p></div>
+    </section>
+  </details>
 </main>
 
 <script id="reviewData" type="application/json">{{ {
@@ -88,5 +108,6 @@
 }|tojson }}</script>
 <script src="{{ static_url('review.js') }}" defer></script>
 <script src="{{ static_url('triage-move.js') }}" defer></script>
+<script src="{{ static_url('triage-hardlinks.js') }}" defer></script>
 </body>
 </html>

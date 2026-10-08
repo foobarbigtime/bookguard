@@ -15,21 +15,6 @@
     return body;
   }
 
-  const scan = document.getElementById("homeScanButton");
-  if (scan) {
-    scan.addEventListener("click", async () => {
-      if (!window.confirm("Scan the library now? A scan only reads files; it changes nothing.")) return;
-      scan.disabled = true;
-      try {
-        await post("/api/scan", "SCAN");
-        window.location.reload();
-      } catch (error) {
-        window.alert(error.message);
-        scan.disabled = false;
-      }
-    });
-  }
-
   const observe = document.getElementById("observeButton");
   if (observe) {
     observe.addEventListener("click", async () => {

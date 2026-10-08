@@ -10,6 +10,8 @@
 {% from "_layout.html" import site_header %}
 {{ site_header("review", "repairs", version) }}
   <main>
+    {% set review_view = 'advanced' %}
+    {% include '_review_workspace.html' %}
     <section class="card repair-mode-card">
       <span class="label">Metadata repair mode</span>
       <strong>{{ repair_mode|upper }}</strong>

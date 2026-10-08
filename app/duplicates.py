@@ -35,6 +35,8 @@ can be undone in Bindery.
 
 from __future__ import annotations
 
+from .library_check import serialized_start, start_allowed
+
 from collections import defaultdict
 from datetime import datetime, timezone
 from itertools import combinations
@@ -337,13 +339,14 @@ def fix_all(client: BinderyClient | None = None, *, auto: bool = False) -> dict:
     return {"hidden": hidden, "problems": problems}
 
 
+@serialized_start
 def start_fix(*, auto: bool = False) -> bool:
     """Run fix_all in the background; False when one is already running."""
-    if not _LOCK.acquire(blocking=False):
+    if not start_allowed() or not _LOCK.acquire(blocking=False):
         return False
+    STATUS.update(running=True, problems=[])
 
     def run() -> None:
-        STATUS.update(running=True, problems=[])
         try:
             STATUS.update(fix_all(auto=auto))
         except Exception as exc:  # noqa: BLE001 - shown on the page

@@ -1,5 +1,4 @@
-{#- Shared page chrome: four sections plus the Settings gear (docs/design/ui-redesign.md).
-    Until a section's new page replaces them, its older pages appear as tabs inside it. -#}
+{# Shared page chrome. Review queues live in _review_workspace.html. #}
 {% set SECTIONS = [
   ("home", "Home", "/"),
   ("review", "Review", "/review"),
@@ -8,14 +7,6 @@
 ] %}
 {% set TABS = {
   "system": [("status", "Status", "/system"), ("advanced", "Advanced", "/system/advanced")],
-  "review": [
-    ("books", "Books", "/review"),
-    ("triage", "Triage", "/review/triage"),
-    ("repairs", "Repairs", "/repairs"),
-    ("unmatched", "Unmatched", "/review/unmatched"),
-    ("duplicates", "Duplicates", "/review/duplicates"),
-    ("scan-results", "Scan results", "/review/scan-results"),
-  ],
 } %}
 
 {% macro site_header(section, tab="", version="") -%}
