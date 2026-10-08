@@ -34,6 +34,8 @@ scans do not start verification. A later-stage failure retains completed
 results and names the failed stage. State is process-local: after a restart,
 start a new check rather than assuming the previous sequence resumed.
 Scheduled scans and the raw dashboard's scan-only control remain scan-only.
+Bulk MISSING cleanup is refused while Check library runs; if another task
+prevents its validation scan, the result says so.
 
 ## Backup and validation
 

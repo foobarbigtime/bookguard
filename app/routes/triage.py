@@ -17,6 +17,7 @@ from ..put_back import put_back
 from ..replace import triage_replace
 from ..unmatched import attach as attach_unmatched, check_status, start_check
 from ..duplicates import fix_status, start_fix
+from ..library_check import start_allowed
 from ..scanner import start_scan
 from ..services.dashboard import latest_missing_cleanup
 from ..verifier import verify_result
@@ -262,6 +263,8 @@ async def api_detach_missing(result_id: int, request: Request):
 
 @router.post("/missing/detach-all")
 async def api_detach_all_missing(request: Request):
+    if not start_allowed():
+        raise HTTPException(status_code=409, detail="Check library is running. Wait for it to finish before MISSING cleanup.")
     scan = latest_scan()
     if not scan or scan.get("status") != "complete":
         raise HTTPException(status_code=409, detail="A completed scan is required before MISSING cleanup.")
@@ -306,6 +309,11 @@ async def api_detach_all_missing(request: Request):
             )
 
     validation_scan_id = start_scan()
+    follow_up = (
+        "A validation scan was started." if validation_scan_id else
+        "A validation scan could not start because another library task is running; "
+        "run Check library when it finishes."
+    )
     return {
         "ok": True,
         "detached": len(cleanup_ids),
@@ -313,7 +321,7 @@ async def api_detach_all_missing(request: Request):
         "scan_id": validation_scan_id,
         "message": (
             f"Detached {len(cleanup_ids)} stale Bindery association(s). "
-            "No physical files were deleted or moved. A validation scan was started."
+            f"No physical files were deleted or moved. {follow_up}"
         ),
     }
 
