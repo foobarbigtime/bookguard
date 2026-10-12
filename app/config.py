@@ -514,6 +514,7 @@ class Settings:
         """Return UI settings that are safe to store in BookGuard's database."""
         data = self.public_dict()
         data.pop("bindery_api_key_set", None)
+        data.pop("verification_ocr_languages", None)
         return data
 
 

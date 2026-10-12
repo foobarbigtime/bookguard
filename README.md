@@ -13,8 +13,8 @@ Bindery registrations; they record evidence in BookGuard's own database.
 ## Everyday workflow
 
 1. Open **Home** to see health, what needs attention, and recent activity.
-2. Run **Scan library** for existing books, then open **Review**.
-3. Verify undecided files and inspect the evidence before choosing an action.
+2. Run **Check library** to scan, verify unresolved REVIEW/REJECT files, and check unassigned files.
+3. Open **Review**, inspect the evidence, and choose a supported repair or action.
 4. Use **Activity** to check the outcome, view records, undo metadata repairs,
    or put back an eligible quarantined file.
 5. Use **System** for health problems and scheduled tasks, and **Settings** for
@@ -106,6 +106,10 @@ what has shipped and what remains proposed; they are not setup instructions.
 
 Use Python 3.12 and the [development guide](docs/development.md). It includes
 `pytest`, `httpx`, and the CI lint version, plus an isolated local server setup.
+
+For work continued by Claude or another coding assistant, start with
+[`CLAUDE.md`](CLAUDE.md) and the [current handoff](docs/handoff.md). The handoff
+records branch dependencies, validation evidence, and the next unfinished work.
 
 ### Project structure
 

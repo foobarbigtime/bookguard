@@ -9,8 +9,8 @@ Safety, in the same spirit as ``pdf_probe``: the PDF it is given is the verifier
 snapshot; every child process has a wall-clock timeout, a bounded output, and CPU and
 address-space limits; temporary images live in a private directory that is always removed; the
 number of pages and the amount of text are small; and nothing is written anywhere else.
-OCR can misread a name. That can only make a title or author go unfound (the book stays
-undecided), never match something that is not there.
+OCR can misread a name. Only exact normalized readings provide positive identity evidence;
+near matches in the classifier can withhold a verdict, never upgrade it.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ MAX_PAGE_FILE_BYTES = 40 * 1024 * 1024
 MAX_PAGE_TEXT_BYTES = 256 * 1024
 MAX_TEXT_CHARS = 20_000
 ENOUGH_TEXT_CHARS = 4_000          # stop early once the title page has been read
+OCR_POLICY_VERSION = 1
 _LANGUAGES = re.compile(r"^[a-z]{3}(?:_[a-z]{2,8})?(?:\+[a-z]{3}(?:_[a-z]{2,8})?)*$")
 
 
@@ -59,6 +60,12 @@ def _languages() -> str:
     return value if _LANGUAGES.fullmatch(value) else "eng"
 
 
+def ocr_policy() -> dict[str, Any]:
+    """The effective OCR settings attached only to PDF checks that actually attempted OCR."""
+    return {"version": OCR_POLICY_VERSION, "enabled": bool(settings.verification_ocr),
+            "pages": int(settings.verification_ocr_pages), "languages": _languages()}
+
+
 def _child_env(home: str) -> dict[str, str]:
     return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "OMP_THREAD_LIMIT": "1",
             "LC_ALL": "C", "HOME": home}
@@ -70,13 +77,14 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
         return {"disabled": True}
     pdftoppm, tesseract = shutil.which("pdftoppm"), shutil.which("tesseract")
     if not pdftoppm or not tesseract:
-        return {"error": "OCR is not available in this build (Poppler or Tesseract is not installed)."}
+        return {"error": "OCR is not available in this build (Poppler or Tesseract is not installed).",
+                "error_code": "dependency_unavailable"}
     target = Path(path)
     try:
         _preflight(target)
         source = str(target.resolve(strict=True))
     except (OSError, ValueError) as exc:
-        return {"error": f"OCR skipped: {str(exc)[:200]}"}
+        return {"error": f"OCR skipped: {str(exc)[:200]}", "error_code": "preflight_error"}
 
     pages = int(settings.verification_ocr_pages)
     with tempfile.TemporaryDirectory(prefix="bookguard-ocr-") as work:
@@ -88,15 +96,17 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
                 env=_child_env(work),
             )
         except subprocess.TimeoutExpired:
-            return {"error": "OCR skipped: rendering the first pages timed out."}
+            return {"error": "OCR skipped: rendering the first pages timed out.", "error_code": "render_timeout"}
         except (ProcessOutputLimitExceeded, OSError):
-            return {"error": "OCR skipped: rendering the first pages failed."}
+            return {"error": "OCR skipped: rendering the first pages failed.", "error_code": "render_error"}
         images = sorted(Path(work).glob("pg-*.png"))[:pages]
         if rendered.returncode != 0 or not images:
-            return {"error": "OCR skipped: the first pages could not be rendered (damaged or protected PDF)."}
+            return {"error": "OCR skipped: the first pages could not be rendered (damaged or protected PDF).",
+                    "error_code": "render_error"}
 
         chunks: list[str] = []
         read = 0
+        failures = 0
         for image in images:
             try:
                 result = run_bounded_process(
@@ -106,8 +116,10 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
                     env=_child_env(work),
                 )
             except (subprocess.TimeoutExpired, ProcessOutputLimitExceeded, OSError):
+                failures += 1
                 continue
             if result.returncode != 0:
+                failures += 1
                 continue
             read += 1
             chunks.append(re.sub(r"[ \t]+", " ", result.stdout.decode("utf-8", errors="replace")).strip())
@@ -115,5 +127,9 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
                 break
     text = "\n".join(c for c in chunks if c)[:MAX_TEXT_CHARS]
     if not text.strip():
-        return {"error": f"OCR read {read} page image(s) but found no text.", "pages": read}
-    return {"text": text, "pages": read}
+        return {"error": f"OCR read {read} page image(s) but found no text.", "pages": read,
+                "error_code": "ocr_error" if failures else "no_text"}
+    found = {"text": text, "pages": read}
+    if failures:
+        found.update(error=f"OCR could not read {failures} rendered page image(s).", error_code="ocr_error")
+    return found

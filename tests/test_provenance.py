@@ -50,6 +50,7 @@ def test_three_sources_agreeing_is_proof():
 
 def test_every_leg_is_required():
     assert proof(signals={}) is None                                              # no support in the book
+    assert proof(signals={"expectedAuthorInText": True}) is None                    # same author's other book
     assert proof(releases=()) is None                                             # no download name
     assert proof(embedded={"title": "Robot Riot!", "author": "Someone Else"}) is None
     assert proof(embedded={"title": "Robot Rampage", "author": "Andy Griffiths"}) is None

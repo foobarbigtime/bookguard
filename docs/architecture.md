@@ -38,6 +38,7 @@ operator action paths and their current-state checks.
 | Content verification | [`verifier.py`](../app/verifier.py) coordinates jobs, cached records, and verified repairs; [`verification_engine.py`](../app/verification_engine.py) classifies ebook identity |
 | Check library | [`library_check.py`](../app/library_check.py) reserves the scan → unresolved verification → unassigned-file sequence; underlying workers retain their own progress and evidence |
 | Evidence and byte safety | [`file_snapshot.py`](../app/file_snapshot.py), [`ebook_security.py`](../app/ebook_security.py), [`ebook_extraction.py`](../app/ebook_extraction.py), [`media_evidence.py`](../app/media_evidence.py), and audio/PDF/MOBI helpers |
+| Scanned PDF text | [`ocr_probe.py`](../app/ocr_probe.py) runs bounded Poppler/Tesseract children against the private snapshot; exact OCR matches support identity, while near matches only withhold verdicts |
 | Read models and presentation | [`home.py`](../app/home.py), [`library_review.py`](../app/library_review.py), [`activity.py`](../app/activity.py), [`health.py`](../app/health.py), [`services/dashboard.py`](../app/services/dashboard.py), templates, and static controllers |
 | Operator actions | [`triage.py`](../app/triage.py), [`actions.py`](../app/actions.py), [`repair.py`](../app/repair.py), [`catalogue_move.py`](../app/catalogue_move.py), [`replace.py`](../app/replace.py), and [`put_back.py`](../app/put_back.py) |
 | New imports and maintenance | [`import_watch.py`](../app/import_watch.py), [`scheduler.py`](../app/scheduler.py), [`unmatched.py`](../app/unmatched.py), and [`duplicates.py`](../app/duplicates.py) |
@@ -96,6 +97,23 @@ An unavailable catalogue postpones ebook verification for that book (a batch
 job continues and counts it as postponed); it does not mean a known empty
 series list. Inconclusive scanner failures are not reused as
 conclusive evidence.
+
+An ebook's author can appear in many different books. Matching metadata and that
+name alone do not prove the title in the base classifier, tolerant second pass,
+or provenance proof. The assigned or matching file title must occur in the text
+for those content-backed paths; corroborated ISBN evidence remains separate.
+Legacy correct verdicts with neither printed title nor assigned ISBN support
+are rechecked. `SECOND_PASS_VERSION=4` rechecks verdicts reached by older
+second-pass rules; `VERIFIER_VERSION` remains 28, preserving unaffected keys.
+
+Only actual PDF OCR attempts carry `evidence.ocrPolicy`, including the OCR
+policy version, enabled state, pages, and effective languages. This is compared
+during cache reuse rather than added to every verification signature. Changed
+OCR policy and attempts without a recorded policy recheck affected PDFs;
+tool/render/read failures are retried on the next check. A completed attempt
+with `errorCode=no_text` is reusable under the same policy. Native text-layer
+PDFs and other formats retain compatible proof. Stored scan receipts remain
+subject to the existing current-result and original-provenance rules.
 
 Unmatched adoption checks identity across every discovered audio file, using
 the shared whole-set title analyser. Unmatched applies an additional conservative

@@ -258,8 +258,8 @@ Steps 1-3 as built (one PR):
   without calling Bindery. Open REVIEW and REJECT items are grouped by the
   decision they need (`app/library_review.py`), alongside interrupted or
   refused workflows from the attention queue, each with what BookGuard did.
-  The automation card shows the mode read-only until step 6 makes it a
-  setting; "Right now" has no schedule until step 5.
+  The "Right now" card polls its lightweight endpoint while work starts,
+  progresses and finishes. Automation controls live on System.
 - **Review** (`/review`) lists those items as sentences with a detail panel:
   what's wrong, how BookGuard knows, the suggestion and its actions (move,
   metadata fix, mark reviewed, verify again), a separate danger zone (detach,

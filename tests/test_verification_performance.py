@@ -24,6 +24,7 @@ class _Extracted:
     notes: list
     front_text: str
     source: str
+    ocr: dict | None = None
 
 
 @pytest.fixture
@@ -72,6 +73,99 @@ def test_unchanged_book_is_answered_from_cache_without_a_snapshot(env, snapshot_
     assert first["cached"] is False
     assert second["cached"] is True
     assert second["verdict"] == first["verdict"]
+    assert len(snapshot_calls) == 1
+
+
+def _ocr_pdf(env, monkeypatch, *, error="", error_code=""):
+    result, source = env
+    pdf = source.with_suffix(".pdf")
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    result = {**result, "local_path": str(pdf)}
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(settings, "verification_ocr_pages", 3)
+    monkeypatch.setattr(settings, "verification_ocr_languages", "eng")
+
+    def extract(path):
+        attempted = settings.verification_ocr
+        text = "Bel Canto\nAnn Patchett" if attempted and not error else ""
+        return _Extracted(
+            {"title": "Bel Canto", "author": "Ann Patchett"}, text, [], [], text,
+            "native-pdf+ocr" if text else "native-pdf",
+            {"attempted": True, "pages": 1, "chars": len(text), "error": error,
+             "errorCode": error_code} if attempted else None,
+        )
+
+    monkeypatch.setattr(verifier, "extract_ebook_identity", extract)
+    return result
+
+
+def test_unchanged_successful_ocr_reuses_its_recorded_policy(env, snapshot_calls, monkeypatch):
+    result = _ocr_pdf(env, monkeypatch)
+    first = verifier.verify_result(result)
+    again = verifier.verify_result(result)
+    assert first["evidence"]["ocrPolicy"] == verifier.ocr_policy()
+    assert again["cached"] is True
+    assert len(snapshot_calls) == 1
+
+
+@pytest.mark.parametrize("attribute, value", [
+    ("verification_ocr_pages", 6),
+    ("verification_ocr_languages", "fra"),
+    ("verification_ocr", False),
+])
+def test_changed_ocr_settings_recheck_an_affected_pdf(env, snapshot_calls, monkeypatch, attribute, value):
+    result = _ocr_pdf(env, monkeypatch)
+    verifier.verify_result(result)
+    monkeypatch.setattr(settings, attribute, value)
+    again = verifier.verify_result(result)
+    assert again["cached"] is False
+    assert len(snapshot_calls) == 2
+    assert verifier.verify_result(result)["cached"] is True
+    if attribute == "verification_ocr":
+        assert again["verdict"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_failed_ocr_is_retried_when_the_dependency_recovers(env, snapshot_calls, monkeypatch):
+    result = _ocr_pdf(env, monkeypatch, error="Tesseract unavailable")
+    failed = verifier.verify_result(result)
+    assert failed["verdict"] == "INSUFFICIENT_EVIDENCE"
+    _ocr_pdf(env, monkeypatch)
+    recovered = verifier.verify_result(result)
+    assert recovered["cached"] is False
+    assert recovered["verdict"] == "VERIFIED_CORRECT"
+    assert len(snapshot_calls) == 2
+
+
+def test_successful_ocr_with_no_text_is_cached_until_the_page_policy_changes(env, snapshot_calls, monkeypatch):
+    result = _ocr_pdf(env, monkeypatch, error="OCR found no text.", error_code="no_text")
+    verifier.verify_result(result)
+    assert verifier.verify_result(result)["cached"] is True
+    assert len(snapshot_calls) == 1
+    monkeypatch.setattr(settings, "verification_ocr_pages", 6)
+    assert verifier.verify_result(result)["cached"] is False
+    assert len(snapshot_calls) == 2
+
+
+def test_ocr_setting_changes_keep_unrelated_native_proof_cached(env, snapshot_calls, monkeypatch):
+    result, _source = env
+    verifier.verify_result(result)
+    monkeypatch.setattr(settings, "verification_ocr_pages", 6)
+    monkeypatch.setattr(settings, "verification_ocr_languages", "fra")
+    assert verifier.verify_result(result)["cached"] is True
+    assert len(snapshot_calls) == 1
+
+
+def test_an_old_author_only_correct_verdict_is_rechecked(env, snapshot_calls):
+    result, source = env
+    old = verifier._save_verification(
+        result, str(source), verifier._file_fingerprint(str(source)),
+        "VERIFIED_CORRECT", 90, "native-text",
+        {"content": {"expected_signal": {"title_found": False, "author_found": True},
+                     "embedded_signal": {"title_found": False, "author_found": True}}},
+    )
+    fresh = verifier.verify_result(result)
+    assert fresh["cached"] is False and fresh["confidence"] == 99
+    assert fresh["id"] == old["id"]  # Same-result upsert; other scans' historical receipts stay intact.
     assert len(snapshot_calls) == 1
 
 

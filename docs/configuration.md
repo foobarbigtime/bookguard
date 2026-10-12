@@ -100,10 +100,25 @@ and its temporary images are removed immediately.
 | `BOOKGUARD_VERIFICATION_OCR_PAGES` | `3` | How many pages from the front to read (1-6). |
 | `BOOKGUARD_VERIFICATION_OCR_LANGUAGES` | `eng` | Tesseract languages, e.g. `eng+nld`. The matching `tesseract-ocr-<lang>` package must be in the image. |
 
+The supplied Compose file passes these variables into the container. OCR on/off and pages
+are also persisted Settings controls; saved UI values override their environment defaults.
+Languages are deployment-only and are never saved as a UI setting. The standard image
+includes English; a different language requires the matching language pack in a custom image.
+Recreate the container after changing a deployment-only environment value.
+
 OCR can misread a name, so scanned text is held to a stricter rule than a text layer. A title or
 author counts as evidence only when it stands alone on the page as whole words (lost spaces and
 punctuation are tolerated; "Volume I" is not "Volume II", and "Anne Rice" is not "JoAnne Rice"). A
 passage that is a letter or two off ("The Lost Colony") is never evidence for a book: it only stops
 BookGuard rejecting or rewriting a book that OCR may have misread. "Also by ..." lists are ignored,
-and for a scan the title, not just the author, must be found. A misread can therefore leave a book
-undecided, but cannot make a different book verify. The image adds about 100 MB for Poppler and Tesseract.
+and an author's name alone cannot verify an ebook, whether its text is native or OCR.
+Only exact normalized OCR matches provide positive content evidence; near matches can
+withhold a verdict. OCR readings remain evidence to inspect, not a guarantee of identity.
+Poppler, Tesseract and their dependencies increase image and rollback storage.
+
+Only checks that attempted OCR record an `ocrPolicy` (version, enabled state, page count,
+and effective languages). Changing that policy rechecks affected PDFs without invalidating
+unrelated native verification. Old attempts without a policy are checked once. Tool outages,
+timeouts, render failures and incomplete page reads are retried on the next verification;
+a completed OCR attempt that found no text stays cached until the file or policy changes.
+Disabling OCR rechecks a verdict that relied on OCR, using native extraction only.

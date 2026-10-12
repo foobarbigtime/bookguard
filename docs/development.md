@@ -9,7 +9,7 @@ the module responsible for the behavior you want to change.
 ```bash
 python3.12 -m venv .venv
 . .venv/bin/activate
-python -m pip install -r requirements.txt pytest httpx ruff==0.12.11
+python -m pip install -r requirements.txt pytest httpx "Pillow>=10.1" ruff==0.12.11
 ```
 
 `httpx` is required by the application tests that use FastAPI/Starlette's
@@ -19,6 +19,18 @@ test and lint tools match [CI](../.github/workflows/test.yml).
 Install FFmpeg, including `ffprobe`, for local audio inspection. Docker provides
 it through the [Dockerfile](../Dockerfile). Docker and Compose are needed for
 the isolated smoke suite and container-based acceptance scenarios.
+
+For OCR integration tests, install Poppler (`pdftoppm`) and Tesseract with the
+English language pack. On Debian/Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr
+```
+
+CI installs these tools and Pillow, then checks their availability before
+pytest, so the real scanned-PDF cases run. Local OCR tests can skip when those
+dependencies are missing; report those skips explicitly in a handoff.
 
 ## Run tests and lint
 
@@ -102,6 +114,11 @@ the authoritative list rather than assuming every available scenario runs in CI.
 
 ## Keep changes understandable
 
+Start a resumed assistant session with [the handoff](handoff.md), then verify
+its branch/PR state against GitHub. Update it before pausing: record completed
+changes, exact tested revisions and results, pending dependencies, and the next
+concrete step. Do not describe a green CI run as a successful host deployment.
+
 - Add HTTP validation and response handling in the relevant router; put domain
   behavior in its feature module.
 - Reuse current-scan, filesystem, and verification checks at mutation boundaries.
@@ -117,6 +134,12 @@ the authoritative list rather than assuming every available scenario runs in CI.
   A receipt references the original proof and must not appear as a fresh Activity
   verification. Read the series context once for key creation and classification;
   unavailable data is distinct from a known empty series list.
+- A shared author's name alone cannot prove an ebook's title. Preserve the title
+  requirement in the base classifier, second pass and provenance; corroborated
+  ISBN evidence remains a separate path. Recheck legacy author-only correct
+  verdicts rather than silently retaining them. Second-pass rules are versioned.
+- OCR policy is stored with actual attempts, keeping unrelated cache keys stable.
+  Cover policy changes, dependency recovery, and completed no-text attempts.
 - Cover the meaningful failure and restart cases when changing a workflow that
   has external effects. Preserve the evidence needed for reconciliation.
 - Update the corresponding guide and design status when behavior changes.

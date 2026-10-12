@@ -56,6 +56,13 @@ def test_tolerant_match_verifies_only_with_text_support():
     assert second_pass(RESULT, evidence("How to Steal a Dragon's Sword: A Novel", "C. Cowell")) is None
 
 
+@pytest.mark.parametrize("file_author", ["Cressida Cowell", "C. Cowell"])
+def test_shared_author_alone_never_settles_the_second_pass(file_author):
+    ev = evidence("How to Steal a Dragon's Sword", file_author,
+                  author_in=True, file_title_in=False)
+    assert second_pass(RESULT, ev) is None
+
+
 @pytest.fixture
 def bindery(tmp_path, monkeypatch):
     path = tmp_path / "bindery.db"

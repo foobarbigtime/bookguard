@@ -1,4 +1,4 @@
-"""OCR of image-only PDFs: bounded, optional, and only ever able to make a match fail, not invent one."""
+"""Bounded OCR of image-only PDFs and conservative use of its identity evidence."""
 
 from __future__ import annotations
 
@@ -108,6 +108,7 @@ def test_a_blank_scan_reports_no_text_instead_of_inventing_any(tmp_path):
     pil.new("L", (800, 1000), 255).save(tmp_path / "blank.pdf", "PDF", resolution=150)
     found = ocr_probe.ocr_pdf_front(tmp_path / "blank.pdf")
     assert "text" not in found and "no text" in found["error"]
+    assert found["error_code"] == "no_text"
 
 
 def test_children_are_wrapped_in_prlimit_and_the_language_is_validated(monkeypatch):
@@ -146,7 +147,8 @@ def test_image_only_pdfs_verified_before_ocr_are_looked_at_again_once(monkeypatc
     old = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
            "evidence": {"content": {"text_characters_examined": 0}}}
     assert predates_ocr(old)
-    assert not predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True}}})   # already tried
+    assert not predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True},
+                                               "ocrPolicy": ocr_probe.ocr_policy()}})  # already tried this policy
     assert not predates_ocr({**old, "evidence": {"content": {"text_characters_examined": 90000}}})  # has text
     assert not predates_ocr({**old, "source": "native-epub"})
     monkeypatch.setattr(settings, "verification_ocr", False)
