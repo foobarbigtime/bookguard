@@ -92,7 +92,8 @@ Les reported these results from the Unraid console:
   `45a12e00ef1b83543a043043a4682b8902bd3d24`.
 - `bookguard` and `bookguard-clamav` are healthy. The application's
   `/health` returned `{"status":"ok","version":"0.6.0"}`.
-  Active scan/verification jobs have not been checked.
+  Les clicked Check library on this deployed version during host acceptance.
+  Its completion and active scan/verification job status have not been checked.
 - The detached acceptance worktree is
   `/mnt/cache/appdata/bookguard-pr162-acceptance`, pinned to
   `4f5e4ef0b9ccb0cd0938e5691f96bc1a578caf47`.
@@ -101,20 +102,25 @@ Les reported these results from the Unraid console:
 - The isolated smoke test passed using image
   `bookguard-pr162-smoke:local`. Its terminal result was
   `PASS: BookGuard smoke tests completed without mounting live data or using a network.`
+- The pinned `quarantine-copy-fault` host scenario also passed using
+  `bookguard-pr162-smoke:local` (image ID
+  `sha256:4009d44ec4cb12f8b84900898d1fa5ce72132ce0f605ef99d344be759913029a`).
+  Its injected corrupt private copy was refused; the exact source and
+  unrelated control bytes survived. Terminal result:
+  `PASS: quarantine-copy-fault`.
 - Docker's `/var/lib/docker` is on a 60 GB loop filesystem. After reclaiming
-  1.007 GB of unused build cache and building the smoke image, it reported
+  1.007 GB of unused build cache and running both host tests, it still reported
   4.2 GB available and 94% used. Recheck space before further builds.
 
-Host quarantine-copy-fault acceptance and OCR tool availability checks are
-still pending. Independent Claude review, merges and a guarded production
-upgrade are also pending. No production deployment has been performed in this
-session.
+Host OCR tool availability checks are still pending. Independent Claude
+review, merges and a guarded production upgrade are also pending. No
+production deployment has been performed in this session.
 
 ## Next steps for Claude
 
-1. Finish the pinned Unraid acceptance: run the disposable
-   `quarantine-copy-fault` scenario and check that `pdftoppm`, `tesseract` and
-   `prlimit` are present in the smoke image. Record actual results here.
+1. Finish the pinned Unraid acceptance by checking that `pdftoppm`,
+   `tesseract` and `prlimit` are present in the smoke image and that Tesseract
+   lists the `eng` language pack. Record actual results here.
 2. Independently review the follow-up and its regression coverage, especially
    native/initial/provenance author-only cases, ISBN compatibility, and OCR
    policy/error cache transitions. Check the exact PR head's complete CI and
