@@ -9,7 +9,8 @@ continuing the project. Check GitHub for current heads before resuming.
 - OCR dependency: [PR #161](https://github.com/foobarbigtime/bookguard/pull/161),
   branch `claude/relaxed-pasteur-gso7yq`, reviewed at
   `d2977e9b975166c4011777404cc92b1741affa27`.
-- This follow-up branch: `codex/verification-hardening-handoff`.
+- This follow-up: [PR #162](https://github.com/foobarbigtime/bookguard/pull/162),
+  branch `codex/verification-hardening-handoff`.
   It is based on that OCR head and targets Claude's OCR branch, preserving the
   existing PR. Merge the follow-up into the OCR branch before #161 goes to main,
   or move the follow-up to main if #161 has already merged. Re-run CI after

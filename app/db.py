@@ -9,7 +9,7 @@ import sqlite3
 from .config import settings
 
 
-# Tika was removed: its two settings are listed here only so any value an older version stored is purged.
+# Purge removed Tika settings and values that must remain deployment-only.
 NON_PERSISTED_SETTING_KEYS = {
     "bindery_api_key", "verification_tika_url", "verification_use_tika", "verification_ocr_languages",
 }
