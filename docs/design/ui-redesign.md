@@ -274,9 +274,13 @@ Steps 1-3 as built (one PR):
   verification, and unassigned-file check in order. It reuses compatible proof,
   reports postponed books, and reserves the sequence against overlapping job
   starts. Scheduled scans remain scan-only.
-- Mixed recording folders require a separate recording-group preview/apply
-  workflow. This change does not automate splitting or moving those recordings;
-  Review avoids making whole-folder replacement their primary action.
+- Mixed recording folders get a read-only **Show recordings** preview
+  (`GET /api/triage/{id}/recording-groups`, `app/recording_groups.py`). It
+  groups the folder's audio files by the work each declares, matches each
+  group to the Bindery catalogue, and says which group is the assigned book.
+  It changes no files and does not call Bindery. Splitting or moving the
+  recordings is a separate apply step that does not exist yet; Review avoids
+  making whole-folder replacement their primary action.
 - Old URLs redirect (307, query kept): `/triage` → `/review/triage`,
   `/attention` → `/`, `/?classification=…` → `/review/scan-results?…`,
   `/history` → `/activity`, `/diagnostics` → `/system`.

@@ -53,6 +53,7 @@ is a reason to gather more evidence, not proof that the file is unsafe.
 | Mark reviewed / Keep | Record your decision in BookGuard without changing the file or Bindery |
 | Review metadata fix | Preview supported title/author or audio-tag changes; applying them requires Safe repair mode and writable media |
 | Move to correct book | Ask Bindery to move a proven misfiled ebook to the identified book; this does not download a new file |
+| Show recordings | For a folder holding several works, list each work, how many files it has, and which Bindery book it matches. Read-only: it changes nothing, and splitting is not available yet |
 | Quarantine | Move the file out of the library and remove its Bindery association after the action's checks |
 | Replace | Quarantine the wrong file, then ask Bindery to search for a replacement; follow-up problems remain visible in Activity |
 | Detach from Bindery | Remove the exact association and leave the physical file in place |

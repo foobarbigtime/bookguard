@@ -68,6 +68,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/triage/{result_id}/replace"),
     ("POST", "/api/quarantine/{cleanup_id}/put-back"),
     ("GET", "/api/triage/{result_id}/move-preview"),
+    ("GET", "/api/triage/{result_id}/recording-groups"),
     ("POST", "/api/triage/{result_id}/move-to-correct-book"),
     ("POST", "/api/catalogue-moves/{move_id}/reconcile"),
     ("GET", "/api/catalogue-moves"),

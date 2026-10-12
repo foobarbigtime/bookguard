@@ -155,6 +155,35 @@
     return el("button", { type: "button", class: "primary", text: "Move to correct book", "data-move-result": String(item.id) });
   }
 
+  // Read-only: lists the separate works inside a mixed audiobook folder.
+  function recordingsAction(item) {
+    const out = el("div", { class: "recording-groups", hidden: true });
+    const trigger = button("Show recordings", (node) => run(node, async () => {
+      node.textContent = "Reading files…";
+      try {
+        const preview = await request(`/api/triage/${item.id}/recording-groups`);
+        const label = (group) => group.assigned ? "assigned to this book"
+          : group.status === "catalogue" ? `matches "${group.book.title}"`
+          : group.status === "ambiguous" ? "could be more than one book"
+          : "not in your Bindery library";
+        out.replaceChildren(
+          el("p", { text: `${preview.workCount} work${preview.workCount === 1 ? "" : "s"} in ${preview.fileCount} files.` }),
+          el("ul", {}, ...preview.groups.map((group) => el("li", {
+            text: `${group.title || "Untitled"}${group.author ? ` (${group.author})` : ""}: ${group.fileCount} file${group.fileCount === 1 ? "" : "s"}, ${label(group)}`,
+          }))),
+          preview.unidentified.length ? el("p", { class: "muted", text: `${preview.unidentified.length} file(s) name no work.` }) : null,
+          preview.unreadable.length ? el("p", { class: "muted", text: `${preview.unreadable.length} file(s) could not be read.` }) : null,
+          el("p", { class: "muted", text: preview.note }));
+        out.hidden = false;
+      } finally {
+        node.textContent = "Show recordings";
+      }
+    }));
+    const wrap = el("div", {});
+    wrap.append(trigger, out);
+    return wrap;
+  }
+
   // One main action that fits the problem; everything else waits under "More".
   function actionsFor(item) {
     if (item.resolved) {
@@ -172,7 +201,7 @@
     const main = [];
     const more = [];
     if (item.group === "move") main.push(moveAction(item), quarantine);
-    else if (item.mixedAudio) more.push(quarantine);
+    else if (item.mixedAudio) { main.push(recordingsAction(item)); more.push(quarantine); }
     else if (item.group === "wrong") main.push(guarded ? replaceAction(item) : null, quarantine);
     else if (item.group === "language") main.push(guarded ? replaceAction(item) : null, quarantine);
     else if (item.group === "duplicate" || item.group === "unsafe") main.push(quarantine);
