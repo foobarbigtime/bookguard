@@ -226,15 +226,21 @@ def _verification_for_fingerprint(
 
 
 def predates_second_pass(item: dict) -> bool:
-    """An undecided ebook identity verdict recorded before second-pass evidence existed."""
+    """A stored ebook identity verdict that the current second pass should look at again.
+
+    True for: an undecided verdict recorded before the second pass existed (a volume conflict
+    is left alone); any verdict the second pass itself reached under an older version of its
+    rules; and one whose catalogue search could not read Bindery's database.
+    """
     evidence = item.get("evidence") or {}
-    verdict = item.get("verdict")
     if "expected_signal" not in (evidence.get("content") or {}):
         return False
-    if verdict == "INSUFFICIENT_EVIDENCE":
-        return "secondPass" not in evidence and evidence.get("reasonCode") != "TITLE_DESIGNATION_CONFLICT"
-    # A verdict the second pass itself reached under looser rules than today's.
-    return "secondPass" in evidence and int(evidence.get("secondPassVersion") or 1) < SECOND_PASS_VERSION
+    if evidence.get("secondPassIncomplete"):
+        return True
+    if "secondPass" in evidence:
+        return int(evidence.get("secondPassVersion") or 1) < SECOND_PASS_VERSION
+    return (item.get("verdict") == "INSUFFICIENT_EVIDENCE"
+            and evidence.get("reasonCode") != "TITLE_DESIGNATION_CONFLICT")
 
 
 def _ebook_directory_media_mismatch(result: dict) -> dict | None:

@@ -148,3 +148,70 @@ def title_number_conflict(expected: str, observed: str) -> bool:
     """Explicit volume numbers cannot be discarded by catalogue normalization."""
     e, o = normalize(canonical_title_designations(expected)), normalize(canonical_title_designations(observed))
     return _conflicting_title_number(e, o) or _conflicting_title_number(o, e)
+
+
+_EDITION_MARKERS = {
+    "graphic": r"\bgraphic\b", "illustrated": r"\billustrated\b", "abridged": r"\babridged\b",
+    "unabridged": r"\bunabridged\b", "adaptation": r"\badaptation\b", "comic": r"\bcomics?\b",
+    "manga": r"\bmanga\b", "annotated": r"\bannotated\b", "collection": r"\bcollection\b",
+    "omnibus": r"\bomnibus\b", "anthology": r"\banthology\b", "boxset": r"\bbox(?:ed)? set\b",
+    "screenplay": r"\bscreenplay\b",
+}
+
+
+def edition_markers(title: str) -> frozenset[str]:
+    """Words that make a title a different form of the same story (graphic novel, abridged, ...)."""
+    text = normalize(title)
+    return frozenset(name for name, pattern in _EDITION_MARKERS.items() if re.search(pattern, text))
+
+
+# --- shared helpers for the second evidence pass and provenance ------------------------------
+
+MAX_TITLE_CHARS = 300  # titles come from files and release names; bound them before any regex
+_ARTICLES = ("the", "an", "a")
+_APOSTROPHES = str.maketrans("", "", "'’ʼ‘")
+_INVERTED_ARTICLE = re.compile(r",\s*(?:the|an|a)\s*(?=[:(]|$)", re.IGNORECASE)
+_BRACKET_GROUP = re.compile(r"\([^()]*\)|\[[^\[\]]*\]")
+_RANGE = re.compile(r"\d\s*(?:[-–—/&]|of|to)\s*\d|\d+\.\d+", re.IGNORECASE)
+
+
+def clip(value: str | None) -> str:
+    return str(value or "")[:MAX_TITLE_CHARS]
+
+
+def canon_tokens(title: str | None) -> list[str]:
+    """Words of a title in order: apostrophes and punctuation gone, a leading article dropped,
+    and a library-style trailing article ("Secret Servant, The") treated as absent.
+
+    Word ORDER and every other word are kept, and a title with no Latin letters or digits
+    gives no tokens at all (so two such titles are never "equal").
+    """
+    text = _INVERTED_ARTICLE.sub(" ", clip(title)).translate(_APOSTROPHES)
+    tokens = normalize(text).split()
+    return tokens[1:] if tokens and tokens[0] in _ARTICLES else tokens
+
+
+def titles_equal(a: str | None, b: str | None) -> bool:
+    ta = canon_tokens(a)
+    return bool(ta) and ta == canon_tokens(b)
+
+
+def designations(title: str | None) -> set[str]:
+    """Volume numbers a title names, in brackets or after "Book/Part/Vol/No/#".
+
+    A range ("1-3"), "N of M" or a decimal is kept as one distinct token, so an omnibus
+    never equals a single volume.
+    """
+    text = clip(title)
+    found: set[str] = set()
+    for group in _BRACKET_GROUP.findall(text):
+        body = group[1:-1]
+        ranged = _RANGE.search(body)
+        if ranged:
+            found.add("range:" + re.sub(r"\s+", "", ranged.group(0).lower()))
+        else:
+            found.update(n.lstrip("0") or "0" for n in re.findall(r"\d+", body))
+    outside = _BRACKET_GROUP.sub(" ", text)
+    for match in re.finditer(r"(?:#|\b(?:book|part|vol(?:ume)?\.?|no\.?)\s*)(\d+)\b", outside, re.IGNORECASE):
+        found.add(match.group(1).lstrip("0") or "0")
+    return found

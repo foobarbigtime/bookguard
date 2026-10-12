@@ -33,6 +33,11 @@
     {% endif %}
   </nav>
 
+  {% if undecided_breakdown %}
+  <p class="muted" id="undecidedBreakdown"><strong>Why these are undecided:</strong>
+    {% for label, count in undecided_breakdown %}{{ label }} <b>{{ count }}</b>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+  {% endif %}
+
   <div class="review-layout">
     <section class="card review-list" aria-label="Books">
       <div class="review-bulk">

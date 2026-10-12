@@ -225,14 +225,20 @@
     const dl = el("dl", { class: "detail-facts" },
       el("dt", { text: "Bindery has" }),
       el("dd", { text: `${who.expectedTitle || "—"}${who.expectedAuthor ? ` · ${who.expectedAuthor}` : ""}` }),
-      el("dt", { text: "The file says" }),
-      el("dd", { text: who.fileTitle || who.fileAuthor ? `${who.fileTitle || "—"}${who.fileAuthor ? ` · ${who.fileAuthor}` : ""}` : "No title or author in the file" }));
+      el("dt", { text: who.isAudiobook ? "The audio tags say" : "The file says" }),
+      el("dd", { text: who.fileTitle || who.fileAuthor ? `${who.fileTitle || "—"}${who.fileAuthor ? ` · ${who.fileAuthor}` : ""}` : (who.isAudiobook ? "No usable title or author tags" : "No title or author in the file") }));
+    if (who.isAudiobook && who.trackCount) {
+      dl.append(el("dt", { text: "Tracks" }), el("dd", { text: `${who.trackCount} · ${who.tagTitleMatches} tagged with Bindery's title, ${who.tagTitleMismatches} with another` }));
+    }
     if (who.textCharacters) {
       dl.append(
         el("dt", { text: "Title in text" }), el("dd", { text: `“${who.expectedTitle}”${inText(who.expectedTitleInText)}` }),
         el("dt", { text: "Author in text" }), el("dd", { text: `${who.expectedAuthor || "—"}${inText(who.expectedAuthorInText)}` }));
     }
     if (who.isbns.length) dl.append(el("dt", { text: "ISBN in file" }), el("dd", { text: who.isbns.join(", ") }));
+    if (who.downloadNames.length) dl.append(el("dt", { text: "Bindery downloaded it as" }), el("dd", { text: who.downloadNames.join(" · ") }));
+    if (who.notABook.length) dl.append(el("dt", { text: "Not a book" }), el("dd", { text: `Bindery's history for this entry includes ${who.notABook.join(" · ")}, which is not a book release.` }));
+    if (who.proofSources.length) dl.append(el("dt", { text: "Proof" }), el("dd", { text: `These independent sources agree: ${who.proofSources.join("; ")}.` }));
     return section("Bindery vs the file", dl);
   }
 

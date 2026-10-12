@@ -154,6 +154,16 @@ def test_each_unsafe_condition_blocks_the_move(world, monkeypatch, change, block
     assert blocker in preview["blockers"]
 
 
+def test_a_title_and_author_only_verdict_cannot_drive_a_move(world):
+    verification = proven()
+    verification["evidence"]["secondPassCatalogue"] = {"isbnCorroborated": False}
+    preview = move_preview(RESULT, verification, FakeBindery(world))
+    assert preview["eligible"] is False and "onlyTitleAndAuthorNameTheTarget" in preview["blockers"]
+    # With an ISBN that names the same book it is as eligible as a first-pass proof.
+    verification["evidence"]["secondPassCatalogue"] = {"isbnCorroborated": True}
+    assert move_preview(RESULT, verification, FakeBindery(world))["eligible"] is True
+
+
 # --- the move ---------------------------------------------------------------
 
 

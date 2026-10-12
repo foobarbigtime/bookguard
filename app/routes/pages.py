@@ -14,7 +14,7 @@ from ..diagnostics import _malware_report, diagnostics_snapshot
 from ..health import health_checks, system_about
 from ..scheduler import scheduled_tasks
 from ..home import home_summary
-from ..library_review import GROUPS, group_counts, open_review_items
+from ..library_review import GROUPS, group_counts, open_review_items, undecided_breakdown
 from ..activity import RESULTS, WHAT, WHO, activity_events, activity_totals, filter_events
 from ..history import operation_detail
 from ..put_back import put_back_preview
@@ -312,6 +312,7 @@ def review_page(request: Request, group: str = "", language: str = "", page: int
             "groups": GROUPS,
             "tones": {key: tone for key, _, tone in GROUPS},
             "counts": group_counts(items),
+            "undecided_breakdown": undecided_breakdown(items) if selected == ["undecided"] else [],
             "group": ",".join(selected),
             "language_filter": language == "other",
             "show_resolved": bool(show_resolved),
