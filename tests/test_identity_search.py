@@ -6,7 +6,6 @@ import sqlite3
 
 import pytest
 
-from app import identity_search
 from app.config import settings
 from app.identity_search import (
     catalogue_candidates, second_pass, soft_author_match, soft_title_match,
