@@ -140,6 +140,67 @@ def _contains(row: dict, verification: dict | None) -> str:
     return f"{title}{_by(author)}" if title else ""
 
 
+def _identity(evidence: dict) -> dict[str, Any]:
+    """What Bindery expects next to what the file says about itself."""
+    expected = evidence.get("expected") or {}
+    embedded = evidence.get("embedded") or {}
+    content = evidence.get("content") or {}
+    expected_signal = content.get("expected_signal") or {}
+    embedded_signal = content.get("embedded_signal") or {}
+    return {
+        "expectedTitle": str(expected.get("title") or ""),
+        "expectedAuthor": str(expected.get("author") or ""),
+        "fileTitle": str(embedded.get("title") or ""),
+        "fileAuthor": str(embedded.get("author") or ""),
+        "isbns": [str(i) for i in (embedded.get("identifiers") or [])][:5],
+        "textCharacters": int(content.get("text_characters_examined") or 0),
+        "expectedTitleInText": bool(expected_signal.get("title_found")),
+        "expectedAuthorInText": bool(expected_signal.get("author_found")),
+        "fileTitleInText": bool(embedded_signal.get("title_found")),
+        "fileAuthorInText": bool(embedded_signal.get("author_found")),
+    }
+
+
+def _why_undecided(evidence: dict) -> str:
+    """A specific plain-language reason BookGuard could not decide, from the stored evidence."""
+    if (evidence.get("reasonCode") or "") == "TITLE_DESIGNATION_CONFLICT":
+        return str(evidence.get("explanation") or "")
+    who = _identity(evidence)
+    if not who["expectedTitle"] and not who["fileTitle"]:
+        return "BookGuard could not prove what this file is."
+    if who["textCharacters"] == 0:
+        return ("No readable text could be extracted from this file, so its content could not be "
+                "compared with the book. It may be image-only, protected, or damaged.")
+    parts = []
+    if who["fileTitle"] or who["fileAuthor"]:
+        parts.append(f"The file calls itself “{who['fileTitle'] or 'untitled'}”{_by(who['fileAuthor'])}; "
+                     f"Bindery has it as “{who['expectedTitle']}”{_by(who['expectedAuthor'])}.")
+    else:
+        parts.append("The file carries no title or author of its own.")
+    title_in, author_in = who["expectedTitleInText"], who["expectedAuthorInText"]
+    if title_in and author_in:
+        parts.append("Both the title and the author appear in the book, but not in a place that proves "
+                     "they identify it rather than a series list or advertisement.")
+    elif title_in:
+        parts.append(f"The title appears in the book but the author “{who['expectedAuthor']}” does not; "
+                     "Bindery’s author name may be spelled differently from the book’s.")
+    elif author_in:
+        parts.append(f"The author appears in the book but the title “{who['expectedTitle']}” does not; "
+                     "it may be a different title, edition or translation.")
+    elif who["fileTitleInText"] or who["fileAuthorInText"]:
+        parts.append("Neither Bindery’s title nor its author appears in the book, but the file’s own title "
+                     "does, so this may be a different book.")
+    else:
+        parts.append("Neither the title nor the author could be found in the readable text.")
+    for step in evidence.get("secondPass") or []:
+        if step.get("check") == "catalogueSearch":
+            count = int(step.get("matches") or 0)
+            parts.append("BookGuard also searched your Bindery library for a book matching the file’s own "
+                         + ("title and author and found none." if not count
+                            else f"title and author and found {count}, too many to pick one safely."))
+    return " ".join(parts)
+
+
 def _suggestion(group: str, verification: dict | None, language: dict | None = None) -> str:
     evidence = (verification or {}).get("evidence") or {}
     catalogue = evidence.get("catalogue") or {}
@@ -211,6 +272,8 @@ def review_item(row: dict, verification: dict | None) -> dict[str, Any]:
         "confidence": int((verification or {}).get("confidence") or 0),
         "verifiedAt": str((verification or {}).get("updated_at") or ""),
         "explanation": str(evidence.get("explanation") or ""),
+        "identity": _identity(evidence) if verification else None,
+        "whyUndecided": _why_undecided(evidence) if verification and group == "undecided" else "",
         "relationship": str((evidence.get("catalogue") or {}).get("relationship") or ""),
         "otherBook": {
             "id": int((evidence.get("catalogue") or {}).get("bookId") or 0),

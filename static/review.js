@@ -20,7 +20,7 @@
     metadata: () => "This is the right book, but the title or author stored inside the file is wrong.",
     verified: () => "This file is the right book.",
     undecided: (item) => item.verified
-      ? "BookGuard could not prove what this file is."
+      ? (item.whyUndecided || "BookGuard could not prove what this file is.")
       : item.scannerOutage
         ? "The virus scan did not give a result, so verification could not finish. Check the scanner on System, then verify again."
         : "The library scan flagged this file, and it has not been verified yet.",
@@ -216,6 +216,26 @@
     return { main: main.filter(Boolean), more: more.filter(Boolean) };
   }
 
+  // Bindery's record next to what the file says about itself, so the operator
+  // can compare the two without opening the file.
+  function identityTable(item) {
+    const who = item.identity;
+    if (!who || (!who.expectedTitle && !who.fileTitle)) return null;
+    const inText = (found) => (found ? " (found in the book)" : " (not found in the book)");
+    const dl = el("dl", { class: "detail-facts" },
+      el("dt", { text: "Bindery has" }),
+      el("dd", { text: `${who.expectedTitle || "—"}${who.expectedAuthor ? ` · ${who.expectedAuthor}` : ""}` }),
+      el("dt", { text: "The file says" }),
+      el("dd", { text: who.fileTitle || who.fileAuthor ? `${who.fileTitle || "—"}${who.fileAuthor ? ` · ${who.fileAuthor}` : ""}` : "No title or author in the file" }));
+    if (who.textCharacters) {
+      dl.append(
+        el("dt", { text: "Title in text" }), el("dd", { text: `“${who.expectedTitle}”${inText(who.expectedTitleInText)}` }),
+        el("dt", { text: "Author in text" }), el("dd", { text: `${who.expectedAuthor || "—"}${inText(who.expectedAuthorInText)}` }));
+    }
+    if (who.isbns.length) dl.append(el("dt", { text: "ISBN in file" }), el("dd", { text: who.isbns.join(", ") }));
+    return section("Bindery vs the file", dl);
+  }
+
   function technicalDetails(item) {
     const rows = [
       ["Scan result", `#${item.id} · ${item.classification} · ${item.reasonCode.replaceAll("_", " ")} · risk ${item.riskScore}`],
@@ -253,6 +273,7 @@
         el("h2", { text: item.title }),
         el("p", { class: "muted", text: [item.author, item.format].filter(Boolean).join(" · ") })),
       section(item.resolved ? "Recorded decision" : "What's wrong", el("p", { text: item.resolved ? `Reviewed: ${item.resolution.replaceAll("_", " ")}. The evidence below is retained for reference.` : item.mixedAudio ? "This folder contains recordings of multiple works. Its attachment does not describe everything in the folder." : (WHAT_IS_WRONG[item.group] || WHAT_IS_WRONG.undecided)(item) })),
+      identityTable(item),
       section("How BookGuard knows", evidence),
       section("Suggestion",
         language.otherLanguage && item.group !== "language" ? el("p", { class: "lang-warning", text: `This book is in ${language.label}, which is not one of your library languages.` }) : null,
@@ -268,7 +289,7 @@
       parts.push(el("p", { class: "muted small-print", text: "Quarantine and Replace appear here when Bindery actions are enabled in Settings." }));
     }
     parts.push(technicalDetails(item));
-    detail.replaceChildren(...parts);
+    detail.replaceChildren(...parts.filter(Boolean));
     if (window.matchMedia("(max-width: 950px)").matches) detail.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
