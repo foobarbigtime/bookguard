@@ -21,7 +21,9 @@
     verified: () => "This file is the right book.",
     undecided: (item) => item.verified
       ? "BookGuard could not prove what this file is."
-      : "The library scan flagged this file, and it has not been verified yet.",
+      : item.scannerOutage
+        ? "The virus scan did not give a result, so verification could not finish. Check the scanner on System, then verify again."
+        : "The library scan flagged this file, and it has not been verified yet.",
   };
 
   // ---- small DOM helpers (server text is only ever set as textContent)

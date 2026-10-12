@@ -43,8 +43,8 @@ def _table_exists(conn, table: str) -> bool:
     return row is not None
 
 
-def latest_verifications(result_ids: list[int]) -> dict[int, dict[str, Any]]:
-    """The newest conclusive verification for each result, without touching files."""
+def _newest_verifications(result_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """The newest verification record for each result, conclusive or not."""
     if not result_ids:
         return {}
     latest: dict[int, dict[str, Any]] = {}
@@ -73,11 +73,26 @@ def latest_verifications(result_ids: list[int]) -> dict[int, dict[str, Any]]:
                 except (TypeError, ValueError):
                     item["evidence"] = {}
                 latest[result_id] = item
-    return {
-        result_id: item
-        for result_id, item in latest.items()
-        if not verification_is_inconclusive(item.get("verdict"), item.get("evidence"))
-    }
+    return latest
+
+
+def split_verifications(result_ids: list[int]) -> tuple[dict[int, dict[str, Any]], set[int]]:
+    """(newest conclusive verification per result, results whose newest one was a scanner outage).
+
+    One read serves both: a malware scan that gave no verdict proves nothing about the file."""
+    conclusive: dict[int, dict[str, Any]] = {}
+    outages: set[int] = set()
+    for result_id, item in _newest_verifications(result_ids).items():
+        if verification_is_inconclusive(item.get("verdict"), item.get("evidence")):
+            outages.add(result_id)
+        else:
+            conclusive[result_id] = item
+    return conclusive, outages
+
+
+def latest_verifications(result_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """The newest conclusive verification for each result, without touching files."""
+    return split_verifications(result_ids)[0]
 
 
 def _group_for(verification: dict | None) -> str:
@@ -210,9 +225,10 @@ def open_review_items(*, include_resolved: bool = False) -> list[dict[str, Any]]
     states = triage_states(rows)
     if not include_resolved:
         rows = [row for row in rows if not states[int(row["id"])]["resolved"]]
-    verifications = latest_verifications([int(row["id"]) for row in rows])
+    verifications, outages = split_verifications([int(row["id"]) for row in rows])
     items = [review_item(row, verifications.get(int(row["id"]))) for row in rows]
     for item in items:
+        item["scannerOutage"] = item["id"] in outages
         item["resolved"] = states[item["id"]]["resolved"]
         item["resolution"] = states[item["id"]].get("resolution", "")
     order = {key: index for index, (key, _, _) in enumerate(GROUPS)}

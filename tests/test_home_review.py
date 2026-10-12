@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app import home
+from app import home, library_review
 from app.config import settings
 from app.db import add_result, create_scan, finish_scan, init_local_db, local_conn
 from app.library_review import group_counts, open_review_items
@@ -129,7 +129,7 @@ def test_home_summary_groups_decisions_and_counts_the_library(library):
         "checked": 9, "passed": 1, "verified": 1, "wrongFile": 3, "damaged": 1, "details": 1, "undecided": 3,
     }
     undecided = summary["attention"][-1]
-    assert undecided["why"] == "2 have not been verified yet."
+    assert undecided["why"] == "2 have not been verified yet. 1 could not finish because the virus scan did not give a result."
     assert summary["automation"]["mode"] == "manual"
 
 
@@ -378,3 +378,10 @@ def test_review_offers_replace_for_another_language_and_settings_has_the_field()
     controller = Path("static/review.js").read_text(encoding="utf-8")
     assert 'item.group === "language") main.push(guarded ? replaceAction(item) : null, quarantine)' in controller
     assert 'name="library_languages"' in Path("templates/settings.html").read_text(encoding="utf-8")
+
+
+def test_scanner_outage_is_flagged_on_the_item(library):
+    items = {i["title"]: i for i in library_review.open_review_items()}
+    assert items["Outage"]["scannerOutage"] is True
+    assert items["Unverified"]["scannerOutage"] is False
+    assert items["Chase"]["scannerOutage"] is False
