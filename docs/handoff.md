@@ -83,26 +83,53 @@ Prior baseline evidence, not validation of this follow-up:
   correct scanned book, left a wrong book by the same author undecided, and
   recognized a title page carrying placeholder metadata.
 
-The live Unraid deployed revision, job state and current health have not been
-checked in this session. No production deployment has been performed.
+## Unraid acceptance checkpoint (2026-10-12)
+
+Les reported these results from the Unraid console:
+
+- Production checkout `/mnt/cache/appdata/bookguard` is clean on `main`.
+  The checkout and running image revision both match
+  `45a12e00ef1b83543a043043a4682b8902bd3d24`.
+- `bookguard` and `bookguard-clamav` are healthy. The application's
+  `/health` returned `{"status":"ok","version":"0.6.0"}`.
+  Active scan/verification jobs have not been checked.
+- The detached acceptance worktree is
+  `/mnt/cache/appdata/bookguard-pr162-acceptance`, pinned to
+  `4f5e4ef0b9ccb0cd0938e5691f96bc1a578caf47`.
+  Keep host tests pinned to this revision while later documentation-only
+  commits record their results.
+- The isolated smoke test passed using image
+  `bookguard-pr162-smoke:local`. Its terminal result was
+  `PASS: BookGuard smoke tests completed without mounting live data or using a network.`
+- Docker's `/var/lib/docker` is on a 60 GB loop filesystem. After reclaiming
+  1.007 GB of unused build cache and building the smoke image, it reported
+  4.2 GB available and 94% used. Recheck space before further builds.
+
+Host quarantine-copy-fault acceptance and OCR tool availability checks are
+still pending. Independent Claude review, merges and a guarded production
+upgrade are also pending. No production deployment has been performed in this
+session.
 
 ## Next steps for Claude
 
-1. Independently review the follow-up and its regression coverage, especially
+1. Finish the pinned Unraid acceptance: run the disposable
+   `quarantine-copy-fault` scenario and check that `pdftoppm`, `tesseract` and
+   `prlimit` are present in the smoke image. Record actual results here.
+2. Independently review the follow-up and its regression coverage, especially
    native/initial/provenance author-only cases, ISBN compatibility, and OCR
    policy/error cache transitions. Check the exact PR head's complete CI and
    confirm the real OCR cases ran without skips.
-2. Combine the follow-up with #161 in the order above; use the combined CI
+3. Combine the follow-up with #161 in the order above; use the combined CI
    result and record the merged main revision here. Preserve unrelated edits
    if Claude's OCR branch has advanced.
-3. Before deployment, check for active scans/verifications and complete the
+4. Before deployment, check for active scans/verifications and complete the
    guarded upgrade and live acceptance in [operations.md](operations.md).
    Verify the exact running image revision and runtime protections.
-4. Run Check library. Inspect the scanned *How to Steal a Dragon's Sword* PDF
+5. Run Check library. Inspect the scanned *How to Steal a Dragon's Sword* PDF
    from #161, a known wrong book by the same author, and affected cached OCR
    cases. Confirm ordinary good books reuse compatible proof and Activity
    links reused receipts to original verification.
-5. Update this handoff with the actual deployment result and remaining work.
+6. Update this handoff with the actual deployment result and remaining work.
    Mixed audiobook folders currently have a read-only recording preview;
    applying a split remains unimplemented. The removed Automatic Mode and
    self-download workflows are outside this follow-up.
