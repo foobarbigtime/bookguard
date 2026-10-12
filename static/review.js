@@ -308,6 +308,51 @@
     });
   }
 
+  // Fix a whole group: preview which books are eligible, then apply them one
+  // at a time through the same guarded endpoints used for a single book.
+  const bulk = document.getElementById("reviewBulk");
+  if (bulk) {
+    const trigger = document.getElementById("reviewBulkApply");
+    const out = document.getElementById("reviewBulkOut");
+    const group = bulk.dataset.bulkGroup;
+    const say = (...nodes) => { out.replaceChildren(...nodes.filter(Boolean)); out.hidden = false; };
+    trigger.addEventListener("click", async () => {
+      trigger.disabled = true;
+      say(el("p", { text: "Checking every book…" }));
+      try {
+        const plan = await request(`/api/review/bulk-preview?group=${encodeURIComponent(group)}`);
+        const ready = plan.books.filter((book) => book.eligible);
+        const skipped = plan.books.filter((book) => !book.eligible);
+        const list = el("ul", {}, ...ready.map((book) => el("li", { text: `${book.title}${book.author ? ` (${book.author})` : ""}${book.detail ? `: ${book.detail}` : ""}` })));
+        const why = skipped.length ? el("details", {}, el("summary", { text: `${skipped.length} cannot be fixed together` }),
+          el("ul", {}, ...skipped.map((book) => el("li", { text: `${book.title}: ${book.blockers || "not eligible"}` })))) : null;
+        if (!ready.length) { say(el("p", { text: "Nothing can be fixed together right now." }), why); trigger.disabled = false; return; }
+        const go = button(`${plan.label} (${ready.length})`, async (node) => {
+          if (!window.confirm(`${plan.label}? ${ready.length} book${ready.length === 1 ? "" : "s"}, one at a time. It stops at the first failure.`)) return;
+          node.disabled = true;
+          let done = 0;
+          try {
+            for (const book of ready) {
+              say(el("p", { text: `Working on ${done + 1} of ${ready.length}: ${book.title}…` }));
+              const result = await post(plan.endpoint.replace("{id}", book.id), plan.confirm);
+              if (result && result.ok === false) throw new Error(`${book.title}: ${result.message || "not completed"}`);
+              done += 1;
+            }
+            say(el("p", { text: `Done: ${done} of ${ready.length}.` }));
+            window.setTimeout(() => window.location.reload(), 1500);
+          } catch (error) {
+            say(el("p", { class: "notice warning", text: `Stopped after ${done} of ${ready.length}. ${error.message}` }));
+            node.disabled = false;
+          }
+        }, "primary");
+        say(el("p", { text: `${ready.length} of ${plan.total} can be fixed now:` }), list, why, go);
+      } catch (error) {
+        say(el("p", { class: "notice warning", text: error.message }));
+      }
+      trigger.disabled = false;
+    });
+  }
+
   const fromHash = Number((location.hash.match(/^#book-(\d+)$/) || [])[1]);
   // Activity links and old bookmarks may point to a book on another page.
   if (fromHash && !items.has(fromHash)) {

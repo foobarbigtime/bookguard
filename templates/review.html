@@ -40,6 +40,13 @@
         <button type="button" id="reviewKeepSelected" disabled>Mark selected reviewed</button>
         <small class="muted">Records your decision in BookGuard; files and Bindery stay as they are.</small>
       </div>
+      {% if selected|length == 1 and selected[0] in ['move', 'metadata', 'wrong'] and allow_actions %}
+      <div class="review-bulk" id="reviewBulk" data-bulk-group="{{ selected[0] }}">
+        <button type="button" class="primary" id="reviewBulkApply">Check what can be fixed together</button>
+        <small class="muted">Shows a preview first. Each book is re-checked and fixed one at a time, with the same Undo and records as fixing it by hand.</small>
+        <div id="reviewBulkOut" role="status" aria-live="polite" hidden></div>
+      </div>
+      {% endif %}
       {% if pagination.total %}
       <nav class="row-between" aria-label="Review pages">
         {% if pagination.previous %}<a href="{{ pagination.previous }}" rel="prev">← Previous</a>{% endif %}
