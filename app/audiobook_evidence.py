@@ -14,6 +14,7 @@ from .matcher import (
 from .media_discovery import AUDIO_EXTENSIONS, representative_items
 from .media_evidence import inspect_media_path
 from .metadata import audio_metadata_summary
+from .series_titles import catalogue_title_variants
 
 
 def _filename_identity_support(
@@ -161,8 +162,16 @@ def build_audiobook_evidence(result: dict[str, Any], path: str) -> dict[str, Any
 
     technical = verify_audio_files(audio_paths)
     probes = list(technical.get("files") or [])
-    expected_title = str(result.get("title") or "")
+    catalogue_title = str(result.get("title") or "")
+    expected_title = catalogue_title
     expected_author = str(result.get("author") or "")
+    # Bindery titles are library-style ("Secret Servant, The (Gabriel Allon)") while tags
+    # are not. Judge the tags against the first form of Bindery's own title that they
+    # fully support; if none does, the original title is judged exactly as before.
+    for variant in catalogue_title_variants(catalogue_title, result.get("_verification_series") or []):
+        if variant != catalogue_title and classify_audio(variant, expected_author, probes)[0] == "PASS":
+            expected_title = variant
+            break
     whole_set = analyze_audio_identity_set(expected_title, expected_author, probes)
     filename_support = _filename_identity_support(
         expected_title,
@@ -185,6 +194,8 @@ def build_audiobook_evidence(result: dict[str, Any], path: str) -> dict[str, Any
         if key != "files"
     }
     metadata_summary = audio_metadata_summary(samples)
+    if expected_title != catalogue_title:
+        base_evidence["expected"]["titleAsTagged"] = expected_title
     evidence = {
         **base_evidence,
         "technical": technical_summary,

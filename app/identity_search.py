@@ -67,6 +67,16 @@ _SERIES_PAREN = re.compile(
 )
 
 
+# Qualifiers that name a product or production, not a different text. Anything else in a
+# bracket is a series label (needs a number or other evidence) or a real distinction.
+_SAME_TEXT_QUALIFIER = re.compile(
+    r"(?:the\s+)?(?:full[- ]cast(?:\s+(?:edition|recording|audio))?|dramati[sz]ed(?:\s+edition)?"
+    r"|movie\s+tie[- ]in(?:\s+edition)?|tie[- ]in\s+edition|special\s+edition|anniversary\s+edition"
+    r"|deluxe\s+edition|collector'?s\s+edition|kindle\s+edition|e-?book(?:\s+edition)?|digital\s+edition)",
+    re.IGNORECASE,
+)
+
+
 def series_free_title(value: str, allow_unnumbered: bool = False) -> tuple[str, str]:
     """(title without a trailing "(Series, N)" label, the volume number it carried).
 
@@ -79,7 +89,8 @@ def series_free_title(value: str, allow_unnumbered: bool = False) -> tuple[str, 
     found = _SERIES_PAREN.search(value)
     if not found or edition_markers(found.group("label")):
         return value, ""
-    if not found.group("num") and not allow_unnumbered:
+    same_text = bool(_SAME_TEXT_QUALIFIER.fullmatch(found.group("label").strip()))
+    if not found.group("num") and not allow_unnumbered and not same_text:
         return value, ""
     base = value[: found.start()].strip()
     if not meaningful_words(base):

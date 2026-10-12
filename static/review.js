@@ -225,8 +225,11 @@
     const dl = el("dl", { class: "detail-facts" },
       el("dt", { text: "Bindery has" }),
       el("dd", { text: `${who.expectedTitle || "—"}${who.expectedAuthor ? ` · ${who.expectedAuthor}` : ""}` }),
-      el("dt", { text: "The file says" }),
-      el("dd", { text: who.fileTitle || who.fileAuthor ? `${who.fileTitle || "—"}${who.fileAuthor ? ` · ${who.fileAuthor}` : ""}` : "No title or author in the file" }));
+      el("dt", { text: who.isAudiobook ? "The audio tags say" : "The file says" }),
+      el("dd", { text: who.fileTitle || who.fileAuthor ? `${who.fileTitle || "—"}${who.fileAuthor ? ` · ${who.fileAuthor}` : ""}` : (who.isAudiobook ? "No usable title or author tags" : "No title or author in the file") }));
+    if (who.isAudiobook && who.trackCount) {
+      dl.append(el("dt", { text: "Tracks" }), el("dd", { text: `${who.trackCount} · ${who.tagTitleMatches} tagged with Bindery's title, ${who.tagTitleMismatches} with another` }));
+    }
     if (who.textCharacters) {
       dl.append(
         el("dt", { text: "Title in text" }), el("dd", { text: `“${who.expectedTitle}”${inText(who.expectedTitleInText)}` }),

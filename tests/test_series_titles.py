@@ -170,3 +170,15 @@ def test_series_tagged_file_by_another_author_is_never_accepted():
     )
 
     assert verdict not in {"VERIFIED_CORRECT", "METADATA_ERROR"}
+
+
+def test_catalogue_title_variants_follow_the_bindery_title_only():
+    from app.series_titles import catalogue_title_variants
+    with_series = catalogue_title_variants("Secret Servant, The (Gabriel Allon)", ["Gabriel Allon"])
+    assert with_series[0] == "Secret Servant, The (Gabriel Allon)"
+    assert "The Secret Servant" in with_series or "Secret Servant, The" in with_series
+    assert not any("Allon" not in v and v.startswith("Secret Servant, The (") for v in with_series)
+    # Without Bindery's series data the label stays, so nothing is invented.
+    assert all("Allon" in v for v in catalogue_title_variants("Secret Servant, The (Gabriel Allon)", []))
+    assert "How to Ride a Dragons Storm" in catalogue_title_variants("How to Ride a Dragon's Storm")
+    assert catalogue_title_variants("") == []

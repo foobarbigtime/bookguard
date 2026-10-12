@@ -148,22 +148,31 @@ def _identity(evidence: dict) -> dict[str, Any]:
     expected = evidence.get("expected") or {}
     embedded = evidence.get("embedded") or {}
     content = evidence.get("content") or {}
+    tags = evidence.get("identity") or {}
     expected_signal = content.get("expected_signal") or {}
     embedded_signal = content.get("embedded_signal") or {}
+    # Audiobooks keep what the tracks' tags say under "identity", not under "embedded".
+    audio = "wholeSet" in tags or "sampleFiles" in evidence
+    whole = tags.get("wholeSet") or {}
+    names = tags.get("filenameSupport") or {}
     return {
+        "isAudiobook": audio,
         "expectedTitle": str(expected.get("title") or ""),
         "expectedAuthor": str(expected.get("author") or ""),
-        "fileTitle": str(embedded.get("title") or ""),
-        "fileAuthor": str(embedded.get("author") or ""),
+        "fileTitle": str(embedded.get("title") or (tags.get("detected_title") if audio else "") or ""),
+        "fileAuthor": str(embedded.get("author") or (tags.get("detected_author") if audio else "") or ""),
         "isbns": [str(i) for i in (embedded.get("identifiers") or [])][:5],
         "textCharacters": int(content.get("text_characters_examined") or 0),
         "expectedTitleInText": bool(expected_signal.get("title_found")),
         "expectedAuthorInText": bool(expected_signal.get("author_found")),
         "fileTitleInText": bool(embedded_signal.get("title_found")),
         "fileAuthorInText": bool(embedded_signal.get("author_found")),
+        "tagTitleMatches": int(whole.get("titleMatchCount") or 0),
+        "tagTitleMismatches": int(whole.get("titleMismatchCount") or 0),
+        "trackCount": int(whole.get("readableCount") or names.get("fileCount") or 0),
+        "filenamesNameTheBook": bool(names.get("strong")),
         "notes": [str(n)[:300] for n in (evidence.get("notes") or [])][:5],
     }
-
 
 _READABLE_SUFFIXES = {".epub", ".pdf", ".txt", ".rtf", ".mobi", ".azw", ".azw3"}
 _PLACEHOLDER_AUTHORS = {"unknown", "unknown author", "anonymous", "various", "n a", "none"}
@@ -182,16 +191,24 @@ def _why_undecided(evidence: dict, suffix: str = "", fmt: str = "ebook") -> tupl
     if fmt == "audiobook":
         # Audiobooks have no book text; the evidence is the audio tags of the tracks.
         title = who["expectedTitle"]
+        tagged = f"“{who['fileTitle']}”{_by(who['fileAuthor'])}" if who["fileTitle"] else ""
         if _COLLECTION_TITLE.search(title):
             return "audiobook_collection", (
                 f"“{title}” looks like a set of several books under one Bindery entry, and the tracks' tags "
                 "name different works, so the folder cannot be matched to a single book. Show recordings "
                 "lists the separate books it contains.")
+        if who["fileTitle"] and who["tagTitleMatches"] == 0 and who["tagTitleMismatches"] > 0:
+            return "audiobook_other_work", (
+                f"The tracks' tags name {tagged}, not “{title}”{_by(who['expectedAuthor'])}. "
+                "This looks like a different book filed under this Bindery entry.")
+        if not who["fileTitle"]:
+            extra = "" if who["filenamesNameTheBook"] else " and the filenames do not name the book"
+            return "audiobook_no_tags", (
+                f"The tracks carry no usable title tag{extra}, so nothing in the files says which book this is.")
         return "audiobook_tags", (
-            "The audio tags of the tracks do not clearly name this book"
+            f"The tracks' tags say {tagged}; Bindery has “{title}”{_by(who['expectedAuthor'])}. "
+            "The tags do not clearly name this book"
             + (f": {evidence.get('explanation')}" if evidence.get("explanation") else "."))
-    if not who["expectedTitle"] and not who["fileTitle"]:
-        return "other", "BookGuard could not prove what this file is."
     placeholder = normalize(who["fileAuthor"]) in _PLACEHOLDER_AUTHORS
     if who["textCharacters"] == 0:
         notes = " ".join(who["notes"])
@@ -368,7 +385,8 @@ UNDECIDED_KINDS = {
     "author_missing": "Author not found in the book", "title_missing": "Title not found in the book",
     "both_found": "Title and author found, position unclear", "other_book": "May be a different book",
     "neither_found": "Neither found in the text", "audiobook_collection": "Collection of several books",
-    "audiobook_tags": "Audio tags do not name the book", "volume_conflict": "Volume or part conflict",
+    "audiobook_tags": "Audio tags do not name the book", "audiobook_other_work": "Audio tags name a different book",
+    "audiobook_no_tags": "Audiobook has no usable tags", "volume_conflict": "Volume or part conflict",
     "other": "Other",
 }
 

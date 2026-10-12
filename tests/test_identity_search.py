@@ -210,3 +210,23 @@ def test_books_with_matching_author_isbn_and_title_in_text_now_verify():
     verdict, confidence, evidence = classify_identity(
         result, {"title": "Boy-Crazy Stacey", "author": "Ann M. Martin"}, far, [], [], "front matter")
     assert verdict in {"VERIFIED_CORRECT"} and confidence >= 88
+
+
+def test_qualifiers_that_do_not_change_the_text_are_ignored_on_either_side():
+    plain = "Harry Potter and the Chamber of Secrets"
+    for label in ("Full-Cast Edition", "Kindle Edition", "Movie Tie-In Edition", "Special Edition", "Dramatized"):
+        assert soft_title_match(f"{plain} ({label})", plain), label
+        assert soft_title_match(plain, f"{plain} ({label})"), label
+    # ...but not a translation, a different form, or an arbitrary bracket.
+    for label in ("Spanish Edition", "Graphic Novel", "Abridged", "Illustrated Edition", "Vindico", "Part Two"):
+        assert not soft_title_match(f"{plain} ({label})", plain), label
+
+
+def test_full_cast_edition_ebook_verifies_when_the_author_is_in_the_book():
+    ev = {
+        "expected": {"title": "Harry Potter and the Chamber of Secrets (Full-Cast Edition)", "author": "J.K. Rowling"},
+        "embedded": {"title": "Harry Potter and the Chamber of Secrets", "author": "J.K. Rowling", "identifiers": []},
+        "content": {"expected_signal": {"title_found": False, "author_found": True},
+                    "embedded_signal": {"title_found": True}},
+    }
+    assert second_pass({"book_id": 1, "series": []}, ev) == ("VERIFIED_CORRECT", 88)

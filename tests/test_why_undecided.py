@@ -97,3 +97,30 @@ def test_collection_titles_from_real_libraries_are_recognised():
                   "Harry Potter (series) 1-4", "The Complete Works", "Box Set"):
         assert _COLLECTION_TITLE.search(title) or "series" in title, title
     assert not _COLLECTION_TITLE.search("How to Steal a Dragon's Sword")
+
+
+def _audio_evidence(detected_title, detected_author, *, matches=0, mismatches=0, names_strong=False, count=1):
+    return {"id": 1, "verdict": "INSUFFICIENT_EVIDENCE", "confidence": 60, "evidence": {
+        "expected": {"title": "Harry Potter en de Orde van de Feniks", "author": "J.K. Rowling", "mediaKind": "audiobook"},
+        "identity": {"detected_title": detected_title, "detected_author": detected_author,
+                     "wholeSet": {"titleMatchCount": matches, "titleMismatchCount": mismatches, "readableCount": count},
+                     "filenameSupport": {"fileCount": count, "strong": names_strong}},
+        "sampleFiles": [], "explanation": "The audiobook is technically readable, but not strong enough."}}
+
+
+AUDIO_ROW = {**ROW, "format": "audiobook", "title": "Harry Potter en de Orde van de Feniks", "stored_path": "/a/HP"}
+
+
+def test_audiobook_whose_tags_name_another_book_says_so():
+    # Real library: tags "Harry Potter 03 - Gevangene van Azkaban" filed under "Orde van de Feniks".
+    item = review_item(dict(AUDIO_ROW), _audio_evidence("Harry Potter 03 - Gevangene van Azkaban", "Jan Meng", mismatches=1))
+    assert item["whyKind"] == "audiobook_other_work"
+    assert "Gevangene van Azkaban" in item["whyUndecided"] and "different book" in item["whyUndecided"]
+    assert item["identity"]["fileTitle"] == "Harry Potter 03 - Gevangene van Azkaban"
+    assert item["identity"]["isAudiobook"] is True
+
+
+def test_audiobook_without_tags_does_not_claim_the_tags_name_a_book():
+    item = review_item(dict(AUDIO_ROW), _audio_evidence("", "", count=3))
+    assert item["whyKind"] == "audiobook_no_tags"
+    assert "no usable title tag" in item["whyUndecided"] and "filenames do not name the book" in item["whyUndecided"]

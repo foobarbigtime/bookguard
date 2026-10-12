@@ -310,3 +310,72 @@ def test_audiobook_evidence_uses_leaf_filename_when_embedded_tags_are_blank(monk
     assert result["source"] == "audiobook-filename-evidence"
     assert result["evidence"]["reasonCode"] == "AUDIOBOOK_FILENAME_IDENTITY_VERIFIED"
     assert result["evidence"]["identity"]["filenameSupport"]["strong"] is True
+
+
+def _book(monkeypatch, probes):
+    monkeypatch.setattr(
+        audiobook_evidence,
+        "inspect_media_path",
+        lambda path: {
+            "candidateCount": len(probes),
+            "counts": {"audiobook": len(probes)},
+            "items": [
+                {"path": p["path"], "kind": "audiobook", "detectedFormat": "mp3", "confidence": 100, "source": "ffprobe"}
+                for p in probes
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        audiobook_evidence,
+        "verify_audio_files",
+        lambda paths: {
+            "verdict": "PASS", "reason_code": "AUDIO_TECHNICAL_PASS", "reasons": ["ok"],
+            "file_count": len(probes), "readable_file_count": len(probes),
+            "total_duration_seconds": 3600.0 * len(probes), "codecs": ["mp3"], "sample_rates": [44100],
+            "channels": [2], "chapter_count": 0, "cache_hits": 0, "cache_misses": len(probes), "files": probes,
+        },
+    )
+
+
+def _library_result(title, author, series=()):
+    return {**_result(), "title": title, "author": author, "_verification_series": list(series)}
+
+
+def test_library_style_title_with_series_label_matches_the_tags(monkeypatch):
+    # Real library: Bindery "Secret Servant, The (Gabriel Allon)", every track tagged "The Secret Servant".
+    probes = [_probe(f"/audio/D{n:02d}.mp3", album="The Secret Servant", title="", artist="Daniel Silva",
+                     album_artist="", author="") for n in range(1, 12)]
+    _book(monkeypatch, probes)
+    result = audiobook_evidence.build_audiobook_evidence(
+        _library_result("Secret Servant, The (Gabriel Allon)", "Daniel Silva", ["Gabriel Allon"]), "/audio")
+    assert result["verdict"] == "VERIFIED_CORRECT"
+    assert "Gabriel" not in result["evidence"]["expected"]["titleAsTagged"]
+
+
+def test_series_label_is_only_removed_when_bindery_lists_that_series(monkeypatch):
+    probes = [_probe(f"/audio/D{n:02d}.mp3", album="The Secret Servant", title="", artist="Daniel Silva",
+                     album_artist="", author="") for n in range(1, 4)]
+    _book(monkeypatch, probes)
+    result = audiobook_evidence.build_audiobook_evidence(
+        _library_result("Secret Servant, The (Gabriel Allon)", "Daniel Silva", []), "/audio")
+    assert result["verdict"] != "VERIFIED_CORRECT"
+    assert "titleAsTagged" not in result["evidence"]["expected"]
+
+
+def test_tags_that_drop_an_apostrophe_still_match(monkeypatch):
+    # Real library: Bindery "How to Ride a Dragon's Storm", 74 tracks tagged "How to Ride a Dragons Storm".
+    probes = [_probe(f"/audio/{n}.mp3", album="How to Ride a Dragons Storm", title=f"{n:02d} Track {n:02d}",
+                     artist="Cressida Cowell", album_artist="", author="") for n in range(1, 6)]
+    _book(monkeypatch, probes)
+    result = audiobook_evidence.build_audiobook_evidence(
+        _library_result("How to Ride a Dragon's Storm", "Cressida Cowell"), "/audio")
+    assert result["verdict"] == "VERIFIED_CORRECT"
+
+
+def test_a_different_volume_in_the_tags_is_never_accepted(monkeypatch):
+    probes = [_probe(f"/audio/{n}.mp3", album="Dragon Book 2", title="", artist="Cressida Cowell",
+                     album_artist="", author="") for n in range(1, 4)]
+    _book(monkeypatch, probes)
+    result = audiobook_evidence.build_audiobook_evidence(
+        _library_result("Dragon Book 1 (Dragon Saga, 1)", "Cressida Cowell", ["Dragon Saga"]), "/audio")
+    assert result["verdict"] != "VERIFIED_CORRECT"

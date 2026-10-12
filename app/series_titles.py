@@ -207,3 +207,39 @@ def bindery_series_context(book_id: int | None) -> list[str] | None:
 def bindery_series_names(book_id: int | None) -> list[str]:
     """Best-effort names for scan/display callers; [] if unavailable."""
     return bindery_series_context(book_id) or []
+
+
+_INVERTED_ARTICLE = re.compile(r"^(?P<base>.+?),\s*(?P<article>the|an|a)\b(?P<rest>.*)$", re.IGNORECASE)
+_APOSTROPHES = str.maketrans("", "", "'\u2019\u02bc\u2018")
+
+
+def catalogue_title_variants(title: str, series_names: Iterable[str] = ()) -> list[str]:
+    """The Bindery title first, then the same title as an audiobook tag would write it.
+
+    Derived only from Bindery's own title: the library-style article ("Secret Servant,
+    The" -> "The Secret Servant"), a series label Bindery itself lists for the book, and
+    apostrophes ("Dragon's" -> "Dragons", which tags often drop). Nothing is invented,
+    and a volume number or a substantive subtitle is never removed.
+    """
+    original = str(title or "").strip()
+    if not original:
+        return []
+    forms = [original]
+    inverted = _INVERTED_ARTICLE.match(original)
+    if inverted:
+        rest = inverted.group("rest")
+        forms.append(f"{inverted.group('article').capitalize()} {inverted.group('base')}{rest}".strip())
+    names = list(series_names)
+    variants: list[str] = []
+    for form in forms:
+        for variant in expected_title_variants(form, names) or [form]:
+            variants.append(variant)
+    variants += [value.translate(_APOSTROPHES) for value in variants]
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in variants:
+        key = normalize(value)
+        if value.strip() and key not in seen:
+            seen.add(key)
+            out.append(value.strip())
+    return out
