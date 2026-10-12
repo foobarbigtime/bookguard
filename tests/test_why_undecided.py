@@ -24,8 +24,8 @@ def evidence(*, file_title="", file_author="", text=5000, title_in=False, author
 ROW = {"id": 7, "book_id": 3, "title": "How to Steal a Dragon's Sword", "author": "Cressida Cowell", "format": "ebook"}
 
 
-def why(**kwargs):
-    item = review_item(dict(ROW), evidence(**kwargs))
+def why(row=None, **kwargs):
+    item = review_item(dict(row or ROW), evidence(**kwargs))
     assert item["group"] == "undecided"
     return item["whyUndecided"]
 
@@ -37,8 +37,36 @@ def test_names_both_sides_and_missing_author():
     assert "author “Cressida Cowell” does not" in text
 
 
-def test_no_extractable_text_is_called_out():
-    assert "No readable text could be extracted" in why(text=0, file_title="X")
+def test_no_extractable_text_says_why_and_flags_placeholder_details():
+    text = why({**ROW, "stored_path": "/b/a.epub"}, text=0, file_title="Book to Do 1", file_author="Unknown")
+    assert "contains no readable text" in text and "look like placeholders" in text
+    assert review_item({**ROW, "stored_path": "/b/a.epub"}, evidence(text=0, file_title="X"))["whyKind"] == "no_text"
+
+
+def test_drm_unsupported_format_and_read_errors_are_told_apart():
+    def kind_of(path, notes):
+        ev = evidence(text=0, file_title="X", file_author="Y")
+        ev["evidence"]["notes"] = notes
+        return review_item({**ROW, "stored_path": path}, ev)["whyKind"]
+    assert kind_of("/b/a.azw3", ["This Kindle book is DRM-protected, so its text cannot be read."]) == "drm"
+    assert kind_of("/b/a.djvu", []) == "unsupported_format"
+    assert kind_of("/b/a.epub", ["Native extraction error: bad zip"]) == "extract_error"
+
+
+def test_audiobook_collection_is_not_called_unreadable_text():
+    row = {**ROW, "format": "audiobook", "title": "How To Train Your Dragon - 10 Books", "stored_path": "/a/Dragon"}
+    ev = evidence(text=0)
+    ev["evidence"]["expected"]["title"] = "How To Train Your Dragon - 10 Books"
+    item = review_item(row, ev)
+    assert item["whyKind"] == "audiobook_collection" and "readable text" not in item["whyUndecided"]
+    assert item["mixedAudio"] is True  # the recordings preview is offered
+
+
+def test_breakdown_counts_reasons():
+    from app.library_review import undecided_breakdown
+    items = [{"group": "undecided", "whyKind": "drm"}, {"group": "undecided", "whyKind": "drm"},
+             {"group": "undecided", "whyKind": "no_text"}, {"group": "wrong", "whyKind": ""}]
+    assert undecided_breakdown(items) == [("DRM-protected", 2), ("No readable text", 1)]
 
 
 def test_file_without_its_own_title():
@@ -61,3 +89,11 @@ def test_volume_conflict_keeps_its_own_explanation():
     item = review_item(dict(ROW), evidence(extra={"reasonCode": "TITLE_DESIGNATION_CONFLICT",
                                                   "explanation": "Volume numbers disagree."}))
     assert item["whyUndecided"] == "Volume numbers disagree."
+
+
+def test_collection_titles_from_real_libraries_are_recognised():
+    from app.library_review import _COLLECTION_TITLE
+    for title in ("How To Train Your Dragon - 10 Books", "How To Train Your Dragon Collection: Books 4-6",
+                  "Harry Potter (series) 1-4", "The Complete Works", "Box Set"):
+        assert _COLLECTION_TITLE.search(title) or "series" in title, title
+    assert not _COLLECTION_TITLE.search("How to Steal a Dragon's Sword")

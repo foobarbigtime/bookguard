@@ -148,3 +148,43 @@ def test_second_pass_verdicts_from_older_rules_are_looked_at_again():
     assert predates_second_pass({"verdict": "VERIFIED_CORRECT", "evidence": {**base, "secondPassVersion": 1}})
     assert not predates_second_pass({"verdict": "WRONG_CONTENT", "evidence": {**base, "secondPassVersion": 2}})
     assert not predates_second_pass({"verdict": "WRONG_CONTENT", "evidence": {"content": base["content"]}})  # first-pass verdict
+
+
+def test_numbered_series_label_is_ignored_even_when_bindery_lists_no_series():
+    assert soft_title_match("Boy-Crazy Stacey (the Baby-Sitters Club, 8)", "Boy-Crazy Stacey")
+    assert soft_title_match("Mary, Mary (Alex Cross #11)", "Mary, Mary")
+    # ...but never a different volume, an edition marker, or a part.
+    assert not soft_title_match("Stacey (the Baby-Sitters Club, 8)", "Stacey (the Baby-Sitters Club, 9)")
+    assert not soft_title_match("Dragon Sword (Graphic Novel)", "Dragon Sword")
+    assert not soft_title_match("Dragon Sword (Abridged)", "Dragon Sword")
+    assert not soft_title_match("Dune (Part One)", "Dune")
+
+
+def test_unnumbered_label_needs_the_isbn_to_back_it():
+    assert not soft_title_match("The Feros (Vindico)", "The Feros")
+    assert not soft_title_match("Summer Before (the Baby-Sitters Club)", "The Summer Before")
+    assert soft_title_match("Summer Before (the Baby-Sitters Club)", "The Summer Before", allow_unnumbered=True)
+    assert not soft_title_match("Dragon Sword (Graphic Novel)", "Dragon Sword", allow_unnumbered=True)
+
+
+def test_unnumbered_series_book_verifies_with_its_isbn():
+    ev = {
+        "expected": {"title": "Summer Before (the Baby-Sitters Club)", "author": "Ann M. Martin"},
+        "embedded": {"title": "The Summer Before", "author": "Ann M. Martin", "identifiers": []},
+        "content": {"expected_signal": {"title_found": True, "author_found": True},
+                    "embedded_signal": {"title_found": True}},
+    }
+    assert second_pass({"book_id": 1, "series": []}, ev) is None          # no ISBN: stays undecided
+    ev["isbn"] = {"expectedMatch": True}
+    assert second_pass({"book_id": 1, "series": []}, ev) == ("VERIFIED_CORRECT", 95)
+
+
+def test_books_with_matching_author_isbn_and_title_in_text_now_verify():
+    result = {"title": "Boy-Crazy Stacey (the Baby-Sitters Club, 8)", "author": "Ann M. Martin",
+              "book_id": 1, "series": [], "isbn_evidence": {}}
+    text = "Boy-Crazy Stacey (the Baby-Sitters Club, 8) by Ann M. Martin. " + "Chapter one. " * 200
+    # Advertisement-like position: the title only appears deep in the text.
+    far = "x " * 70000 + text
+    verdict, confidence, evidence = classify_identity(
+        result, {"title": "Boy-Crazy Stacey", "author": "Ann M. Martin"}, far, [], [], "front matter")
+    assert verdict in {"VERIFIED_CORRECT"} and confidence >= 88

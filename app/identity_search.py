@@ -31,6 +31,7 @@ MAX_CANDIDATES = 5
 # Bump when the second pass gets stricter, so earlier second-pass verdicts are re-examined.
 SECOND_PASS_VERSION = 2
 TOLERANT_CONFIDENCE = 88
+ISBN_CONFIDENCE = 95
 CATALOGUE_CONFIDENCE = 95
 
 _PEOPLE = re.compile(r"\s*(?:;|&|\||\band\b|\bwith\b)\s*", re.IGNORECASE)
@@ -59,12 +60,40 @@ def _title_equivalent(expected: str, observed: str) -> bool:
     return e == o or meaningful_words(e) == meaningful_words(o)
 
 
+_SERIES_PAREN = re.compile(
+    r"\s*\(\s*(?P<label>[^()]*?[A-Za-z][^()]*?)\s*(?:[,:#\-]\s*)?"
+    r"(?:(?:book|bk|vol\.?|volume|no\.?|number)\s*)?(?P<num>\d+)?\s*\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def series_free_title(value: str, allow_unnumbered: bool = False) -> tuple[str, str]:
+    """(title without a trailing "(Series, N)" label, the volume number it carried).
+
+    Used even when Bindery lists no series for the book. A bracket that names an
+    edition (graphic novel, abridged, ...) is part of the title and is kept. An
+    unnumbered bracket such as "(Vindico)" proves nothing by itself, so it is
+    stripped only when the caller has other evidence (a matching ISBN).
+    """
+    value = str(value or "")
+    found = _SERIES_PAREN.search(value)
+    if not found or edition_markers(found.group("label")):
+        return value, ""
+    if not found.group("num") and not allow_unnumbered:
+        return value, ""
+    base = value[: found.start()].strip()
+    if not meaningful_words(base):
+        return value, ""
+    return base, found.group("num") or ""
+
+
 def _without_generic_suffix(value: str) -> str:
     return _GENERIC_SUFFIX.sub("", str(value or ""))
 
 
-def soft_title_match(expected: str, observed: str, series_names=()) -> bool:
-    """Same title, ignoring only a series label, a leading article or a generic "A Novel".
+def soft_title_match(expected: str, observed: str, series_names=(), allow_unnumbered: bool = False) -> bool:
+    """Same title, ignoring only a series label (even one Bindery does not list), a leading
+    article or a generic "A Novel".
 
     A substantive subtitle is never ignored: "The English Girl" and "The English
     Girl: Spy Stories" can be different works, and so can two volumes of a saga.
@@ -79,6 +108,11 @@ def soft_title_match(expected: str, observed: str, series_names=()) -> bool:
         for o in expected_title_variants(observed, series_names) or [observed]:
             if _title_equivalent(_without_generic_suffix(e), _without_generic_suffix(o)):
                 return True
+            (base_e, num_e), (base_o, num_o) = (
+                series_free_title(e, allow_unnumbered), series_free_title(o, allow_unnumbered))
+            if (base_e, base_o) != (e, o) and not (num_e and num_o and num_e != num_o):
+                if _title_equivalent(_without_generic_suffix(base_e), _without_generic_suffix(base_o)):
+                    return True
     return False
 
 
@@ -164,7 +198,8 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
     evidence["secondPassVersion"] = SECOND_PASS_VERSION
 
     if file_title and file_author:
-        title_ok = soft_title_match(title, file_title, series)
+        isbn_is_assigned_book = bool((evidence.get("isbn") or {}).get("expectedMatch"))
+        title_ok = soft_title_match(title, file_title, series, allow_unnumbered=isbn_is_assigned_book)
         author_ok = same_author(author, file_author)
         in_text = bool(expected_signal.get("title_found") or expected_signal.get("author_found"))
         tried.append({"check": "tolerantIdentity", "titleMatches": title_ok,
@@ -174,7 +209,9 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
                 "The file's own title and author match this book once initials, name order and "
                 "extra credited authors are allowed for, and the book's text contains the title or author."
             )
-            return "VERIFIED_CORRECT", TOLERANT_CONFIDENCE
+            if isbn_is_assigned_book:
+                evidence["explanation"] += " The file's ISBN is also one of this book's editions in Bindery."
+            return "VERIFIED_CORRECT", ISBN_CONFIDENCE if isbn_is_assigned_book else TOLERANT_CONFIDENCE
 
         expected_in_text = bool(expected_signal.get("title_found") and expected_signal.get("author_found"))
         # The file's ISBN belongs to the assigned book: the first pass already

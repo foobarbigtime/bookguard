@@ -13,10 +13,13 @@ ignored and the item stays undecided.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import re
 from typing import Any
 
 from .db import latest_review_results, local_conn
 from .language_detection import declared_language
+from .title_matching import normalize
 from .triage import triage_states
 from .verification_status import verification_is_inconclusive
 
@@ -158,39 +161,87 @@ def _identity(evidence: dict) -> dict[str, Any]:
         "expectedAuthorInText": bool(expected_signal.get("author_found")),
         "fileTitleInText": bool(embedded_signal.get("title_found")),
         "fileAuthorInText": bool(embedded_signal.get("author_found")),
+        "notes": [str(n)[:300] for n in (evidence.get("notes") or [])][:5],
     }
 
 
-def _why_undecided(evidence: dict) -> str:
-    """A specific plain-language reason BookGuard could not decide, from the stored evidence."""
+_READABLE_SUFFIXES = {".epub", ".pdf", ".txt", ".rtf", ".mobi", ".azw", ".azw3"}
+_PLACEHOLDER_AUTHORS = {"unknown", "unknown author", "anonymous", "various", "n a", "none"}
+
+
+_COLLECTION_TITLE = re.compile(
+    r"\b\d+\s+books?\b|\bbooks?\s+\d+\s*(?:-|to|\u2013)\s*\d+\b|\bcollection\b|\bcomplete\b|\bbox(?:ed)?\s*set\b"
+    r"|\bomnibus\b|\bseries\b|\bboxset\b", re.IGNORECASE)
+
+
+def _why_undecided(evidence: dict, suffix: str = "", fmt: str = "ebook") -> tuple[str, str]:
+    """(kind, plain-language reason) BookGuard could not decide, from the stored evidence."""
     if (evidence.get("reasonCode") or "") == "TITLE_DESIGNATION_CONFLICT":
-        return str(evidence.get("explanation") or "")
+        return "volume_conflict", str(evidence.get("explanation") or "")
     who = _identity(evidence)
+    if fmt == "audiobook":
+        # Audiobooks have no book text; the evidence is the audio tags of the tracks.
+        title = who["expectedTitle"]
+        if _COLLECTION_TITLE.search(title):
+            return "audiobook_collection", (
+                f"“{title}” looks like a set of several books under one Bindery entry, and the tracks' tags "
+                "name different works, so the folder cannot be matched to a single book. Show recordings "
+                "lists the separate books it contains.")
+        return "audiobook_tags", (
+            "The audio tags of the tracks do not clearly name this book"
+            + (f": {evidence.get('explanation')}" if evidence.get("explanation") else "."))
     if not who["expectedTitle"] and not who["fileTitle"]:
-        return "BookGuard could not prove what this file is."
+        return "other", "BookGuard could not prove what this file is."
+    placeholder = normalize(who["fileAuthor"]) in _PLACEHOLDER_AUTHORS
     if who["textCharacters"] == 0:
-        return ("No readable text could be extracted from this file, so its content could not be "
-                "compared with the book. It may be image-only, protected, or damaged.")
+        notes = " ".join(who["notes"])
+        if "DRM" in notes:
+            reason = "This Kindle book is DRM-protected, so its text cannot be read."
+            kind = "drm"
+        elif suffix and suffix not in _READABLE_SUFFIXES:
+            reason = f"BookGuard cannot read {suffix} files, so their content could not be compared with the book."
+            kind = "unsupported_format"
+        elif "extraction error" in notes:
+            reason = "BookGuard could not read this file: " + notes.split("Native extraction error:")[-1].strip()
+            kind = "extract_error"
+        else:
+            reason = ("The file opened but contains no readable text, so its content could not be "
+                      "compared with the book. It may be image-only or empty.")
+            kind = "no_text"
+        if placeholder or not who["fileTitle"]:
+            reason += (f" Its own details (“{who['fileTitle'] or 'untitled'}” by “{who['fileAuthor'] or 'unknown'}”) "
+                       "look like placeholders, so they do not identify it either.")
+        elif who["fileTitle"] or who["fileAuthor"]:
+            reason += (f" The file calls itself “{who['fileTitle'] or 'untitled'}”{_by(who['fileAuthor'])}; "
+                       f"Bindery has it as “{who['expectedTitle']}”{_by(who['expectedAuthor'])}.")
+        return kind, reason
     parts = []
+    kind = "other"
     if who["fileTitle"] or who["fileAuthor"]:
         parts.append(f"The file calls itself “{who['fileTitle'] or 'untitled'}”{_by(who['fileAuthor'])}; "
                      f"Bindery has it as “{who['expectedTitle']}”{_by(who['expectedAuthor'])}.")
     else:
         parts.append("The file carries no title or author of its own.")
+        kind = "no_metadata"
     title_in, author_in = who["expectedTitleInText"], who["expectedAuthorInText"]
     if title_in and author_in:
+        kind = "both_found"
         parts.append("Both the title and the author appear in the book, but not in a place that proves "
                      "they identify it rather than a series list or advertisement.")
     elif title_in:
+        kind = "author_missing"
         parts.append(f"The title appears in the book but the author “{who['expectedAuthor']}” does not; "
                      "Bindery’s author name may be spelled differently from the book’s.")
     elif author_in:
+        kind = "title_missing"
         parts.append(f"The author appears in the book but the title “{who['expectedTitle']}” does not; "
                      "it may be a different title, edition or translation.")
     elif who["fileTitleInText"] or who["fileAuthorInText"]:
+        kind = "other_book"
         parts.append("Neither Bindery’s title nor its author appears in the book, but the file’s own title "
                      "does, so this may be a different book.")
     else:
+        kind = "neither_found" if kind == "other" else kind
         parts.append("Neither the title nor the author could be found in the readable text.")
     for step in evidence.get("secondPass") or []:
         if step.get("check") == "catalogueSearch":
@@ -198,8 +249,7 @@ def _why_undecided(evidence: dict) -> str:
             parts.append("BookGuard also searched your Bindery library for a book matching the file’s own "
                          + ("title and author and found none." if not count
                             else f"title and author and found {count}, too many to pick one safely."))
-    return " ".join(parts)
-
+    return kind, " ".join(parts)
 
 def _suggestion(group: str, verification: dict | None, language: dict | None = None) -> str:
     evidence = (verification or {}).get("evidence") or {}
@@ -246,9 +296,14 @@ def review_item(row: dict, verification: dict | None) -> dict[str, Any]:
     # The scan can file a mixed folder under another reason (a music-tagged
     # folder is MUSIC_MISMATCH there), while verification inspects the whole
     # set. Either source marking it mixed keeps whole-folder actions secondary.
-    mixed_audio = "MIXED_AUDIO_CONTENT" in {row.get("reason_code"), evidence.get("reasonCode")}
+    suffix = Path(str(row.get("stored_path") or "")).suffix.lower()
+    why = (_why_undecided(evidence, suffix, str(row.get("format") or "ebook"))
+           if verification and group == "undecided" else ("", ""))
+    mixed_audio = ("MIXED_AUDIO_CONTENT" in {row.get("reason_code"), evidence.get("reasonCode")}
+                   or why[0] == "audiobook_collection")
     return {
         "id": int(row["id"]),
+        "fileType": suffix,
         "bookId": int(row.get("book_id") or 0),
         "title": str(row.get("title") or ""),
         "author": str(row.get("author") or ""),
@@ -273,7 +328,8 @@ def review_item(row: dict, verification: dict | None) -> dict[str, Any]:
         "verifiedAt": str((verification or {}).get("updated_at") or ""),
         "explanation": str(evidence.get("explanation") or ""),
         "identity": _identity(evidence) if verification else None,
-        "whyUndecided": _why_undecided(evidence) if verification and group == "undecided" else "",
+        "whyKind": why[0],
+        "whyUndecided": why[1],
         "relationship": str((evidence.get("catalogue") or {}).get("relationship") or ""),
         "otherBook": {
             "id": int((evidence.get("catalogue") or {}).get("bookId") or 0),
@@ -304,3 +360,24 @@ def group_counts(items: list[dict[str, Any]]) -> dict[str, int]:
     for item in items:
         counts[item["group"]] += 1
     return counts
+
+
+UNDECIDED_KINDS = {
+    "drm": "DRM-protected", "unsupported_format": "Unsupported file type", "extract_error": "Could not be read",
+    "no_text": "No readable text", "no_metadata": "No title or author inside the file",
+    "author_missing": "Author not found in the book", "title_missing": "Title not found in the book",
+    "both_found": "Title and author found, position unclear", "other_book": "May be a different book",
+    "neither_found": "Neither found in the text", "audiobook_collection": "Collection of several books",
+    "audiobook_tags": "Audio tags do not name the book", "volume_conflict": "Volume or part conflict",
+    "other": "Other",
+}
+
+
+def undecided_breakdown(items: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    """Why the undecided books are undecided, most common first: (label, count)."""
+    counts: dict[str, int] = {}
+    for item in items:
+        if item["group"] == "undecided" and item.get("whyKind"):
+            label = UNDECIDED_KINDS.get(item["whyKind"], "Other")
+            counts[label] = counts.get(label, 0) + 1
+    return sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
