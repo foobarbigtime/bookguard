@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from ..actions import ActionError, detach_missing, missing_detach_preview, resolve_bindery_api_key
-from ..bindery_client import BinderyClient
+from ..bindery_client import BinderyClient, BinderyClientError
+from ..bulk_review import bulk_preview
 from ..config import settings
 from ..catalogue_move import (
     CatalogueMoveError,
@@ -381,3 +382,14 @@ def api_catalogue_move_reconcile(move_id: int):
 @router.get("/catalogue-moves")
 def api_catalogue_moves():
     return {"moves": list_moves()}
+
+
+@router.get("/review/bulk-preview")
+def api_review_bulk_preview(group: str):
+    """Read-only: which books in one Review group can be fixed together right now."""
+    try:
+        return bulk_preview(group)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except (ActionError, BinderyClientError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
