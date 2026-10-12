@@ -133,11 +133,28 @@ def test_ocr_text_with_a_lost_space_still_finds_the_title_and_author():
     page = "HOW TO STEALA\nDRAGON'S SWORD\nCRESSIDA COWELL"
     signal = _identity_signal("How to Steal a Dragon's Sword", "Cressida Cowell", page, page, True)
     assert signal["title_found"] and signal["author_found"] and signal["strong_identity"]
+    assert signal["ocrApproximate"] is False
     # Without the OCR flag the same text is (rightly) not an exact match.
     assert not _identity_signal("How to Steal a Dragon's Sword", "Cressida Cowell", page, page)["title_found"]
-    # One misread letter in the author is tolerated.
+
+
+def test_a_misread_letter_is_found_but_never_strong_identity():
+    from app.verification_engine import _identity_signal
     misread = "HOW TO STEAL A DRAGON'S SWORD CRESSIDA COWELI"
-    assert _identity_signal("How to Steal a Dragon's Sword", "Cressida Cowell", misread, misread, True)["strong_identity"]
+    signal = _identity_signal("How to Steal a Dragon's Sword", "Cressida Cowell", misread, misread, True)
+    assert signal["author_found"] and signal["ocrApproximate"] is True
+    assert signal["strong_identity"] is False       # only an exact title AND exact author can be strong
+
+
+def test_a_similar_title_by_the_same_author_is_never_accepted_as_strong():
+    from app.verification_engine import _identity_signal
+    page = "THE LOST COLONY JOHN SCALZI"            # one letter from the expected "The Last Colony"
+    signal = _identity_signal("The Last Colony", "John Scalzi", page, page, True)
+    assert signal["strong_identity"] is False and signal["ocrApproximate"] is True
+    result = {"title": "The Last Colony", "author": "John Scalzi", "book_id": 1, "series": [],
+              "isbn_evidence": {}, "_ocr_text": True}
+    verdict, confidence, _ = classify_identity(result, {"title": "", "author": ""}, page, [], [], page)
+    assert (verdict, confidence) != ("METADATA_ERROR", 97) and verdict != "VERIFIED_CORRECT"
 
 
 def test_ocr_tolerance_never_turns_one_book_into_another():
@@ -154,11 +171,18 @@ def test_ocr_tolerance_never_turns_one_book_into_another():
     assert found("The 13-Storey Treehouse", "THE 13 STOREY TREEHOUSE")
 
 
-def test_ocr_matching_stays_fast_on_a_large_text():
-    import time
+def test_ocr_search_work_is_bounded_whatever_the_text_size(monkeypatch):
+    """Deterministic: counts comparisons instead of timing them."""
+    from app import verification_engine as engine
+    calls = []
+    real = engine.SequenceMatcher
 
-    from app.verification_engine import _identity_signal
-    big = "lorem ipsum dolor sit amet " * 3000
-    start = time.monotonic()
-    _identity_signal("How to Steal a Dragon's Sword", "Cressida Cowell", big, big, True)
-    assert time.monotonic() - start < 3.0
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "SequenceMatcher", counting)
+    hostile = ("hownotostealadragonsworx " * 40_000)          # 1,000,000 characters, nearly the title
+    engine._ocr_find("howtostealadragonssword", engine._squash(hostile), engine.OCR_MIN_SQUASHED_TITLE)
+    assert 0 < len(calls) <= engine.OCR_MAX_WINDOWS
+    assert len(engine._squash(hostile)[:engine.OCR_MAX_CHARS]) == engine.OCR_MAX_CHARS
