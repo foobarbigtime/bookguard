@@ -53,13 +53,26 @@ def test_drm_unsupported_format_and_read_errors_are_told_apart():
     assert kind_of("/b/a.epub", ["Native extraction error: bad zip"]) == "extract_error"
 
 
-def test_audiobook_collection_is_not_called_unreadable_text():
-    row = {**ROW, "format": "audiobook", "title": "How To Train Your Dragon - 10 Books", "stored_path": "/a/Dragon"}
+def test_audiobook_collection_needs_the_tags_to_name_several_works():
+    row = {**ROW, "format": "audiobook", "title": "How To Train Your Dragon Collection: Books 4-6", "stored_path": "/a/Dragon"}
     ev = evidence(text=0)
-    ev["evidence"]["expected"]["title"] = "How To Train Your Dragon - 10 Books"
+    ev["evidence"]["expected"]["title"] = row["title"]
+    ev["evidence"]["identity"] = {"detected_title": "Book Four", "detected_author": "Cressida Cowell",
+                                  "wholeSet": {"mixedContent": True, "distinctMismatchTitleCount": 3,
+                                               "titleMismatchCount": 30, "readableCount": 30}}
     item = review_item(row, ev)
     assert item["whyKind"] == "audiobook_collection" and "readable text" not in item["whyUndecided"]
     assert item["mixedAudio"] is True  # the recordings preview is offered
+
+
+def test_a_single_book_with_a_collection_word_in_its_title_is_not_a_collection():
+    # "The Complete Maus" with consistent tags: nothing says the folder holds several works.
+    row = {**AUDIO_ROW, "title": "The Complete Maus", "stored_path": "/a/Maus"}
+    ev = _audio_evidence("Maus", "Art Spiegelman", matches=0, mismatches=3, count=3)
+    ev["evidence"]["expected"]["title"] = "The Complete Maus"
+    item = review_item(row, ev)
+    assert item["whyKind"] != "audiobook_collection" and item["mixedAudio"] is False
+
 
 
 def test_breakdown_counts_reasons():
@@ -134,3 +147,34 @@ def test_retrieved_proof_is_exposed_for_the_panel():
     assert who["downloadNames"] == ["A - T (retail) (epub)"]
     assert who["notABook"] == ["VA-X-OST-WEB-2025"]
     assert who["proofSources"][0].startswith("download name")
+
+
+def test_a_file_that_was_never_read_is_not_described_as_empty():
+    ev = {"id": 1, "verdict": "INSUFFICIENT_EVIDENCE", "confidence": 0, "evidence": {
+        "expected": {"title": "T", "author": "A"}, "embedded": {}, "content": {},
+        "explanation": "Book identity could not be evaluated because no stable readable source snapshot was available."}}
+    item = review_item({**ROW, "stored_path": "/b/T.epub"}, ev)
+    assert item["whyKind"] == "not_checked"
+    assert "no readable text" not in item["whyUndecided"] and "placeholders" not in item["whyUndecided"]
+    assert "no stable readable source snapshot" in item["whyUndecided"]
+
+
+def test_a_dotted_folder_name_is_not_a_file_type():
+    ev = evidence(text=0, file_title="X", file_author="Y")
+    item = review_item({**ROW, "stored_path": "/b/Mr. Mercedes"}, ev)
+    assert "cannot read" not in item["whyUndecided"] and item["whyKind"] == "no_text"
+
+
+def test_real_authors_and_matching_titles_are_not_called_placeholders():
+    ev = evidence(text=0, file_title="", file_author="Daniel Silva")
+    assert "placeholders" not in review_item({**ROW, "stored_path": "/b/a.epub"}, ev)["whyUndecided"]
+    ev = evidence(text=0, file_title="How to Steal a Dragon's Sword", file_author="Cressida Cowell")
+    assert "placeholders" not in review_item({**ROW, "stored_path": "/b/a.epub"}, ev)["whyUndecided"]
+
+
+def test_breakdown_counts_unverified_and_scanner_outage_items_too():
+    from app.library_review import undecided_breakdown
+    items = [{"group": "undecided", "whyKind": "drm"}, {"group": "undecided", "whyKind": ""},
+             {"group": "undecided", "whyKind": "", "scannerOutage": True}]
+    labels = dict(undecided_breakdown(items))
+    assert labels == {"DRM-protected": 1, "Not verified yet": 1, "Virus scan gave no result": 1}

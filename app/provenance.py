@@ -18,7 +18,7 @@ import sqlite3
 from typing import Any, Iterable
 
 from .db import bindery_conn
-from .title_matching import edition_markers, normalize
+from .title_matching import canon_tokens, clip, designations, edition_markers, normalize
 
 MAX_RELEASES = 20
 _FLAG_WORDS = {
@@ -65,7 +65,7 @@ def _strip_flags(value: str) -> str:
 
 def parse_release_name(raw: str, event: str = "") -> Release:
     """Parse "Author - [Series NN] - Title (flags)" and "Author - Title (flags)"; else unknown."""
-    text = re.sub(r"\s+", " ", str(raw or "").strip())
+    text = re.sub(r"\s+", " ", clip(raw).strip())
     if not text:
         return Release(raw="", kind="unknown", event=event)
     if _MUSIC_WORDS.search(text.replace("_", " ")) and " - " not in text:
@@ -112,28 +112,15 @@ def releases_for_book(book_id: int) -> list[Release]:
 def core_title(title: str, author: str = "") -> str:
     """The title with everything that is not the work's own name removed.
 
-    Drops bracketed series labels, an appended author name, a leading article,
-    apostrophes and punctuation. A subtitle is NOT dropped: "The English Girl" and
-    "The English Girl: Spy Stories" stay different.
+    Drops bracketed series labels, an appended author name, a leading or library-style
+    trailing article, apostrophes and punctuation. Word order and a subtitle are NOT
+    dropped: "The English Girl" and "The English Girl: Spy Stories" stay different.
     """
-    text = _BRACKETS.sub(" ", str(title or "")).translate(_APOSTROPHES)
-    tokens = normalize(text).split()
+    tokens = canon_tokens(_BRACKETS.sub(" ", clip(title)))
     author_tokens = normalize(author).split()
     if author_tokens and len(tokens) > len(author_tokens) and tokens[-len(author_tokens):] == author_tokens:
         tokens = tokens[: -len(author_tokens)]
-    if tokens and tokens[0] in _ARTICLES:
-        tokens = tokens[1:]
     return " ".join(tokens)
-
-
-def designations(title: str) -> set[str]:
-    """Volume numbers named in a title's brackets or after "Book/Part/Vol/#"."""
-    found = set()
-    for group in _BRACKETS.findall(str(title or "")):
-        found.update(n.lstrip("0") or "0" for n in re.findall(r"\d+", group))
-    for match in re.finditer(r"(?:#|\b(?:book|part|vol(?:ume)?\.?|no\.?)\s*)(\d+)\b", str(title or ""), re.IGNORECASE):
-        found.add(match.group(1).lstrip("0") or "0")
-    return found
 
 
 def _same_designations(*titles: str, release_number: str = "") -> bool:

@@ -9,6 +9,8 @@
     notAnEbook: "Only ebooks can be moved this way.",
     notProvenMissingEbookOfAnotherBook:
       "Verification no longer proves this file is another book's missing ebook.",
+    onlyTitleAndAuthorNameTheTarget:
+      "Only the title and author point to the other book; the file's ISBN does not confirm it. Check it before moving.",
     noVerifiedFingerprint: "Verification did not record a fingerprint for this file.",
     binderyActionsDisabled:
       "Bindery actions are off. Enable them in Settings (BOOKGUARD_ALLOW_ACTIONS) to move files.",

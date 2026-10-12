@@ -126,6 +126,10 @@ def move_preview(
         blockers.append("notAnEbook")
     if verification.get("verdict") != "WRONG_CONTENT" or catalogue.get("relationship") != "missing_ebook":
         blockers.append("notProvenMissingEbookOfAnotherBook")
+    if (evidence.get("secondPassCatalogue") or {}).get("isbnCorroborated") is False:
+        # The second pass named the target from title and author alone. A move changes Bindery and
+        # the library, so it needs the same proof the first pass demands: an ISBN that names it too.
+        blockers.append("onlyTitleAndAuthorNameTheTarget")
     if not preview["sha256"]:
         blockers.append("noVerifiedFingerprint")
     if not settings.allow_actions:
