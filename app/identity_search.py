@@ -106,7 +106,6 @@ def catalogue_candidates(title: str, author: str, exclude_book_id: int) -> list[
             SELECT b.id, b.title, a.name AS author
             FROM books b LEFT JOIN authors a ON a.id = b.author_id
             WHERE lower(b.title) LIKE ? AND b.id != ?
-            LIMIT 300
             """,
             (f"%{words[0]}%", int(exclude_book_id or 0)),
         ).fetchall()
@@ -156,7 +155,11 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
             return "VERIFIED_CORRECT", TOLERANT_CONFIDENCE
 
         expected_in_text = bool(expected_signal.get("title_found") and expected_signal.get("author_found"))
-        if embedded_signal.get("title_found") and not expected_in_text and not (title_ok and author_ok):
+        # The file's ISBN belongs to the assigned book: the first pass already
+        # sent conflicting evidence back for review, so it is not overridden here.
+        isbn_supports_assigned = bool((evidence.get("isbn") or {}).get("expectedMatch"))
+        if (embedded_signal.get("title_found") and not expected_in_text and not (title_ok and author_ok)
+                and not isbn_supports_assigned):
             try:
                 candidates = catalogue_candidates(file_title, file_author, int(result.get("book_id") or 0))
             except (sqlite3.Error, OSError, ValueError):

@@ -111,3 +111,22 @@ def test_old_undecided_verdicts_are_looked_at_again_but_new_ones_are_kept():
     assert not predates_second_pass({**old, "evidence": {**old["evidence"], "reasonCode": "TITLE_DESIGNATION_CONFLICT"}})
     assert not predates_second_pass({"verdict": "VERIFIED_CORRECT", "evidence": old["evidence"]})
     assert not predates_second_pass({"verdict": "INSUFFICIENT_EVIDENCE", "evidence": {"content": {}}})  # audiobook / outage
+
+
+def test_conflicting_isbn_for_the_assigned_book_is_not_overridden(bindery):
+    ev = evidence("How to Cheat a Dragon's Curse", "Cressida Cowell")
+    ev["isbn"] = {"expectedMatch": True}
+    assert second_pass(RESULT, ev) is None
+    assert "actualBook" not in ev
+
+
+def test_uniqueness_is_checked_across_the_whole_catalogue(bindery):
+    with sqlite3.connect(bindery) as conn:
+        conn.executemany("INSERT INTO books(id, title, author_id) VALUES (?, ?, 2)",
+                         [(100 + i, f"Dragon Filler {i}") for i in range(400)])
+        # A second match for the file's identity, far past any 300-row window.
+        conn.execute("INSERT INTO books(id, title, author_id) VALUES (900, 'How to Cheat a Dragon''s Curse', 1)")
+    found = catalogue_candidates("How to Cheat a Dragon's Curse", "Cressida Cowell", 1)
+    assert sorted(c["bookId"] for c in found) == [2, 900]
+    ev = evidence("How to Cheat a Dragon's Curse", "Cressida Cowell")
+    assert second_pass(RESULT, ev) is None  # two candidates: left undecided
