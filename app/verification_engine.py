@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import re
 
+import sqlite3
+
+from .identity_search import second_pass
 from .matcher import author_match_strict, author_mentioned_in_text, meaningful_words, normalize
 from .series_titles import ebook_title_conflict, expected_title_variants
 from .verification_constants import FRONT_TEXT_CHARS
@@ -351,7 +354,24 @@ def classify_identity(
     verdict, confidence, evidence = _classify_identity_refined(
         result, metadata, text, identifiers, notes, front_text
     )
-    return _apply_isbn_evidence(verdict, confidence, evidence, result)
+    verdict, confidence, evidence = _apply_isbn_evidence(verdict, confidence, evidence, result)
+    return _apply_second_pass(verdict, confidence, evidence, result)
+
+
+def _apply_second_pass(
+    verdict: str, confidence: int, evidence: dict, result: dict
+) -> tuple[str, int, dict]:
+    """Look for more evidence before leaving a book undecided.
+
+    A volume or part conflict is never settled by looser matching, so it is left as is.
+    """
+    if verdict != "INSUFFICIENT_EVIDENCE" or evidence.get("reasonCode") == "TITLE_DESIGNATION_CONFLICT":
+        return verdict, confidence, evidence
+    try:
+        found = second_pass(result, evidence)
+    except (sqlite3.Error, OSError, ValueError):
+        return verdict, confidence, evidence
+    return (found[0], found[1], evidence) if found else (verdict, confidence, evidence)
 
 
 def _classify_identity_refined(

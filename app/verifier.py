@@ -217,7 +217,22 @@ def _verification_for_fingerprint(
     # next verification scans again instead of repeating the outage.
     if verification_is_inconclusive(item.get("verdict"), item.get("evidence")):
         return None
+    # An undecided ebook verdict reached before the second evidence pass existed
+    # is not final: look at the file again with the new evidence.
+    if predates_second_pass(item):
+        return None
     return item
+
+
+def predates_second_pass(item: dict) -> bool:
+    """An undecided ebook identity verdict recorded before second-pass evidence existed."""
+    evidence = item.get("evidence") or {}
+    return (
+        item.get("verdict") == "INSUFFICIENT_EVIDENCE"
+        and "expected_signal" in (evidence.get("content") or {})
+        and "secondPass" not in evidence
+        and evidence.get("reasonCode") != "TITLE_DESIGNATION_CONFLICT"
+    )
 
 
 def _ebook_directory_media_mismatch(result: dict) -> dict | None:

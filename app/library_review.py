@@ -192,6 +192,12 @@ def _why_undecided(evidence: dict) -> str:
                      "does, so this may be a different book.")
     else:
         parts.append("Neither the title nor the author could be found in the readable text.")
+    for step in evidence.get("secondPass") or []:
+        if step.get("check") == "catalogueSearch":
+            count = int(step.get("matches") or 0)
+            parts.append("BookGuard also searched your Bindery library for a book matching the file’s own "
+                         + ("title and author and found none." if not count
+                            else f"title and author and found {count}, too many to pick one safely."))
     return " ".join(parts)
 
 
