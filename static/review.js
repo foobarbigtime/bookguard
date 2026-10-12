@@ -331,17 +331,26 @@
           if (!window.confirm(`${plan.label}? ${ready.length} book${ready.length === 1 ? "" : "s"}, one at a time. It stops at the first failure.`)) return;
           node.disabled = true;
           let done = 0;
+          const notes = [];
+          const finish = (headline, tone) => say(
+            el("p", { class: tone, text: headline }),
+            notes.length ? el("ul", {}, ...notes.map((note) => el("li", { text: note }))) : null);
           try {
             for (const book of ready) {
               say(el("p", { text: `Working on ${done + 1} of ${ready.length}: ${book.title}…` }));
               const result = await post(plan.endpoint.replace("{id}", book.id), plan.confirm);
               if (result && result.ok === false) throw new Error(`${book.title}: ${result.message || "not completed"}`);
               done += 1;
+              // Replace answers ok even when Bindery's search did not start or
+              // a blocklist failed; keep those messages and stop on "Needs you".
+              const message = String((result && result.message) || "");
+              if (/^Needs you|Note:/.test(message)) notes.push(`${book.title}: ${message}`);
+              if (/^Needs you/.test(message)) throw new Error(`${book.title} needs you. See below.`);
             }
-            say(el("p", { text: `Done: ${done} of ${ready.length}.` }));
-            window.setTimeout(() => window.location.reload(), 1500);
+            finish(notes.length ? `Done: ${done} of ${ready.length}, with notes:` : `Done: ${done} of ${ready.length}.`, notes.length ? "notice warning" : "");
+            if (!notes.length) window.setTimeout(() => window.location.reload(), 1500);
           } catch (error) {
-            say(el("p", { class: "notice warning", text: `Stopped after ${done} of ${ready.length}. ${error.message}` }));
+            finish(`Stopped after ${done} of ${ready.length}. ${error.message}`, "notice warning");
             node.disabled = false;
           }
         }, "primary");
