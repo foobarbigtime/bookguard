@@ -103,7 +103,6 @@ def test_extraction_uses_ocr_only_for_a_pdf_with_no_text_layer(monkeypatch, tmp_
     monkeypatch.setattr(ocr_probe, "ocr_pdf_front", lambda path: calls.append(path) or {"text": "TITLE PAGE", "pages": 1})
     monkeypatch.setattr(ebook_extraction.pdf_probe, "extract_pdf_text",
                         lambda path, **kw: {"title": "", "author": "", "text": "", "front_text": ""})
-    monkeypatch.setattr(settings, "verification_use_tika", False)
     extracted = ebook_extraction.extract_ebook_identity(str(pdf))
     assert calls and extracted.text == "TITLE PAGE" and extracted.source == "native-pdf+ocr"
     # A PDF that already has plenty of text is never OCR'd.

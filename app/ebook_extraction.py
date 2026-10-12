@@ -13,7 +13,6 @@ from .file_safety import read_file_prefix
 from .metadata import ebook_metadata
 from .mobi_text import read_mobi_text
 from . import ocr_probe, pdf_probe
-from .tika_client import extract_text as tika_text
 from .verification_constants import FRONT_TEXT_CHARS, MIN_USEFUL_TEXT
 
 
@@ -177,7 +176,7 @@ def extract_mobi_identity(path: str) -> tuple[dict, str, list[str], str, list[st
 
 
 def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
-    """Extract native ebook evidence and use Tika only when configured and needed."""
+    """Extract native ebook evidence (with OCR for a scanned PDF that has no text layer)."""
     suffix = Path(path).suffix.lower()
     metadata = ebook_metadata(path)
     text = ""
@@ -217,20 +216,6 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
                          "text layer. OCR can misread a name, which can only make a match fail, never invent one.")
         elif found.get("error"):
             notes.append(str(found["error"]))
-
-    if (
-        len(text.strip()) < MIN_USEFUL_TEXT
-        and settings.verification_use_tika
-        and settings.verification_tika_url
-    ):
-        fallback_text, tika_error = tika_text(path)
-        if fallback_text:
-            text = fallback_text
-            front_text = fallback_text[:FRONT_TEXT_CHARS]
-            source = f"{source}+tika" if source != "native" else "tika"
-            notes.append("Tika fallback supplied content because native extraction was insufficient.")
-        elif tika_error:
-            notes.append(tika_error)
 
     return ExtractedEbookIdentity(
         metadata=metadata,

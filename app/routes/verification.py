@@ -10,7 +10,6 @@ from ..verifier import (
     apply_verified_metadata_repair,
     start_verification_job,
     test_malware_scanner,
-    test_tika,
     verification_for_result,
     verification_job_status,
     verification_summary,
@@ -64,11 +63,6 @@ async def api_verification_start(request: Request):
     if not job_id:
         raise HTTPException(status_code=409, detail="A content verification job is already running.")
     return {"ok": True, "job_id": job_id}
-
-
-@router.get("/tika-test")
-def api_verification_tika_test():
-    return test_tika()
 
 
 @router.get("/malware-test")

@@ -81,7 +81,6 @@ EXPECTED_ROUTES = {
     ("GET", "/api/verification/status"),
     ("GET", "/api/verification/cached"),
     ("POST", "/api/verification/start"),
-    ("GET", "/api/verification/tika-test"),
     ("GET", "/api/verification/malware-test"),
     ("GET", "/api/verification/{result_id}"),
     ("POST", "/api/verification/{result_id}/run"),
@@ -137,7 +136,7 @@ def test_templates_parse():
 
 
 def test_settings_clamp_and_lists():
-    cfg = Settings(verification_tika_url="http://trusted-tika:9998")
+    cfg = Settings(verification_ocr_languages="eng+nld")
     cfg.apply({
         "sample_files": 999,
         "dashboard_poll_ms": 10,
@@ -149,13 +148,14 @@ def test_settings_clamp_and_lists():
         "repair_audio_genre": True,
         "repair_audio_genre_value": "Audiobook",
         "verification_enabled": True,
-        "verification_use_tika": True,
+        "verification_ocr": False,
+        "verification_ocr_pages": 99,
         "verification_file_signatures": False,
         "verification_archive_safety": False,
         "verification_epub_structure": False,
         "verification_pdf_integrity": False,
         "verification_malware_scan": True,
-        "verification_tika_url": "https://untrusted.example/upload",
+        "verification_ocr_languages": "eng; rm -rf /",
         "verification_max_text_chars": 1,
         "verification_pdf_pages": 999,
     })
@@ -169,13 +169,14 @@ def test_settings_clamp_and_lists():
     assert cfg.repair_audio_genre is True
     assert cfg.repair_audio_genre_value == "Audiobook"
     assert cfg.verification_enabled is True
-    assert cfg.verification_use_tika is True
+    assert cfg.verification_ocr is False
+    assert cfg.verification_ocr_pages == 6
     assert cfg.verification_file_signatures is False
     assert cfg.verification_archive_safety is False
     assert cfg.verification_epub_structure is False
     assert cfg.verification_pdf_integrity is False
     assert cfg.verification_malware_scan is True
-    assert cfg.verification_tika_url == "http://trusted-tika:9998"
+    assert cfg.verification_ocr_languages == "eng+nld"  # deployment-only: not changeable through settings
     assert cfg.verification_max_text_chars == 50000
     assert cfg.verification_pdf_pages == 100
 

@@ -45,7 +45,6 @@ from .repair import (
 )
 from .series_titles import bindery_series_context
 from .triage import result_signature, triage_state, triage_states
-from .tika_client import test_connection
 from .verification_status import malware_scan_inconclusive, verification_is_inconclusive
 from .verification_engine import classify_identity
 
@@ -80,11 +79,6 @@ _job_state: dict = {
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def test_tika() -> dict:
-    """Expose the Tika connectivity check through the verifier service API."""
-    return test_connection()
 
 
 def test_malware_scanner() -> dict:
@@ -169,8 +163,10 @@ def _verification_signature(result: dict, target_path: str, fingerprint: str) ->
             "snapshotMaxBytes": settings.verification_snapshot_max_bytes,
             "maxTextChars": settings.verification_max_text_chars,
             "pdfPages": settings.verification_pdf_pages,
-            "useTika": settings.verification_use_tika,
-            "tikaUrl": settings.verification_tika_url,
+            # Tika was removed. These two stay at the values an unconfigured install produced, so
+            # the cache key of every stored verification is unchanged and nothing is re-verified.
+            "useTika": True,
+            "tikaUrl": "",
             "identity": {
                 "titleMinSharedWords": settings.title_min_shared_words,
                 "allowAuthorSurnameMatch": settings.allow_author_surname_match,

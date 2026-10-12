@@ -9,7 +9,8 @@ import sqlite3
 from .config import settings
 
 
-NON_PERSISTED_SETTING_KEYS = {"bindery_api_key", "verification_tika_url"}
+# Tika was removed: its two settings are listed here only so any value an older version stored is purged.
+NON_PERSISTED_SETTING_KEYS = {"bindery_api_key", "verification_tika_url", "verification_use_tika"}
 
 
 def utc_now() -> str:

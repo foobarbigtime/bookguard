@@ -91,7 +91,7 @@ def setup_conflict(tmp_path, monkeypatch):
         ])
     for key, value in {"ebook_root": str(root), "ebook_bindery_prefix": "/data/books",
                        "bindery_db": str(db), "config_dir": str(tmp_path / "config"),
-                       "allow_actions": False, "verification_use_tika": False,
+                       "allow_actions": False,
                        **{key: True for key in hardlinks._POLICY}}.items():
         monkeypatch.setattr(hardlinks.settings, key, value)
     return FakeClient(db), final, stage
