@@ -236,6 +236,9 @@
         el("dt", { text: "Author in text" }), el("dd", { text: `${who.expectedAuthor || "—"}${inText(who.expectedAuthorInText)}` }));
     }
     if (who.isbns.length) dl.append(el("dt", { text: "ISBN in file" }), el("dd", { text: who.isbns.join(", ") }));
+    if (who.downloadNames.length) dl.append(el("dt", { text: "Bindery downloaded it as" }), el("dd", { text: who.downloadNames.join(" · ") }));
+    if (who.notABook.length) dl.append(el("dt", { text: "Not a book" }), el("dd", { text: `Bindery's history for this entry includes ${who.notABook.join(" · ")}, which is not a book release.` }));
+    if (who.proofSources.length) dl.append(el("dt", { text: "Proof" }), el("dd", { text: `These independent sources agree: ${who.proofSources.join("; ")}.` }));
     return section("Bindery vs the file", dl);
   }
 

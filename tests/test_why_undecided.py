@@ -124,3 +124,13 @@ def test_audiobook_without_tags_does_not_claim_the_tags_name_a_book():
     item = review_item(dict(AUDIO_ROW), _audio_evidence("", "", count=3))
     assert item["whyKind"] == "audiobook_no_tags"
     assert "no usable title tag" in item["whyUndecided"] and "filenames do not name the book" in item["whyUndecided"]
+
+
+def test_retrieved_proof_is_exposed_for_the_panel():
+    ev = evidence(title_in=True, author_in=True, file_title="T", file_author="A")
+    ev["evidence"]["provenance"] = {"releases": [{"raw": "A - T (retail) (epub)"}], "notABook": ["VA-X-OST-WEB-2025"]}
+    ev["evidence"]["proof"] = {"sources": ["download name in Bindery's history", "the book's text"]}
+    who = review_item(dict(ROW), ev)["identity"]
+    assert who["downloadNames"] == ["A - T (retail) (epub)"]
+    assert who["notABook"] == ["VA-X-OST-WEB-2025"]
+    assert who["proofSources"][0].startswith("download name")

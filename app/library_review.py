@@ -172,6 +172,9 @@ def _identity(evidence: dict) -> dict[str, Any]:
         "trackCount": int(whole.get("readableCount") or names.get("fileCount") or 0),
         "filenamesNameTheBook": bool(names.get("strong")),
         "notes": [str(n)[:300] for n in (evidence.get("notes") or [])][:5],
+        "downloadNames": [str(r.get("raw") or "") for r in ((evidence.get("provenance") or {}).get("releases") or [])][:3],
+        "notABook": [str(n) for n in ((evidence.get("provenance") or {}).get("notABook") or [])][:3],
+        "proofSources": [str(n) for n in ((evidence.get("proof") or {}).get("sources") or [])],
     }
 
 _READABLE_SUFFIXES = {".epub", ".pdf", ".txt", ".rtf", ".mobi", ".azw", ".azw3"}
