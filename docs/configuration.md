@@ -100,6 +100,10 @@ and its temporary images are removed immediately.
 | `BOOKGUARD_VERIFICATION_OCR_PAGES` | `3` | How many pages from the front to read (1-6). |
 | `BOOKGUARD_VERIFICATION_OCR_LANGUAGES` | `eng` | Tesseract languages, e.g. `eng+nld`. The matching `tesseract-ocr-<lang>` package must be in the image. |
 
-OCR can misread a name. For OCR text only, matching tolerates lost spaces and a misread letter or
-two in a long enough title or author (digits must match exactly), so a misread can make a match
-fail but cannot make a different book match. The image adds about 100 MB for Poppler and Tesseract.
+OCR can misread a name, so scanned text is held to a stricter rule than a text layer. A title or
+author counts as evidence only when it stands alone on the page as whole words (lost spaces and
+punctuation are tolerated; "Volume I" is not "Volume II", and "Anne Rice" is not "JoAnne Rice"). A
+passage that is a letter or two off ("The Lost Colony") is never evidence for a book: it only stops
+BookGuard rejecting or rewriting a book that OCR may have misread. "Also by ..." lists are ignored,
+and for a scan the title, not just the author, must be found. A misread can therefore leave a book
+undecided, but cannot make a different book verify. The image adds about 100 MB for Poppler and Tesseract.

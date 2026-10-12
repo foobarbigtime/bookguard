@@ -341,7 +341,9 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
         )
         author_level = author_match_level(author, file_author)
         author_ok = bool(author_level)
-        in_text = bool(expected_signal.get("title_found") or expected_signal.get("author_found"))
+        # In a scan (OCR) the author alone is not enough: it could be another book by that author.
+        in_text = bool(expected_signal.get("title_found")
+                       or (expected_signal.get("author_found") and not expected_signal.get("ocr")))
         # An initial standing in for a name is only the same person if the book itself prints
         # the assigned author's name; an exact match needs nothing more.
         author_backed = author_level == "exact" or bool(expected_signal.get("author_found"))
@@ -383,6 +385,7 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
         )
         isbn_owners = [int(o.get("bookId") or 0) for o in ((evidence.get("isbn") or {}).get("otherOwners") or [])]
         if (embedded_signal.get("strong_identity") and not expected_signal.get("title_found")
+                and not expected_signal.get("title_near")        # OCR may have misread the assigned title
                 and not title_is_assigned and not isbn_is_assigned_book):
             try:
                 candidates: list[dict[str, Any]] | None = catalogue_candidates(
