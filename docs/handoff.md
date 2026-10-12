@@ -95,7 +95,10 @@ Les reported these results from the Unraid console:
 - `bookguard` and `bookguard-clamav` are healthy. The application's
   `/health` returned `{"status":"ok","version":"0.6.0"}`.
   Les clicked Check library on this deployed version during host acceptance.
-  Its completion and active scan/verification job status have not been checked.
+  At 18:35 EDT on 2026-10-12, Les reported `/api/library-check` returned
+  `status: complete`, `phase: complete`, `busy: false` and `error: null`.
+  The tracked jobs were idle at that observation; recheck immediately before
+  any production upgrade.
 - The detached acceptance worktree is
   `/mnt/cache/appdata/bookguard-pr162-acceptance`, pinned to
   `4f5e4ef0b9ccb0cd0938e5691f96bc1a578caf47`.
