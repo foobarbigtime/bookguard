@@ -401,9 +401,10 @@ def _classify_identity_base(
         )
         return "WRONG_CONTENT", 99, evidence
 
-    # In a scan the page is the only independent witness and its title is what OCR reads best:
-    # the author alone (a different book by the same author) does not support the assignment.
-    content_supports = expected["title_found"] or (expected["author_found"] and not ocr_text)
+    # The author can appear in every book they wrote. Matching metadata plus that name
+    # cannot prove this particular title, whether the text is native or came from OCR.
+    # Corroborated ISBN evidence is considered separately below.
+    content_supports = expected["title_found"]
     if metadata_matches_expected and content_supports:
         evidence["explanation"] = (
             "Metadata matches the expected book, but content evidence is not positioned "

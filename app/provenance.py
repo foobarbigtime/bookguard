@@ -141,14 +141,15 @@ def provenance_proof(
 
     Needs, all together: the same author on all three; the same core title on all three;
     the same edition markers and volume numbers; and the book's own text containing the
-    title or the author. Returns the proof (which sources agreed) or None.
+    assigned title or matching file title. The author's name alone cannot distinguish their
+    books. Returns the proof (which sources agreed) or None.
     """
     title, author = str(expected.get("title") or ""), str(expected.get("author") or "")
     file_title, file_author = str(embedded.get("title") or ""), str(embedded.get("author") or "")
     file_level = author_level(author, file_author) if (title and author and file_title and file_author) else ""
     if not file_level:
         return None
-    if not (signals.get("expectedTitleInText") or signals.get("expectedAuthorInText") or signals.get("fileTitleInText")):
+    if not (signals.get("expectedTitleInText") or signals.get("fileTitleInText")):
         return None
     assigned_core = core_title(title, author)
     file_core = core_title(file_title, file_author)

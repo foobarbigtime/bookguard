@@ -234,3 +234,34 @@ def test_missing_embedded_metadata_can_be_verified_for_repair():
     assert evidence["embedded"]["author"] == ""
     assert evidence["content"]["expected_signal"]["strong_identity"] is True
     assert evidence["content"]["expected_signal"]["front_proximity"] is True
+
+
+def test_matching_metadata_and_a_shared_author_do_not_prove_the_title():
+    result = sample_result(title="The Last Colony", author="John Scalzi")
+    text = "OLD MANS WAR\nJOHN SCALZI\nThe opening of another book by the same author."
+    for file_author in ("John Scalzi", "J. Scalzi"):
+        verdict, _, evidence = classify(
+            result, {"title": "The Last Colony", "author": file_author}, text,
+        )
+        assert verdict == "INSUFFICIENT_EVIDENCE", file_author
+        assert evidence["content"]["expected_author_found"] is True
+        assert evidence["content"]["expected_title_found"] is False
+
+
+def test_matching_metadata_and_printed_title_still_support_a_lower_confidence_verdict():
+    result = sample_result(title="The Last Colony", author="John Scalzi")
+    verdict, confidence, _ = classify(
+        result, {"title": "The Last Colony", "author": "John Scalzi"},
+        "THE LAST COLONY\nThe opening of the expected book.",
+    )
+    assert (verdict, confidence) == ("VERIFIED_CORRECT", 90)
+
+
+def test_matching_metadata_can_still_be_corroborated_by_the_assigned_isbn():
+    result = sample_result(title="The Last Colony", author="John Scalzi")
+    result["isbn_evidence"] = {"isbns": ["9780765316974"], "expectedMatch": True, "otherOwners": []}
+    verdict, confidence, _ = classify(
+        result, {"title": "The Last Colony", "author": "John Scalzi"},
+        "John Scalzi\nNo title was recovered from the available text.",
+    )
+    assert (verdict, confidence) == ("VERIFIED_CORRECT", 99)

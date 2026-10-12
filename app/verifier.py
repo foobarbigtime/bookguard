@@ -10,6 +10,7 @@ import time
 import uuid
 
 from .identity_search import SECOND_PASS_VERSION
+from .ocr_probe import ocr_policy
 from .audiobook_evidence import build_audiobook_evidence
 from .catalogue_relationship import classify_relationship, latest_ebook_scan_status
 from .config import settings
@@ -217,20 +218,45 @@ def _verification_for_fingerprint(
         return None
     # An undecided ebook verdict reached before the second evidence pass existed
     # is not final: look at the file again with the new evidence.
-    if predates_second_pass(item) or predates_ocr(item):
+    if predates_second_pass(item) or predates_title_support(item) or predates_ocr(item):
         return None
     return item
 
 
 def predates_ocr(item: dict) -> bool:
-    """A PDF verified with no text before OCR existed (or with OCR switched off), now that OCR is on."""
+    """Retry an affected PDF after an OCR outage, changed policy, or first enabling OCR.
+
+    Text-layer PDFs and other formats keep their original cache keys. Historical OCR
+    attempts without a recorded policy are checked once under the current settings.
+    """
     evidence = item.get("evidence") or {}
     content = evidence.get("content") or {}
-    if not settings.verification_ocr or "text_characters_examined" not in content:
+    if not str(item.get("source") or "").startswith("native-pdf"):
         return False
-    if evidence.get("ocr") or int(content.get("text_characters_examined") or 0) >= MIN_USEFUL_TEXT:
+    attempt = evidence.get("ocr") or {}
+    policy = ocr_policy()
+    if attempt:
+        if not policy["enabled"]:
+            return str(item.get("source") or "").endswith("+ocr")
+        if attempt.get("error") and attempt.get("errorCode") != "no_text":
+            return True
+        return evidence.get("ocrPolicy") != policy
+    if not policy["enabled"] or "text_characters_examined" not in content:
         return False
-    return str(item.get("source") or "").startswith("native-pdf")
+    return int(content.get("text_characters_examined") or 0) < MIN_USEFUL_TEXT
+
+
+def predates_title_support(item: dict) -> bool:
+    """Recheck old ebook 'correct' verdicts supported only by an author's name."""
+    if item.get("format") == "audiobook" or item.get("verdict") != "VERIFIED_CORRECT":
+        return False
+    evidence = item.get("evidence") or {}
+    content = evidence.get("content") or {}
+    if "expected_signal" not in content:
+        return False
+    title_found = ((content.get("expected_signal") or {}).get("title_found")
+                   or (content.get("embedded_signal") or {}).get("title_found"))
+    return not title_found and not (evidence.get("isbn") or {}).get("expectedMatch")
 
 
 def predates_second_pass(item: dict) -> bool:
@@ -642,6 +668,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
             ocr = getattr(extracted, "ocr", None)
             if ocr:
                 evidence["ocr"] = ocr
+                evidence["ocrPolicy"] = ocr.get("policy") or ocr_policy()
             identity_done = time.monotonic()
             evidence["timings"] = {
                 "snapshotMs": round((snapshot_done - started) * 1000),

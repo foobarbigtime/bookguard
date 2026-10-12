@@ -2,6 +2,13 @@
 
 BookGuard uses layered access, repair, and action safeguards.
 
+Ebook identity cannot be established from matching metadata and an author's
+name alone: a different book by the same author can contain that name. The
+content-backed classifier, second evidence pass and download provenance need
+the assigned or matching file title in the text. Corroborated ISBN evidence is
+a separate supported path. Insufficient identity evidence remains a review
+case and is never, by itself, an unsafe-file finding.
+
 ### Application access
 
 BookGuard requires HTTP Basic authentication for every page and API route

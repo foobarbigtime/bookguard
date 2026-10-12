@@ -7,7 +7,7 @@ for more evidence instead of giving up:
 1. Tolerant identity: the file's own title and author are compared with the
    assigned book allowing for initials, "Surname, Given" order and
    extra credited authors. A tolerant match counts only when the book's text
-   also contains the assigned title or author.
+   also contains the assigned title or the matching file title.
 2. Catalogue search: the file's own title and author are searched for among the
    other books in Bindery. If exactly one other book matches and the book's text
    supports the file's own identity, the file is that other book.
@@ -32,7 +32,7 @@ from .title_matching import (
 
 MAX_CANDIDATES = 5
 # Bump when the second pass changes, so earlier second-pass verdicts are re-examined.
-SECOND_PASS_VERSION = 3
+SECOND_PASS_VERSION = 4
 TOLERANT_CONFIDENCE = 88
 ISBN_CONFIDENCE = 95
 PROVENANCE_CONFIDENCE = 90
@@ -341,9 +341,9 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
         )
         author_level = author_match_level(author, file_author)
         author_ok = bool(author_level)
-        # In a scan (OCR) the author alone is not enough: it could be another book by that author.
-        in_text = bool(expected_signal.get("title_found")
-                       or (expected_signal.get("author_found") and not expected_signal.get("ocr")))
+        # A shared author is not evidence for this particular book. The matching file's
+        # title may be the printed form when Bindery adds a harmless series/edition label.
+        in_text = bool(expected_signal.get("title_found") or embedded_signal.get("title_found"))
         # An initial standing in for a name is only the same person if the book itself prints
         # the assigned author's name; an exact match needs nothing more.
         author_backed = author_level == "exact" or bool(expected_signal.get("author_found"))
@@ -352,7 +352,7 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
         if title_ok and author_ok and in_text and author_backed:
             evidence["explanation"] = (
                 "The file's own title and author match this book once initials, name order and "
-                "extra credited authors are allowed for, and the book's text contains the title or author."
+                "extra credited authors are allowed for, and the book's text contains the matching title."
             )
             if isbn_is_assigned_book:
                 evidence["explanation"] += " The file's ISBN is also one of this book's editions in Bindery."

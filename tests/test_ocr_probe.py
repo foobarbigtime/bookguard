@@ -1,8 +1,9 @@
-"""OCR of image-only PDFs: bounded, optional, and only ever able to make a match fail, not invent one."""
+"""Bounded OCR of image-only PDFs and conservative use of its identity evidence."""
 
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -108,6 +109,7 @@ def test_a_blank_scan_reports_no_text_instead_of_inventing_any(tmp_path):
     pil.new("L", (800, 1000), 255).save(tmp_path / "blank.pdf", "PDF", resolution=150)
     found = ocr_probe.ocr_pdf_front(tmp_path / "blank.pdf")
     assert "text" not in found and "no text" in found["error"]
+    assert found["error_code"] == "no_text"
 
 
 def test_children_are_wrapped_in_prlimit_and_the_language_is_validated(monkeypatch):
@@ -122,6 +124,32 @@ def test_children_are_wrapped_in_prlimit_and_the_language_is_validated(monkeypat
     for hostile in ("eng; rm -rf /", "../../etc/passwd", "-c tessedit_write_images=1", ""):
         monkeypatch.setattr(settings, "verification_ocr_languages", hostile)
         assert ocr_probe._languages() == "eng"
+
+
+def test_ocr_uses_one_captured_policy_even_when_settings_change_during_render(monkeypatch, tmp_path):
+    from app.subprocess_capture import BoundedProcessResult
+
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(settings, "verification_ocr_pages", 3)
+    monkeypatch.setattr(settings, "verification_ocr_languages", "eng")
+    monkeypatch.setattr(ocr_probe.shutil, "which", lambda name: "/test/" + name)
+    languages = []
+
+    def run(command, **kwargs):
+        if any(Path(part).name == "pdftoppm" for part in command):
+            Path(command[-1] + "-1.png").write_bytes(b"image")
+            monkeypatch.setattr(settings, "verification_ocr_pages", 6)
+            monkeypatch.setattr(settings, "verification_ocr_languages", "fra")
+            return BoundedProcessResult(0, b"", b"")
+        languages.append(command[command.index("-l") + 1])
+        return BoundedProcessResult(0, b"THE LAST COLONY\nJOHN SCALZI", b"")
+
+    monkeypatch.setattr(ocr_probe, "run_bounded_process", run)
+    found = ocr_probe.ocr_pdf_front(pdf)
+    assert found["policy"]["pages"] == 3 and found["policy"]["languages"] == "eng"
+    assert languages == ["eng"]
 
 
 def test_extraction_uses_ocr_only_for_a_pdf_with_no_text_layer(monkeypatch, tmp_path):
@@ -146,7 +174,8 @@ def test_image_only_pdfs_verified_before_ocr_are_looked_at_again_once(monkeypatc
     old = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
            "evidence": {"content": {"text_characters_examined": 0}}}
     assert predates_ocr(old)
-    assert not predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True}}})   # already tried
+    assert not predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True},
+                                               "ocrPolicy": ocr_probe.ocr_policy()}})  # already tried this policy
     assert not predates_ocr({**old, "evidence": {"content": {"text_characters_examined": 90000}}})  # has text
     assert not predates_ocr({**old, "source": "native-epub"})
     monkeypatch.setattr(settings, "verification_ocr", False)

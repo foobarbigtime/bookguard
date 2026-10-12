@@ -59,14 +59,14 @@ def test_save_settings_never_stores_bindery_api_key(tmp_path, monkeypatch):
 
 
 
-def test_init_purges_settings_stored_by_older_versions_that_had_tika(tmp_path, monkeypatch):
+def test_init_purges_removed_and_deployment_only_settings(tmp_path, monkeypatch):
     config = tmp_path / "config"
     monkeypatch.setattr(settings, "config_dir", str(config))
 
     init_local_db()
     with local_conn() as conn:
         for key, value in (("verification_tika_url", "https://untrusted.example/upload"),
-                           ("verification_use_tika", True)):
+                           ("verification_use_tika", True), ("verification_ocr_languages", "untrusted")):
             conn.execute(
                 "INSERT INTO app_settings(key, value_json, updated_at) VALUES (?, ?, ?)",
                 (key, json.dumps(value), "test"),
@@ -77,7 +77,8 @@ def test_init_purges_settings_stored_by_older_versions_that_had_tika(tmp_path, m
 
     with local_conn() as conn:
         rows = conn.execute(
-            "SELECT key FROM app_settings WHERE key IN ('verification_tika_url', 'verification_use_tika')"
+            "SELECT key FROM app_settings WHERE key IN "
+            "('verification_tika_url', 'verification_use_tika', 'verification_ocr_languages')"
         ).fetchall()
     assert rows == []
 
@@ -98,6 +99,16 @@ def test_save_settings_ignores_the_removed_tika_settings(tmp_path, monkeypatch):
     persisted = load_persisted_settings()
     assert persisted["bindery_url"] == "http://bindery:8787"
     assert "verification_tika_url" not in persisted and "verification_use_tika" not in persisted
+
+
+def test_ocr_languages_remain_deployment_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "config_dir", str(tmp_path / "config"))
+    monkeypatch.setattr(settings, "verification_ocr_languages", "eng+fra")
+    init_local_db()
+    save_persisted_settings({**settings.persistable_dict(), "verification_ocr_languages": "untrusted"})
+    assert "verification_ocr_languages" not in settings.persistable_dict()
+    assert "verification_ocr_languages" not in load_persisted_settings()
+    assert settings.verification_ocr_languages == "eng+fra"
 
 
 def test_library_languages_save_and_reload(tmp_path, monkeypatch):
