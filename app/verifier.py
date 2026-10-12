@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 
+from .identity_search import SECOND_PASS_VERSION
 from .audiobook_evidence import build_audiobook_evidence
 from .catalogue_relationship import classify_relationship, latest_ebook_scan_status
 from .config import settings
@@ -227,12 +228,13 @@ def _verification_for_fingerprint(
 def predates_second_pass(item: dict) -> bool:
     """An undecided ebook identity verdict recorded before second-pass evidence existed."""
     evidence = item.get("evidence") or {}
-    return (
-        item.get("verdict") == "INSUFFICIENT_EVIDENCE"
-        and "expected_signal" in (evidence.get("content") or {})
-        and "secondPass" not in evidence
-        and evidence.get("reasonCode") != "TITLE_DESIGNATION_CONFLICT"
-    )
+    verdict = item.get("verdict")
+    if "expected_signal" not in (evidence.get("content") or {}):
+        return False
+    if verdict == "INSUFFICIENT_EVIDENCE":
+        return "secondPass" not in evidence and evidence.get("reasonCode") != "TITLE_DESIGNATION_CONFLICT"
+    # A verdict the second pass itself reached under looser rules than today's.
+    return "secondPass" in evidence and int(evidence.get("secondPassVersion") or 1) < SECOND_PASS_VERSION
 
 
 def _ebook_directory_media_mismatch(result: dict) -> dict | None:

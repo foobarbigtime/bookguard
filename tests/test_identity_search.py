@@ -130,3 +130,21 @@ def test_uniqueness_is_checked_across_the_whole_catalogue(bindery):
     assert sorted(c["bookId"] for c in found) == [2, 900]
     ev = evidence("How to Cheat a Dragon's Curse", "Cressida Cowell")
     assert second_pass(RESULT, ev) is None  # two candidates: left undecided
+
+
+def test_graphic_novel_and_other_forms_are_different_books():
+    plain = "Good-Bye Stacey, Good-Bye"
+    assert not soft_title_match(plain, "Good-Bye Stacey, Good-Bye (The Baby-Sitters Club Graphic Novel #11)")
+    assert not soft_title_match(plain, "Good-Bye Stacey, Good-Bye (Graphic Novel)")
+    assert not soft_title_match("Dragon Sword (Abridged)", "Dragon Sword")
+    assert not soft_title_match("Dragon Sword", "Dragon Sword: The Illustrated Edition")
+    assert soft_title_match("Dragon Sword (Abridged)", "Dragon Sword: Abridged")
+
+
+def test_second_pass_verdicts_from_older_rules_are_looked_at_again():
+    from app.verifier import predates_second_pass
+    base = {"content": {"expected_signal": {}}, "secondPass": [{"check": "catalogueSearch", "matches": 1}]}
+    assert predates_second_pass({"verdict": "WRONG_CONTENT", "evidence": base})
+    assert predates_second_pass({"verdict": "VERIFIED_CORRECT", "evidence": {**base, "secondPassVersion": 1}})
+    assert not predates_second_pass({"verdict": "WRONG_CONTENT", "evidence": {**base, "secondPassVersion": 2}})
+    assert not predates_second_pass({"verdict": "WRONG_CONTENT", "evidence": {"content": base["content"]}})  # first-pass verdict

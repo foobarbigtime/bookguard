@@ -28,11 +28,28 @@ from .series_titles import ebook_title_conflict, expected_title_variants
 from .title_matching import meaningful_words, normalize
 
 MAX_CANDIDATES = 5
+# Bump when the second pass gets stricter, so earlier second-pass verdicts are re-examined.
+SECOND_PASS_VERSION = 2
 TOLERANT_CONFIDENCE = 88
 CATALOGUE_CONFIDENCE = 95
 
 _PEOPLE = re.compile(r"\s*(?:;|&|\||\band\b|\bwith\b)\s*", re.IGNORECASE)
 _GENERIC_SUFFIX = re.compile(r"\s*[:;,\-\u2013\u2014]\s*(?:a\s+)?(?:novel|memoir|thriller)\s*$", re.IGNORECASE)
+
+
+_EDITION_MARKERS = {
+    "graphic": r"\bgraphic\b", "illustrated": r"\billustrated\b", "abridged": r"\babridged\b",
+    "unabridged": r"\bunabridged\b", "adaptation": r"\badaptation\b", "comic": r"\bcomics?\b",
+    "manga": r"\bmanga\b", "annotated": r"\bannotated\b", "collection": r"\bcollection\b",
+    "omnibus": r"\bomnibus\b", "anthology": r"\banthology\b", "boxset": r"\bbox(?:ed)? set\b",
+    "screenplay": r"\bscreenplay\b",
+}
+
+
+def edition_markers(title: str) -> frozenset[str]:
+    """Words that make a title a different form of the same story (graphic novel, abridged, ...)."""
+    text = normalize(title)
+    return frozenset(name for name, pattern in _EDITION_MARKERS.items() if re.search(pattern, text))
 
 
 def _title_equivalent(expected: str, observed: str) -> bool:
@@ -53,6 +70,10 @@ def soft_title_match(expected: str, observed: str, series_names=()) -> bool:
     Girl: Spy Stories" can be different works, and so can two volumes of a saga.
     """
     if not expected or not observed or ebook_title_conflict(expected, observed):
+        return False
+    # A graphic novel, abridged or illustrated form is a different book from the plain
+    # one even when the title words match, so the markers must agree on both sides.
+    if edition_markers(expected) != edition_markers(observed):
         return False
     for e in expected_title_variants(expected, series_names) or [expected]:
         for o in expected_title_variants(observed, series_names) or [observed]:
@@ -140,6 +161,7 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
     series = [str(n) for n in (result.get("series") or [])]
     tried: list[dict[str, Any]] = []
     evidence["secondPass"] = tried
+    evidence["secondPassVersion"] = SECOND_PASS_VERSION
 
     if file_title and file_author:
         title_ok = soft_title_match(title, file_title, series)

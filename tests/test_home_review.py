@@ -394,3 +394,11 @@ def test_home_has_no_automation_card(library):
         page = client.get("/").text
     assert "Automation" not in page and "observeButton" not in page
     assert "System health" in page
+
+
+def test_right_now_reports_a_running_verification_job(monkeypatch):
+    monkeypatch.setattr(home, "verification_job_status",
+                        lambda: {"status": "running", "total": 299, "processed": 7, "current": "Abby's Book"})
+    now = home._now(None)
+    assert now["active"] and now["label"] == "Checking library files"
+    assert (now["processed"], now["total"], now["current"]) == (7, 299, "Abby's Book")
