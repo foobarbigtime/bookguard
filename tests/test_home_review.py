@@ -385,3 +385,12 @@ def test_scanner_outage_is_flagged_on_the_item(library):
     assert items["Outage"]["scannerOutage"] is True
     assert items["Unverified"]["scannerOutage"] is False
     assert items["Chase"]["scannerOutage"] is False
+
+
+def test_home_has_no_automation_card(library):
+    app = FastAPI()
+    app.include_router(pages_router)
+    with TestClient(app) as client:
+        page = client.get("/").text
+    assert "Automation" not in page and "observeButton" not in page
+    assert "System health" in page
