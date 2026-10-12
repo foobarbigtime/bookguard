@@ -176,6 +176,7 @@ def _identity(evidence: dict) -> dict[str, Any]:
         "trackCount": int(whole.get("readableCount") or names.get("fileCount") or 0),
         "filenamesNameTheBook": bool(names.get("strong")),
         "notes": [str(n)[:300] for n in (evidence.get("notes") or [])][:5],
+        "ocr": evidence.get("ocr") or None,
         "downloadNames": [str(r.get("raw") or "") for r in ((evidence.get("provenance") or {}).get("releases") or [])][:3],
         "notABook": [str(n) for n in ((evidence.get("provenance") or {}).get("notABook") or [])][:3],
         "proofSources": [str(n) for n in ((evidence.get("proof") or {}).get("sources") or [])],
@@ -242,6 +243,11 @@ def _why_undecided(evidence: dict, suffix: str = "", fmt: str = "ebook") -> tupl
             reason = ("The file opened but contains no readable text, so its content could not be "
                       "compared with the book. It may be image-only or empty.")
             kind = "no_text"
+            ocr = who["ocr"]
+            if ocr and ocr.get("error"):
+                reason += f" BookGuard tried to read the page images with OCR: {ocr['error']}"
+            elif ocr and ocr.get("attempted"):
+                reason += " OCR of the first pages found no text either."
         if not who["fileTitle"] and not who["fileAuthor"]:
             reason += " The file carries no title or author of its own either."
         elif placeholder:

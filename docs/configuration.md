@@ -85,3 +85,21 @@ Metadata repair settings include:
 Repair history and Undo are available in Activity and at `/repairs`.
 
 See [safety and permissions](safety.md) before enabling repairs or actions.
+
+## OCR for scanned PDFs
+
+A PDF with no text layer (a scan) cannot be verified from its text, so BookGuard renders its first
+pages with Poppler's `pdftoppm` and reads them with Tesseract, then checks the title and author on
+the page like any other book. It only runs for a PDF that yields almost no text, it works on the
+verifier's private snapshot, every child process has a timeout and CPU/memory limits (`prlimit`),
+and its temporary images are removed immediately.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BOOKGUARD_VERIFICATION_OCR` | `true` | Turn OCR of scanned PDFs on or off. |
+| `BOOKGUARD_VERIFICATION_OCR_PAGES` | `3` | How many pages from the front to read (1-6). |
+| `BOOKGUARD_VERIFICATION_OCR_LANGUAGES` | `eng` | Tesseract languages, e.g. `eng+nld`. The matching `tesseract-ocr-<lang>` package must be in the image. |
+
+OCR can misread a name. For OCR text only, matching tolerates lost spaces and a misread letter or
+two in a long enough title or author (digits must match exactly), so a misread can make a match
+fail but cannot make a different book match. The image adds about 100 MB for Poppler and Tesseract.

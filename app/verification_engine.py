@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import re
 
 import sqlite3
@@ -62,7 +63,63 @@ def _author_found(author: str, text: str) -> bool:
     return any(author_mentioned_in_text(candidate, text) for candidate in candidates)
 
 
-def _identity_signal(title: str, author: str, full_text: str, front_text: str) -> dict:
+OCR_MIN_SQUASHED_TITLE = 12
+OCR_MIN_SQUASHED_AUTHOR = 8
+OCR_MIN_RATIO = 0.9
+
+
+def _squash(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", normalize(value))
+
+
+def _fuzzy_pos(needle: str, haystack: str, min_length: int) -> int:
+    """Position of the best match of ``needle`` in OCR text, or -1.
+
+    OCR drops spaces and misreads a letter or two, so both sides are squashed to letters and
+    digits and a window of the same length must be at least 90% similar. Digits must match
+    exactly ("Treehouse 13" is never "Treehouse 26"); short names are not fuzzy-matched at all."""
+    if len(needle) < min_length or len(haystack) < len(needle) // 2:
+        return -1
+    exact = haystack.find(needle)
+    if exact >= 0:
+        return exact
+    digits = re.findall(r"\d+", needle)
+    best, best_at = 0.0, -1
+    step = max(1, len(needle) // 12)
+    for start in range(0, max(1, len(haystack) - len(needle) + 1), step):
+        window = haystack[start:start + len(needle)]
+        if re.findall(r"\d+", window) != digits:
+            continue
+        ratio = SequenceMatcher(None, needle, window, autojunk=False).quick_ratio()
+        if ratio >= OCR_MIN_RATIO and (ratio := SequenceMatcher(None, needle, window, autojunk=False).ratio()) > best:
+            best, best_at = ratio, start
+    return best_at if best >= OCR_MIN_RATIO else -1
+
+
+def _ocr_identity_signal(title: str, author: str, full_text: str, front_text: str) -> dict:
+    """Like _identity_signal, but for OCR text: tolerant of lost spaces and a misread letter or two."""
+    full, front = _squash(full_text), _squash(front_text)
+    squashed_title, squashed_author = _squash(title), _squash(author.split(";")[0])
+    title_full = _fuzzy_pos(squashed_title, full, OCR_MIN_SQUASHED_TITLE)
+    title_front = _fuzzy_pos(squashed_title, front, OCR_MIN_SQUASHED_TITLE)
+    author_full = _fuzzy_pos(squashed_author, full, OCR_MIN_SQUASHED_AUTHOR)
+    author_front = _fuzzy_pos(squashed_author, front, OCR_MIN_SQUASHED_AUTHOR)
+    distance = abs(title_front - author_front) if title_front >= 0 and author_front >= 0 else None
+    proximity = distance is not None and distance <= PROXIMITY_CHARS
+    return {
+        "title_found": title_full >= 0, "author_found": author_full >= 0,
+        "title_front_found": title_front >= 0, "author_front_found": author_front >= 0,
+        "front_proximity": proximity, "front_proximity_chars": distance,
+        "strong_identity": title_front >= 0 and author_front >= 0 and proximity,
+        "title_first_position": title_full if title_full >= 0 else None,
+        "author_exact_first_position": author_full if author_full >= 0 else None,
+        "ocr": True,
+    }
+
+
+def _identity_signal(title: str, author: str, full_text: str, front_text: str, ocr: bool = False) -> dict:
+    if ocr:
+        return _ocr_identity_signal(title, author, full_text, front_text)
     title_full = _phrase_pos(title, full_text)
     title_front = _phrase_pos(title, front_text)
     author_full_positions = _author_positions(author, full_text)
@@ -141,9 +198,10 @@ def _classify_identity_base(
     # candidate; the full title is tried first and wins ties. Author, metadata,
     # and front-of-book requirements below are unchanged.
     title_variants = expected_title_variants(expected_title, series_names) or [expected_title]
+    ocr_text = bool(result.get("_ocr_text"))
     matched_title, expected = max(
         (
-            (variant, _identity_signal(variant, expected_author, text, front_text))
+            (variant, _identity_signal(variant, expected_author, text, front_text, ocr_text))
             for variant in title_variants
         ),
         key=lambda item: (
@@ -153,7 +211,7 @@ def _classify_identity_base(
             item[1]["title_found"],
         ),
     )
-    embedded = _identity_signal(embedded_title, embedded_author, text, front_text)
+    embedded = _identity_signal(embedded_title, embedded_author, text, front_text, ocr_text)
 
     # Files carry series tags too ("The Lost Continent (Wings of Fire, Book 11)").
     # The same unambiguous rule applies to the file's own title.

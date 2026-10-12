@@ -12,7 +12,7 @@ from .config import settings
 from .file_safety import read_file_prefix
 from .metadata import ebook_metadata
 from .mobi_text import read_mobi_text
-from . import pdf_probe
+from . import ocr_probe, pdf_probe
 from .tika_client import extract_text as tika_text
 from .verification_constants import FRONT_TEXT_CHARS, MIN_USEFUL_TEXT
 
@@ -27,6 +27,7 @@ class ExtractedEbookIdentity:
     front_text: str
     source: str
     notes: list[str]
+    ocr: dict | None = None
 
 
 def _strip_html_bytes(raw: bytes) -> str:
@@ -202,6 +203,21 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
     except Exception as exc:
         notes.append(f"Native extraction error: {str(exc)[:300]}")
 
+    ocr: dict | None = None
+    if suffix == ".pdf" and len(text.strip()) < MIN_USEFUL_TEXT and settings.verification_ocr:
+        # A scan has no text layer: read the first pages as images so the title page can be checked.
+        found = ocr_probe.ocr_pdf_front(path)
+        ocr = {"attempted": True, "pages": int(found.get("pages") or 0), "chars": len(found.get("text") or ""),
+               "error": str(found.get("error") or "")}
+        if found.get("text"):
+            text = found["text"]
+            front_text = text[:FRONT_TEXT_CHARS]
+            source = "native-pdf+ocr"
+            notes.append(f"OCR of the first {ocr['pages']} page(s) supplied the text because the PDF has no "
+                         "text layer. OCR can misread a name, which can only make a match fail, never invent one.")
+        elif found.get("error"):
+            notes.append(str(found["error"]))
+
     if (
         len(text.strip()) < MIN_USEFUL_TEXT
         and settings.verification_use_tika
@@ -223,4 +239,5 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
         front_text=front_text,
         source=source,
         notes=notes,
+        ocr=ocr,
     )
