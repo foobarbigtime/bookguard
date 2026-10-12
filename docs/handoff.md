@@ -69,6 +69,8 @@ The run completed successfully on 2026-10-12:
 - Isolated container smoke and quarantine copy-failure acceptance passed.
 - One existing FastAPI/Starlette TestClient deprecation warning was reported.
 
+The host-tested revision `4f5e4ef0b9ccb0cd0938e5691f96bc1a578caf47` also
+passed its full [CI run 38313699688](https://github.com/foobarbigtime/bookguard/actions/runs/38313699688).
 Later documentation-only commits record this evidence without changing the
 tested code. Before merging, check the current PR head's CI instead of assuming
 this dated checkpoint is still the latest result. #162 is prepared for Claude's
@@ -108,34 +110,38 @@ Les reported these results from the Unraid console:
   Its injected corrupt private copy was refused; the exact source and
   unrelated control bytes survived. Terminal result:
   `PASS: quarantine-copy-fault`.
+- OCR executable availability passed in the same smoke image, running as
+  UID/GID 99:100 with no network, a read-only root filesystem, all capabilities
+  dropped and no-new-privileges. The tools resolved to `/usr/bin/pdftoppm`,
+  `/usr/bin/tesseract` and `/usr/bin/prlimit`; Tesseract listed `eng` and `osd`.
+  This confirms installed tools/languages; representative library PDF verdicts
+  still need inspection after a reviewed production upgrade.
 - Docker's `/var/lib/docker` is on a 60 GB loop filesystem. After reclaiming
   1.007 GB of unused build cache and running both host tests, it still reported
   4.2 GB available and 94% used. Recheck space before further builds.
 
-Host OCR tool availability checks are still pending. Independent Claude
-review, merges and a guarded production upgrade are also pending. No
+All three planned host checks (isolated smoke, quarantine-copy-fault and OCR
+executable/language availability) passed at the pinned revision. Independent
+Claude review, merges and a guarded production upgrade remain pending. No
 production deployment has been performed in this session.
 
 ## Next steps for Claude
 
-1. Finish the pinned Unraid acceptance by checking that `pdftoppm`,
-   `tesseract` and `prlimit` are present in the smoke image and that Tesseract
-   lists the `eng` language pack. Record actual results here.
-2. Independently review the follow-up and its regression coverage, especially
+1. Independently review the follow-up and its regression coverage, especially
    native/initial/provenance author-only cases, ISBN compatibility, and OCR
    policy/error cache transitions. Check the exact PR head's complete CI and
    confirm the real OCR cases ran without skips.
-3. Combine the follow-up with #161 in the order above; use the combined CI
+2. Combine the follow-up with #161 in the order above; use the combined CI
    result and record the merged main revision here. Preserve unrelated edits
    if Claude's OCR branch has advanced.
-4. Before deployment, check for active scans/verifications and complete the
+3. Before deployment, check for active scans/verifications and complete the
    guarded upgrade and live acceptance in [operations.md](operations.md).
    Verify the exact running image revision and runtime protections.
-5. Run Check library. Inspect the scanned *How to Steal a Dragon's Sword* PDF
+4. Run Check library. Inspect the scanned *How to Steal a Dragon's Sword* PDF
    from #161, a known wrong book by the same author, and affected cached OCR
    cases. Confirm ordinary good books reuse compatible proof and Activity
    links reused receipts to original verification.
-6. Update this handoff with the actual deployment result and remaining work.
+5. Update this handoff with the actual deployment result and remaining work.
    Mixed audiobook folders currently have a read-only recording preview;
    applying a split remains unimplemented. The removed Automatic Mode and
    self-download workflows are outside this follow-up.
