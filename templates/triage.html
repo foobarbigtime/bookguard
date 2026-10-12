@@ -48,9 +48,11 @@
 {{ site_header("review", "triage", version) }}
 
 <main>
+  {% set review_view = 'advanced' %}
+  {% include '_review_workspace.html' %}
   <section class="triage-summary">
     {% for kind in ["REVIEW", "REJECT"] %}
-      <a class="triage-card {% if classification == kind %}active{% endif %}" href="/review/triage?classification={{ kind }}">
+      <a class="triage-card {% if classification == kind %}active{% endif %}" href="/review/table?classification={{ kind }}">
         <span class="label">{{ kind }}</span>
         <strong>{{ summary[kind].open }} open</strong>
         <div class="split">
@@ -104,10 +106,10 @@
   <section class="filter-row">
     <div class="triage-toolbar">
       <strong>{{ classification }}</strong>
-      <a class="button-link" href="/review/triage?classification={{ classification }}&show_resolved={{ 0 if show_resolved else 1 }}{% if reason_code %}&reason_code={{ reason_code }}{% endif %}">
+      <a class="button-link" href="/review/table?classification={{ classification }}&show_resolved={{ 0 if show_resolved else 1 }}{% if reason_code %}&reason_code={{ reason_code }}{% endif %}">
         {{ "Hide resolved" if show_resolved else "Show resolved" }}
       </a>
-      {% if reason_code %}<a class="button-link" href="/review/triage?classification={{ classification }}{% if show_resolved %}&show_resolved=1{% endif %}">Clear reason filter</a>{% endif %}
+      {% if reason_code %}<a class="button-link" href="/review/table?classification={{ classification }}{% if show_resolved %}&show_resolved=1{% endif %}">Clear reason filter</a>{% endif %}
       <button id="verifyOpenButton" class="verify-button" onclick="startVerification()">Verify all open {{ classification }}</button>
       <span id="verificationJobStatus" class="job-status"></span>
       <span class="spacer"></span>
@@ -117,7 +119,7 @@
     <div class="reason-chips">
       {% for code, count in reasons.items() %}
         <a class="reason-chip reason-{{ code|lower }} {% if reason_code == code %}active{% endif %}"
-           href="/review/triage?classification={{ classification }}&reason_code={{ code }}{% if show_resolved %}&show_resolved=1{% endif %}">
+           href="/review/table?classification={{ classification }}&reason_code={{ code }}{% if show_resolved %}&show_resolved=1{% endif %}">
           <span>{{ code|replace('_',' ') }}</span><strong>{{ count }}</strong>
         </a>
       {% endfor %}

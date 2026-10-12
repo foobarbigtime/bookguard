@@ -22,6 +22,8 @@ undo); quarantine for unmatched files comes in a later step.
 
 from __future__ import annotations
 
+from .library_check import serialized_start, start_allowed
+
 from collections import defaultdict
 from datetime import datetime, timezone
 import json
@@ -823,12 +825,19 @@ def check_unmatched(client: BinderyClient | None = None, *, force: bool = False)
     return {"checked": len(items)}
 
 
-def start_check(*, force: bool = False) -> bool:
+@serialized_start
+def start_check(*, force: bool = False, check_id: str | None = None) -> bool:
+    if not start_allowed(check_id):
+        return False
+    return _start_check(force=force)
+
+
+def _start_check(*, force: bool = False) -> bool:
     if not _LOCK.acquire(blocking=False):
         return False
+    _STATUS.update(running=True, error="")
 
     def run() -> None:
-        _STATUS.update(running=True, error="")
         try:
             check_unmatched(force=force)
         except Exception as exc:

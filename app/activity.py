@@ -20,7 +20,7 @@ from pathlib import PurePosixPath
 from typing import Any, Iterable
 
 from .db import associations_inside_path, local_conn
-from .history import operation_history
+from .history import _table_exists, operation_history
 
 WHO = {"you": "You", "bookguard": "BookGuard", "automatic": "Automatic", "system": "System"}
 RESULTS = {
@@ -216,16 +216,43 @@ def _fold_by_day(items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]
     return days
 
 
-def _verification_days(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _verification_day_totals() -> dict[str, Counter]:
+    """Every check per day, counted in SQL so the feed's row limit cannot shorten a day."""
+    totals: dict[str, Counter] = defaultdict(Counter)
+    try:
+        with local_conn() as conn:
+            if not _table_exists(conn, "content_verifications"):
+                return {}
+            rows = conn.execute(
+                """
+                SELECT substr(COALESCE(NULLIF(updated_at, ''), created_at), 1, 10) AS day,
+                       verdict, COUNT(*) AS n
+                FROM content_verifications
+                WHERE CASE WHEN json_valid(evidence_json)
+                           THEN json_type(evidence_json, '$.cacheReuse') END IS NULL
+                GROUP BY day, verdict
+                """
+            ).fetchall()
+    except Exception:  # noqa: BLE001 - the folded sentence falls back to the rows it has
+        return {}
+    for row in rows:
+        totals[str(row["day"])][_VERDICT_WORDS.get(str(row["verdict"]).upper(), "undecided")] += int(row["n"])
+    return totals
+
+
+def _verification_days(items: list[dict[str, Any]], totals: dict[str, Counter] | None = None) -> list[dict[str, Any]]:
     events = []
     for day, group in _fold_by_day(items).items():
         counts = Counter(_VERDICT_WORDS.get(str(i["status"]).upper(), "undecided") for i in group)
+        full = (totals or {}).get(day)
+        if full and sum(full.values()) >= sum(counts.values()):
+            counts = full
         order = list(_VERDICT_ORDER)
         found = ", ".join(f"{counts[word]} {word}" for word in sorted(counts, key=order.index))
         events.append(_event(
             key=f"verification-day-{day}", kind="verification", what="checks", who="bookguard", result="done",
             timestamp=max(str(i["timestamp"]) for i in group),
-            sentence=f"Checked {len(group)} library {'file' if len(group) == 1 else 'files'}: {found}",
+            sentence=f"Checked {sum(counts.values())} library {'file' if sum(counts.values()) == 1 else 'files'}: {found}",
             items=[{"text": f"{i['title']} · {_VERDICT_WORDS.get(str(i['status']).upper(), 'undecided')}",
                     "href": i["detailHref"]} for i in group[:100]],
         ))
@@ -420,7 +447,7 @@ def activity_events(limit: int = 1000) -> list[dict[str, Any]]:
     observations = [item for item in history if item["kind"] == "observe"]
     events = [event for item in history if item["kind"] not in {"verification", "observe"}
               if (event := _from_history(item))]
-    events += _verification_days(verifications) + _observe_days(observations)
+    events += _verification_days(verifications, _verification_day_totals()) + _observe_days(observations)
     with local_conn() as conn:
         for source in (_scan_events, _move_events, _execution_events, _settings_events, _start_events,
                        _import_events):

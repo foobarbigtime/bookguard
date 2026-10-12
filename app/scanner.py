@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .library_check import serialized_start, start_allowed
+
 import os
 from pathlib import Path
 import threading
@@ -332,7 +334,16 @@ def run_scan(scan_id: str, rows: list[dict]) -> None:
             _current_thread = None
 
 
-def start_scan() -> str | None:
+@serialized_start
+def start_scan(*, check_id: str | None = None) -> str | None:
+    from .verifier import verification_job_status
+
+    if not start_allowed(check_id) or verification_job_status()["status"] == "running":
+        return None
+    return _start_scan()
+
+
+def _start_scan() -> str | None:
     global _current_thread
     with _scan_lock:
         if _current_thread and _current_thread.is_alive():

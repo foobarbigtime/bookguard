@@ -10,6 +10,7 @@ from ..diagnostics import diagnostics_snapshot
 from ..history import operation_detail, operation_history
 from ..health import health_checks
 from ..home import home_summary
+from ..library_check import library_check_status, start_library_check
 from ..scheduler import scheduled_tasks
 from ..import_watch import watcher as import_watcher
 from ..db import (
@@ -46,7 +47,7 @@ def api_scan(payload: ConfirmationRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     if not scan_id:
-        raise HTTPException(status_code=409, detail="A scan is already running.")
+        raise HTTPException(status_code=409, detail="A library check, scan or verification is already running.")
     return {
         "scan_id": scan_id,
         "message": (
@@ -54,6 +55,20 @@ def api_scan(payload: ConfirmationRequest):
             "BookGuard reports live book and audio-file progress while it works."
         ),
     }
+
+
+@router.post("/api/library-check")
+def api_library_check(payload: ConfirmationRequest):
+    require_confirmation(payload, "CHECK_LIBRARY")
+    check_id = start_library_check()
+    if not check_id:
+        raise HTTPException(status_code=409, detail="A library check, scan or verification is already running.")
+    return {"check_id": check_id}
+
+
+@router.get("/api/library-check")
+def api_library_check_status():
+    return library_check_status()
 
 
 @router.post("/api/scan/cancel-safe")

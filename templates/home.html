@@ -25,10 +25,11 @@
       </div>
     </div>
     <div class="home-hero-actions">
-      <button id="homeScanButton" type="button">Scan library</button>
+      <button type="button" data-library-check>Check library</button>
       <a class="button-link primary-link" href="/review">Review what needs attention</a>
     </div>
   </section>
+  <p class="check-status" data-library-check-status role="status" aria-live="polite"></p>
 
   {% if health.problems %}
   <ul class="health-problems">
@@ -156,7 +157,7 @@
             <small>Last library scan finished <time data-local datetime="{{ now.lastScan.finished_at }}">{{ now.lastScan.finished_at[:16]|replace('T', ' ') }}</time>.</small>
           {% endif %}
         </div>
-        <small class="muted">Scheduled tasks are not set up yet; scans run when you start them.</small>
+        <small class="muted">Schedules and running tasks are shown in <a href="/system">System</a>.</small>
       </section>
 
       <section class="card home-card" aria-labelledby="automationHeading">
@@ -194,5 +195,6 @@
 
 <script src="{{ static_url('local-time.js') }}" defer></script>
 <script src="{{ static_url('home.js') }}" defer></script>
+<script src="{{ static_url('library-check.js') }}" defer></script>
 </body>
 </html>

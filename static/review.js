@@ -21,7 +21,9 @@
     verified: () => "This file is the right book.",
     undecided: (item) => item.verified
       ? "BookGuard could not prove what this file is."
-      : "The library scan flagged this file, and it has not been verified yet.",
+      : item.scannerOutage
+        ? "The virus scan did not give a result, so verification could not finish. Check the scanner on System, then verify again."
+        : "The library scan flagged this file, and it has not been verified yet.",
   };
 
   // ---- small DOM helpers (server text is only ever set as textContent)
@@ -155,13 +157,53 @@
     return el("button", { type: "button", class: "primary", text: "Move to correct book", "data-move-result": String(item.id) });
   }
 
+  // Read-only: lists the separate works inside a mixed audiobook folder.
+  function recordingsAction(item) {
+    const out = el("div", { class: "recording-groups", hidden: true });
+    const trigger = button("Show recordings", (node) => run(node, async () => {
+      node.textContent = "Reading files…";
+      try {
+        const preview = await request(`/api/triage/${item.id}/recording-groups`);
+        const label = (group) => group.assigned ? "assigned to this book"
+          : group.status === "catalogue" ? `matches "${group.book.title}"`
+          : group.status === "ambiguous" ? "could be more than one book"
+          : "not in your Bindery library";
+        out.replaceChildren(...[
+          el("p", { text: `${preview.workCount} work${preview.workCount === 1 ? "" : "s"} in ${preview.fileCount} files.` }),
+          el("ul", {}, ...preview.groups.map((group) => el("li", {
+            text: `${group.title || "Untitled"}${group.author ? ` (${group.author})` : ""}: ${group.fileCount} file${group.fileCount === 1 ? "" : "s"}, ${label(group)}`,
+          }))),
+          preview.unidentified.length ? el("p", { class: "muted", text: `${preview.unidentified.length} file(s) name no work.` }) : null,
+          preview.unreadable.length ? el("p", { class: "muted", text: `${preview.unreadable.length} file(s) could not be read.` }) : null,
+          el("p", { class: "muted", text: preview.note })].filter(Boolean));
+        out.hidden = false;
+      } finally {
+        node.textContent = "Show recordings";
+      }
+    }));
+    const wrap = el("div", {});
+    wrap.append(trigger, out);
+    return wrap;
+  }
+
   // One main action that fits the problem; everything else waits under "More".
   function actionsFor(item) {
+    if (item.resolved) {
+      return { main: item.resolution === "KEEP" ? [button("Reopen decision", async (node) => {
+        if (!window.confirm("Reopen this decision? Files and Bindery stay as they are.")) return;
+        node.disabled = true;
+        try {
+          await post(`/api/triage/${item.id}/reopen`, "REOPEN");
+          window.location.reload();
+        } catch (error) { status(error.message); node.disabled = false; }
+      })] : [], more: [] };
+    }
     const guarded = data.allowActions;
     const quarantine = guarded ? guardedAction(item, "quarantine") : null;
     const main = [];
     const more = [];
     if (item.group === "move") main.push(moveAction(item), quarantine);
+    else if (item.mixedAudio) { main.push(recordingsAction(item)); more.push(quarantine); }
     else if (item.group === "wrong") main.push(guarded ? replaceAction(item) : null, quarantine);
     else if (item.group === "language") main.push(guarded ? replaceAction(item) : null, quarantine);
     else if (item.group === "duplicate" || item.group === "unsafe") main.push(quarantine);
@@ -186,7 +228,7 @@
     for (const [label, value] of rows) dl.append(el("dt", { text: label }), el("dd", { text: value || "—" }));
     const links = el("div", { class: "detail-actions" });
     if (item.verificationId) links.append(el("a", { class: "button-link", href: `/activity/verification/${item.verificationId}`, text: "Verification record" }));
-    links.append(el("a", { class: "button-link", href: `/review/triage?classification=${encodeURIComponent(item.classification)}`, text: "Open in Triage" }));
+    links.append(el("a", { class: "button-link", href: `/review/scan-results?classification=${encodeURIComponent(item.classification)}`, text: "Raw scan results" }));
     return el("details", { class: "detail-section" }, el("summary", { text: "Technical details" }), dl, links);
   }
 
@@ -210,7 +252,7 @@
         el("span", { class: "detail-group", text: item.groupLabel }),
         el("h2", { text: item.title }),
         el("p", { class: "muted", text: [item.author, item.format].filter(Boolean).join(" · ") })),
-      section("What's wrong", el("p", { text: (WHAT_IS_WRONG[item.group] || WHAT_IS_WRONG.undecided)(item) })),
+      section(item.resolved ? "Recorded decision" : "What's wrong", el("p", { text: item.resolved ? `Reviewed: ${item.resolution.replaceAll("_", " ")}. The evidence below is retained for reference.` : item.mixedAudio ? "This folder contains recordings of multiple works. Its attachment does not describe everything in the folder." : (WHAT_IS_WRONG[item.group] || WHAT_IS_WRONG.undecided)(item) })),
       section("How BookGuard knows", evidence),
       section("Suggestion",
         language.otherLanguage && item.group !== "language" ? el("p", { class: "lang-warning", text: `This book is in ${language.label}, which is not one of your library languages.` }) : null,
@@ -239,6 +281,32 @@
       history.replaceState(null, "", `${location.pathname}${location.search}#book-${item.id}`);
     }
   });
+
+  const selectPage = document.getElementById("reviewSelectPage");
+  const keepSelected = document.getElementById("reviewKeepSelected");
+  const selections = () => Array.from(document.querySelectorAll(".review-select:checked"));
+  function selectionChanged() {
+    keepSelected.disabled = !selections().length;
+    const all = Array.from(document.querySelectorAll(".review-select"));
+    selectPage.checked = all.length > 0 && selections().length === all.length;
+    selectPage.indeterminate = selections().length > 0 && !selectPage.checked;
+  }
+  if (selectPage && keepSelected) {
+    selectPage.addEventListener("change", () => {
+      document.querySelectorAll(".review-select").forEach(input => { input.checked = selectPage.checked; });
+      selectionChanged();
+    });
+    document.querySelectorAll(".review-select").forEach(input => input.addEventListener("change", selectionChanged));
+    keepSelected.addEventListener("click", async () => {
+      const ids = selections().map(input => Number(input.value));
+      if (!ids.length || !window.confirm(`Mark ${ids.length} books reviewed? This records your decision in BookGuard; files and Bindery stay as they are.`)) return;
+      keepSelected.disabled = true;
+      try {
+        await request("/api/triage/keep-selected", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "KEEP", ids }) });
+        window.location.reload();
+      } catch (error) { window.alert(error.message); selectionChanged(); }
+    });
+  }
 
   const fromHash = Number((location.hash.match(/^#book-(\d+)$/) || [])[1]);
   // Activity links and old bookmarks may point to a book on another page.

@@ -24,6 +24,7 @@ from .health import health_checks
 from .scanner import scan_is_running
 from .import_watch import watcher as import_watcher
 from .library_review import GROUP_LABELS, group_counts, open_review_items
+from .library_check import library_check_status
 from .services.dashboard import scan_timing
 from .verifier import verification_job_status
 
@@ -152,12 +153,13 @@ def _missing_group() -> list[dict[str, Any]]:
     }]
 
 
-def _undecided_group(counts: dict[str, int], unverified: int) -> list[dict[str, Any]]:
+def _undecided_group(counts: dict[str, int], unverified: int, outages: int = 0) -> list[dict[str, Any]]:
     undecided = counts.get("undecided", 0)
     if not undecided:
         return []
     why = (
         f"{unverified} {_plural(unverified, 'has', 'have')} not been verified yet."
+        + (f" {outages} could not finish because the virus scan did not give a result." if outages else "")
         if unverified
         else "Verification could not prove what these files are."
     )
@@ -220,6 +222,15 @@ def _now(scan: dict | None) -> dict[str, Any]:
             "etaSeconds": None,
             "current": str(job.get("current") or ""),
         }
+    workflow = library_check_status()
+    unmatched = workflow["unmatched"]
+    if workflow["status"] == "running" or unmatched["running"]:
+        total = int(unmatched.get("total") or 0)
+        processed = int(unmatched.get("checked") or 0)
+        return {"active": True, "label": "Checking unassigned files" if unmatched["running"] else "Starting the next check",
+                "processed": processed, "total": total,
+                "percent": round(processed / total * 100.0, 1) if total else 0.0,
+                "etaSeconds": None, "current": ""}
     return {"active": False, "label": "Nothing is running", "lastScan": scan}
 
 
@@ -361,13 +372,14 @@ def home_summary() -> dict[str, Any]:
     review_available = not failures
     counts = group_counts(items)
     unverified = sum(1 for item in items if not item["verified"])
+    outages = sum(1 for item in items if item.get("scannerOutage"))
     automation, gates, automation_error = _automation()
     malware = _malware_report()
     attention = (
         _verification_groups(items)
         + _workflow_groups(_safely(attention_snapshot, {"items": []}, failures, "the attention queue"))
         + _missing_group()
-        + _undecided_group(counts, unverified)
+        + _undecided_group(counts, unverified, outages)
     )
     recent = _safely(_recent, {"days": RECENT_DAYS, "totals": {"imports": 0, "quarantined": 0, "duplicates": 0}, "events": []},
                      failures, "the activity history")

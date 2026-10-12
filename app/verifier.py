@@ -16,6 +16,7 @@ from .db import (
     create_metadata_repair,
     finish_metadata_repair,
     latest_results,
+    latest_review_results,
     latest_scan,
     local_conn,
 )
@@ -30,6 +31,7 @@ from .file_snapshot import (
 )
 from .malware_scan import probe_clamd
 from .matcher import normalize
+from .library_check import serialized_start, start_allowed
 from .media_discovery import resolve_ebook_target
 from .media_evidence import detect_file_media_kind, inspect_media_path, media_set_fingerprint
 from .metadata import ebook_metadata
@@ -40,7 +42,7 @@ from .repair import (
     verify_repair_changes,
 )
 from .series_titles import bindery_series_context
-from .triage import result_signature, triage_state
+from .triage import result_signature, triage_state, triage_states
 from .tika_client import test_connection
 from .verification_status import malware_scan_inconclusive, verification_is_inconclusive
 from .verification_engine import classify_identity
@@ -812,21 +814,36 @@ def verification_job_status() -> dict:
         return json.loads(json.dumps(_job_state))
 
 
-def start_verification_job(classification: str = "REVIEW", reason_code: str | None = None) -> str | None:
+@serialized_start
+def start_verification_job(classification: str = "REVIEW", reason_code: str | None = None,
+                           *, check_id: str | None = None, expected_scan_id: str | None = None) -> str | None:
+    from .scanner import scan_is_running
+
+    if not start_allowed(check_id) or scan_is_running():
+        return None
     classification = str(classification or "REVIEW").upper()
-    if classification not in {"REVIEW", "REJECT"}:
-        raise ValueError("Verification jobs currently accept REVIEW or REJECT.")
+    if classification not in {"REVIEW", "REJECT", "ALL"}:
+        raise ValueError("Verification jobs accept REVIEW, REJECT or ALL.")
 
     scan = latest_scan()
     if not scan or scan.get("status") != "complete":
         raise RuntimeError("A completed latest BookGuard scan is required before content verification.")
+    if expected_scan_id and scan["id"] != expected_scan_id:
+        raise RuntimeError("The latest scan changed before verification started.")
 
     with _job_lock:
         if _job_state.get("status") == "running":
             return None
 
-    rows = latest_results(classification=classification, reason_code=reason_code, limit=10000)
-    rows = [row for row in rows if not triage_state(row).get("resolved")]
+    if classification == "ALL":
+        rows = latest_review_results()
+        if reason_code:
+            rows = [row for row in rows if row.get("reason_code") == reason_code]
+        states = triage_states(rows)
+        rows = [row for row in rows if not states[int(row["id"])]["resolved"]]
+    else:
+        rows = latest_results(classification=classification, reason_code=reason_code, limit=10000)
+        rows = [row for row in rows if not triage_state(row).get("resolved")]
     job_id = uuid.uuid4().hex
 
     with _job_lock:

@@ -164,3 +164,21 @@ def test_activity_page_and_api_render_the_timeline(journal):
         assert "is waiting for Bindery" in filtered and "You quarantined" not in filtered
         data = client.get("/api/activity?who=you").json()
         assert data["totals"]["events"] == len(data["events"]) > 0
+
+
+def test_folded_check_counts_every_file_even_past_the_feed_limit(journal):
+    # Home asks for a short feed; the day's total must still be the real number.
+    with local_conn() as conn:
+        for index in range(3, 8):
+            conn.execute(
+                """INSERT INTO content_verifications(signature, result_id, scan_id, file_id, book_id, format,
+                       author, title, target_path, file_fingerprint, verdict, confidence, source, evidence_json,
+                       created_at, updated_at)
+                   VALUES (?, 1, 'scan-1', 1, 1, 'ebook', 'A', ?, '/x', 'f', 'INSUFFICIENT_EVIDENCE', 50, 'native',
+                       '{}', '2026-10-02T11:00:00+00:00', '2026-10-02T11:00:00+00:00')""",
+                (f"sig-extra-{index}", f"Extra {index}"),
+            )
+        conn.commit()
+    checks = by_kind(activity_events(3), "verification")
+    assert len(checks) == 1
+    assert checks[0]["sentence"].startswith("Checked 7 library files:")
