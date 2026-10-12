@@ -121,3 +121,28 @@ def test_review_script_never_hands_null_to_replace_children():
     from pathlib import Path
     script = Path("static/review.js").read_text()
     assert ".filter(Boolean)" in script
+
+
+def test_same_title_by_different_authors_is_two_works():
+    # Codex review on #155: a title-only key hid this mix behind one "assigned" group.
+    probes = [
+        _probe("/a/1.mp3", "The Example Book", author="Example Author"),
+        _probe("/a/2.mp3", "The Example Book", author="Example Author", track="2"),
+        _probe("/a/3.mp3", "The Example Book", author="Someone Else", track="3"),
+    ]
+    preview = recording_groups.group_probes(_item(), probes, _library())
+    assert preview["workCount"] == 2 and preview["splitNeeded"] is True
+    assert [(g["author"], g["fileCount"], g["assigned"]) for g in preview["groups"]] == [
+        ("Example Author", 2, True), ("Someone Else", 1, False)]
+
+
+def test_author_typos_and_coauthor_lists_do_not_split_a_work():
+    probes = [
+        _probe("/a/1.mp3", "The Example Book", author="Example Author"),
+        _probe("/a/2.mp3", "The Example Book", author="Example Autor", track="2"),
+        _probe("/a/3.mp3", "The Example Book", author="Example Author, Other Person", track="3"),
+        _probe("/a/4.mp3", "The Example Book", author="", track="4"),
+    ]
+    preview = recording_groups.group_probes(_item(), probes, _library())
+    assert preview["workCount"] == 1 and preview["groups"][0]["fileCount"] == 4
+    assert preview["splitNeeded"] is False
