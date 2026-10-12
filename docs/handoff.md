@@ -57,8 +57,22 @@ book by the same author stayed undecided, and placeholder metadata produced a
 97-confidence metadata-error verdict. A real blank scan returned `no_text`.
 
 Local pytest and Ruff dependencies are unavailable in this execution
-environment. Do not report the full local suite as passed. GitHub CI results
-for this follow-up will be recorded here once available.
+environment. Do not report the full local suite as passed.
+
+Fully validated code checkpoint:
+`a021f6a5589240346758e79011e0ba9b43cf37b7`, from
+[CI run 38313275982](https://github.com/foobarbigtime/bookguard/actions/runs/38313275982).
+The run completed successfully on 2026-10-12:
+
+- 1,004 tests passed, zero skipped; all six real scanned-PDF/OCR cases ran.
+- Ruff, shell syntax checks, and both acceptance-harness self-tests passed.
+- Isolated container smoke and quarantine copy-failure acceptance passed.
+- One existing FastAPI/Starlette TestClient deprecation warning was reported.
+
+Later documentation-only commits record this evidence without changing the
+tested code. Before merging, check the current PR head's CI instead of assuming
+this dated checkpoint is still the latest result. #162 is prepared for Claude's
+independent review; it and #161 remain unmerged at this checkpoint.
 
 Prior baseline evidence, not validation of this follow-up:
 
