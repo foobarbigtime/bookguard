@@ -365,6 +365,11 @@ def _safely(load, fallback, failures: list[str], what: str):
         return fallback
 
 
+def home_now() -> dict[str, Any]:
+    """Just the "Right now" card, cheap enough to poll every few seconds."""
+    return _now(latest_scan())
+
+
 def home_summary() -> dict[str, Any]:
     scan = latest_scan()
     failures: list[str] = []

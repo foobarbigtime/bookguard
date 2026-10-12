@@ -73,6 +73,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/catalogue-moves/{move_id}/reconcile"),
     ("GET", "/api/catalogue-moves"),
     ("GET", "/api/review/bulk-preview"),
+    ("GET", "/api/home/now"),
     ("GET", "/api/results/{result_id}/missing-detach-preview"),
     ("GET", "/api/missing/preview"),
     ("POST", "/api/results/{result_id}/detach-missing"),

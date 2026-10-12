@@ -9,7 +9,7 @@ from ..config import Settings, settings
 from ..diagnostics import diagnostics_snapshot
 from ..history import operation_detail, operation_history
 from ..health import health_checks
-from ..home import home_summary
+from ..home import home_now, home_summary
 from ..library_check import library_check_status, start_library_check
 from ..scheduler import scheduled_tasks
 from ..import_watch import watcher as import_watcher
@@ -113,6 +113,11 @@ def api_status():
         "repair_mode": settings.metadata_repair_mode,
     }
 
+
+
+@router.get("/api/home/now")
+def api_home_now():
+    return home_now()
 
 
 @router.get("/api/home")
