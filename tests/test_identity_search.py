@@ -174,9 +174,31 @@ def test_unnumbered_series_book_verifies_with_its_isbn():
         "content": {"expected_signal": {"title_found": True, "author_found": True},
                     "embedded_signal": {"title_found": True}},
     }
-    assert second_pass({"book_id": 1, "series": []}, ev) is None          # no ISBN: stays undecided
+    ev["content"]["expected_signal"]["title_found"] = False
+    assert second_pass({"book_id": 1, "series": []}, ev) is None          # label not in the text, no ISBN
     ev["isbn"] = {"expectedMatch": True}
     assert second_pass({"book_id": 1, "series": []}, ev) == ("VERIFIED_CORRECT", 95)
+
+
+def test_label_on_bindery_title_is_accepted_when_the_book_prints_the_whole_title():
+    ev = {
+        "expected": {"title": "Summer Before (the Baby-Sitters Club)", "author": "Ann M. Martin"},
+        "embedded": {"title": "The Summer Before", "author": "Ann M. Martin", "identifiers": []},
+        "content": {"expected_signal": {"title_found": True, "author_found": True},
+                    "embedded_signal": {"title_found": True}},
+        "isbn": {"isbns": ["9781338094589"], "expectedMatch": False, "otherOwners": []},
+    }
+    assert second_pass({"book_id": 1, "series": []}, ev) == ("VERIFIED_CORRECT", 88)
+
+
+def test_label_on_the_files_side_still_needs_the_isbn():
+    ev = {
+        "expected": {"title": "The Feros", "author": "Wesley King"},
+        "embedded": {"title": "The Feros (Vindico)", "author": "King, Wesley", "identifiers": []},
+        "content": {"expected_signal": {"title_found": True, "author_found": True},
+                    "embedded_signal": {"title_found": True}},
+    }
+    assert second_pass({"book_id": 1, "series": []}, ev) is None
 
 
 def test_books_with_matching_author_isbn_and_title_in_text_now_verify():

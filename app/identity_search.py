@@ -91,7 +91,13 @@ def _without_generic_suffix(value: str) -> str:
     return _GENERIC_SUFFIX.sub("", str(value or ""))
 
 
-def soft_title_match(expected: str, observed: str, series_names=(), allow_unnumbered: bool = False) -> bool:
+def soft_title_match(
+    expected: str,
+    observed: str,
+    series_names=(),
+    allow_unnumbered: bool = False,
+    allow_unnumbered_expected: bool = False,
+) -> bool:
     """Same title, ignoring only a series label (even one Bindery does not list), a leading
     article or a generic "A Novel".
 
@@ -109,7 +115,8 @@ def soft_title_match(expected: str, observed: str, series_names=(), allow_unnumb
             if _title_equivalent(_without_generic_suffix(e), _without_generic_suffix(o)):
                 return True
             (base_e, num_e), (base_o, num_o) = (
-                series_free_title(e, allow_unnumbered), series_free_title(o, allow_unnumbered))
+                series_free_title(e, allow_unnumbered or allow_unnumbered_expected),
+                series_free_title(o, allow_unnumbered))
             if (base_e, base_o) != (e, o) and not (num_e and num_o and num_e != num_o):
                 if _title_equivalent(_without_generic_suffix(base_e), _without_generic_suffix(base_o)):
                     return True
@@ -199,7 +206,14 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
 
     if file_title and file_author:
         isbn_is_assigned_book = bool((evidence.get("isbn") or {}).get("expectedMatch"))
-        title_ok = soft_title_match(title, file_title, series, allow_unnumbered=isbn_is_assigned_book)
+        # An unnumbered label on Bindery's title is accepted when the file's ISBN is one of the
+        # book's editions, or when the book's own text prints Bindery's whole title, label included.
+        # A label on the file's side needs the ISBN: "The Feros (Vindico)" proves nothing alone.
+        title_ok = soft_title_match(
+            title, file_title, series,
+            allow_unnumbered=isbn_is_assigned_book,
+            allow_unnumbered_expected=bool(expected_signal.get("title_found")),
+        )
         author_ok = same_author(author, file_author)
         in_text = bool(expected_signal.get("title_found") or expected_signal.get("author_found"))
         tried.append({"check": "tolerantIdentity", "titleMatches": title_ok,
