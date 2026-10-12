@@ -73,20 +73,21 @@ def _child_env(home: str) -> dict[str, str]:
 
 def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
     """OCR text of the first pages: {"text", "pages"} on success, {"error"} or {"disabled"} otherwise."""
-    if not settings.verification_ocr:
+    policy = ocr_policy()
+    if not policy["enabled"]:
         return {"disabled": True}
     pdftoppm, tesseract = shutil.which("pdftoppm"), shutil.which("tesseract")
     if not pdftoppm or not tesseract:
         return {"error": "OCR is not available in this build (Poppler or Tesseract is not installed).",
-                "error_code": "dependency_unavailable"}
+                "error_code": "dependency_unavailable", "policy": policy}
     target = Path(path)
     try:
         _preflight(target)
         source = str(target.resolve(strict=True))
     except (OSError, ValueError) as exc:
-        return {"error": f"OCR skipped: {str(exc)[:200]}", "error_code": "preflight_error"}
+        return {"error": f"OCR skipped: {str(exc)[:200]}", "error_code": "preflight_error", "policy": policy}
 
-    pages = int(settings.verification_ocr_pages)
+    pages = policy["pages"]
     with tempfile.TemporaryDirectory(prefix="bookguard-ocr-") as work:
         try:
             rendered = run_bounded_process(
@@ -96,13 +97,15 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
                 env=_child_env(work),
             )
         except subprocess.TimeoutExpired:
-            return {"error": "OCR skipped: rendering the first pages timed out.", "error_code": "render_timeout"}
+            return {"error": "OCR skipped: rendering the first pages timed out.",
+                    "error_code": "render_timeout", "policy": policy}
         except (ProcessOutputLimitExceeded, OSError):
-            return {"error": "OCR skipped: rendering the first pages failed.", "error_code": "render_error"}
+            return {"error": "OCR skipped: rendering the first pages failed.",
+                    "error_code": "render_error", "policy": policy}
         images = sorted(Path(work).glob("pg-*.png"))[:pages]
         if rendered.returncode != 0 or not images:
             return {"error": "OCR skipped: the first pages could not be rendered (damaged or protected PDF).",
-                    "error_code": "render_error"}
+                    "error_code": "render_error", "policy": policy}
 
         chunks: list[str] = []
         read = 0
@@ -110,7 +113,7 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
         for image in images:
             try:
                 result = run_bounded_process(
-                    _limited([tesseract, str(image), "stdout", "-l", _languages(), "--psm", "3"],
+                    _limited([tesseract, str(image), "stdout", "-l", policy["languages"], "--psm", "3"],
                              OCR_CPU_SECONDS, OCR_ADDRESS_SPACE_BYTES),
                     timeout=PAGE_OCR_TIMEOUT_SECONDS, stdout_limit=MAX_PAGE_TEXT_BYTES, stderr_limit=64 * 1024,
                     env=_child_env(work),
@@ -128,8 +131,8 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
     text = "\n".join(c for c in chunks if c)[:MAX_TEXT_CHARS]
     if not text.strip():
         return {"error": f"OCR read {read} page image(s) but found no text.", "pages": read,
-                "error_code": "ocr_error" if failures else "no_text"}
-    found = {"text": text, "pages": read}
+                "error_code": "ocr_error" if failures else "no_text", "policy": policy}
+    found = {"text": text, "pages": read, "policy": policy}
     if failures:
         found.update(error=f"OCR could not read {failures} rendered page image(s).", error_code="ocr_error")
     return found

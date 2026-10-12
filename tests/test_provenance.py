@@ -35,7 +35,7 @@ def test_core_title_removes_labels_but_never_a_subtitle():
 
 EXPECTED = {"title": "Robot Riot Andy Griffiths", "author": "Andy Griffiths"}
 EMBEDDED = {"title": "Robot Riot!", "author": "Andy Griffiths"}
-SIGNALS = {"expectedAuthorInText": True}
+SIGNALS = {"expectedAuthorInText": True, "fileTitleInText": True}
 RELEASE = parse_release_name("Andy Griffiths - [Schooling Around 04] - Robot Riot! (retail) (epub)")
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -123,6 +124,32 @@ def test_children_are_wrapped_in_prlimit_and_the_language_is_validated(monkeypat
     for hostile in ("eng; rm -rf /", "../../etc/passwd", "-c tessedit_write_images=1", ""):
         monkeypatch.setattr(settings, "verification_ocr_languages", hostile)
         assert ocr_probe._languages() == "eng"
+
+
+def test_ocr_uses_one_captured_policy_even_when_settings_change_during_render(monkeypatch, tmp_path):
+    from app.subprocess_capture import BoundedProcessResult
+
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(settings, "verification_ocr_pages", 3)
+    monkeypatch.setattr(settings, "verification_ocr_languages", "eng")
+    monkeypatch.setattr(ocr_probe.shutil, "which", lambda name: "/test/" + name)
+    languages = []
+
+    def run(command, **kwargs):
+        if any(Path(part).name == "pdftoppm" for part in command):
+            Path(command[-1] + "-1.png").write_bytes(b"image")
+            monkeypatch.setattr(settings, "verification_ocr_pages", 6)
+            monkeypatch.setattr(settings, "verification_ocr_languages", "fra")
+            return BoundedProcessResult(0, b"", b"")
+        languages.append(command[command.index("-l") + 1])
+        return BoundedProcessResult(0, b"THE LAST COLONY\nJOHN SCALZI", b"")
+
+    monkeypatch.setattr(ocr_probe, "run_bounded_process", run)
+    found = ocr_probe.ocr_pdf_front(pdf)
+    assert found["policy"]["pages"] == 3 and found["policy"]["languages"] == "eng"
+    assert languages == ["eng"]
 
 
 def test_extraction_uses_ocr_only_for_a_pdf_with_no_text_layer(monkeypatch, tmp_path):

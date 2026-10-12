@@ -668,7 +668,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
             ocr = getattr(extracted, "ocr", None)
             if ocr:
                 evidence["ocr"] = ocr
-                evidence["ocrPolicy"] = ocr_policy()
+                evidence["ocrPolicy"] = ocr.get("policy") or ocr_policy()
             identity_done = time.monotonic()
             evidence["timings"] = {
                 "snapshotMs": round((snapshot_done - started) * 1000),

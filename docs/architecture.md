@@ -107,8 +107,10 @@ are rechecked. `SECOND_PASS_VERSION=4` rechecks verdicts reached by older
 second-pass rules; `VERIFIER_VERSION` remains 28, preserving unaffected keys.
 
 Only actual PDF OCR attempts carry `evidence.ocrPolicy`, including the OCR
-policy version, enabled state, pages, and effective languages. This is compared
-during cache reuse rather than added to every verification signature. Changed
+policy version, enabled state, pages, and effective languages. Policy is captured
+before rendering and the same language is used for every page. Cache reuse
+compares that recorded policy with current settings rather than adding OCR
+settings to every verification signature. Changed
 OCR policy and attempts without a recorded policy recheck affected PDFs;
 tool/render/read failures are retried on the next check. A completed attempt
 with `errorCode=no_text` is reusable under the same policy. Native text-layer

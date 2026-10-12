@@ -207,7 +207,8 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
         # A scan has no text layer: read the first pages as images so the title page can be checked.
         found = ocr_probe.ocr_pdf_front(path)
         ocr = {"attempted": True, "pages": int(found.get("pages") or 0), "chars": len(found.get("text") or ""),
-               "error": str(found.get("error") or ""), "errorCode": str(found.get("error_code") or "")}
+               "error": str(found.get("error") or ""), "errorCode": str(found.get("error_code") or ""),
+               "policy": found.get("policy") or ocr_probe.ocr_policy()}
         if found.get("text"):
             text = found["text"]
             front_text = text[:FRONT_TEXT_CHARS]

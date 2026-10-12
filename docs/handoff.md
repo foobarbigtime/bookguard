@@ -29,7 +29,9 @@ continuing the project. Check GitHub for current heads before resuming.
 2. Old author-only correct verdicts are rechecked. Second-pass version is 4;
    older second-pass verdicts are re-examined. The base verifier version stays
    28 so unrelated cache keys remain compatible.
-3. Actual OCR attempts record their effective policy. Page/language changes
+3. Actual OCR attempts capture their effective policy before rendering and
+   record the settings actually used, even if Settings changes during the run.
+   Page/language changes
    refresh affected PDFs; disabling OCR refreshes OCR-derived verdicts.
    Tool/render/read failures are retried on the next verification. Completed
    no-text attempts stay cached until bytes or policy change.

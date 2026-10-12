@@ -92,7 +92,7 @@ def _ocr_pdf(env, monkeypatch, *, error="", error_code=""):
             {"title": "Bel Canto", "author": "Ann Patchett"}, text, [], [], text,
             "native-pdf+ocr" if text else "native-pdf",
             {"attempted": True, "pages": 1, "chars": len(text), "error": error,
-             "errorCode": error_code} if attempted else None,
+             "errorCode": error_code, "policy": verifier.ocr_policy()} if attempted else None,
         )
 
     monkeypatch.setattr(verifier, "extract_ebook_identity", extract)
@@ -106,6 +106,22 @@ def test_unchanged_successful_ocr_reuses_its_recorded_policy(env, snapshot_calls
     assert first["evidence"]["ocrPolicy"] == verifier.ocr_policy()
     assert again["cached"] is True
     assert len(snapshot_calls) == 1
+
+
+def test_ocr_policy_is_the_one_used_when_settings_change_during_extraction(env, snapshot_calls, monkeypatch):
+    result = _ocr_pdf(env, monkeypatch)
+    original = verifier.extract_ebook_identity
+
+    def change_settings(path):
+        extracted = original(path)
+        monkeypatch.setattr(settings, "verification_ocr_pages", 6)
+        return extracted
+
+    monkeypatch.setattr(verifier, "extract_ebook_identity", change_settings)
+    first = verifier.verify_result(result)
+    assert first["evidence"]["ocrPolicy"]["pages"] == 3
+    assert verifier.verify_result(result)["cached"] is False
+    assert len(snapshot_calls) == 2
 
 
 @pytest.mark.parametrize("attribute, value", [
