@@ -8,7 +8,8 @@ anything and never calls Bindery: applying a split is a separate, later step.
 """
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
+import re
 from typing import Any
 
 from .audiobook_verification import cached_or_probe_audio_file
@@ -23,8 +24,22 @@ from .media_discovery import discover_audio_files
 MAX_FILES = 2000
 
 
+# Release-set labels that split one work into many albums: "… Disc 12", "… CD 3",
+# and a leading track-code such as "L17-08 ".
+_DISC_SUFFIX = re.compile(r"[\s:,\-_(\[]*\b(?:disc|disk|cd)\s*\d+\s*(?:of\s*\d+)?[)\]]*\s*$", re.IGNORECASE)
+_CODE_PREFIX = re.compile(r"^\s*[A-Za-z]{1,3}\d+[-_.]\d+\s+")
+
+
+def _work_title(title: str) -> str:
+    """The work a track names, without disc numbers or release codes."""
+    head = _audio_main_title(title) or title
+    head = _CODE_PREFIX.sub("", head)
+    return _DISC_SUFFIX.sub("", head).strip() or head.strip()
+
+
 def _group_key(title: str) -> str:
-    return normalize(_audio_main_title(title) or title)
+    # Spaces are dropped so "HarryPotter" and "Harry Potter" are the same work.
+    return normalize(_work_title(title)).replace(" ", "")
 
 
 def _track_order(probe: dict[str, Any]) -> tuple[int, int, str]:
@@ -65,13 +80,15 @@ def group_probes(item: dict[str, Any], probes: list[dict[str, Any]], library: An
         if not key:
             unidentified.append(probe)
             continue
-        bucket = buckets.setdefault(key, {"title": _audio_main_title(title) or title, "files": []})
+        bucket = buckets.setdefault(key, {"names": Counter(), "files": []})
+        bucket["names"][_work_title(title)] += 1
         bucket["files"].append(probe)
         if author:
             authors[key][author] += 1
 
     groups = []
     for key, bucket in buckets.items():
+        bucket["title"] = bucket["names"].most_common(1)[0][0]
         credits = authors.get(key) or {}
         author = max(credits, key=credits.get) if credits else ""
         match = _catalogue_match(library, bucket["title"], author)

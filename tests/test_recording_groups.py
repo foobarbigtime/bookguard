@@ -100,3 +100,24 @@ def test_route_is_read_only_and_reports_conflicts(monkeypatch):
         assert client.get("/api/triage/7/recording-groups").status_code == 409
         monkeypatch.setattr(triage, "result_by_id", lambda result_id: _item(classification="PASS"))
         assert client.get("/api/triage/7/recording-groups").status_code == 400
+
+
+def test_disc_numbers_codes_and_spacing_do_not_split_one_work():
+    probes = [
+        _probe("/a/1.mp3", "Harry Potter en de orde van de feniks Disc 1", author="J.K. Rowling"),
+        _probe("/a/2.mp3", "Harry Potter en de orde van de feniks Disc 18", author="J.K. Rowling", track="2"),
+        _probe("/a/3.mp3", "L17-08 Harry Potter en de Orde van de Feniks", author="J.K. Rowling", track="3"),
+        _probe("/a/4.mp3", "HarryPotter en de orde van de feniks Disc 2", author="J.K. Rowing", track="4"),
+        _probe("/a/5.mp3", "Harry Potter 01 - Steen der Wijzen", author="Jan Meng", track="5"),
+    ]
+    preview = recording_groups.group_probes(_item(), probes, _library())
+    assert preview["workCount"] == 2
+    assert [g["fileCount"] for g in preview["groups"]] == [4, 1]
+    assert preview["groups"][0]["title"].lower().startswith("harry potter en de orde")
+    assert "disc" not in preview["groups"][0]["title"].lower()
+
+
+def test_review_script_never_hands_null_to_replace_children():
+    from pathlib import Path
+    script = Path("static/review.js").read_text()
+    assert ".filter(Boolean)" in script

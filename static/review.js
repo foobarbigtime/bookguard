@@ -166,14 +166,14 @@
           : group.status === "catalogue" ? `matches "${group.book.title}"`
           : group.status === "ambiguous" ? "could be more than one book"
           : "not in your Bindery library";
-        out.replaceChildren(
+        out.replaceChildren(...[
           el("p", { text: `${preview.workCount} work${preview.workCount === 1 ? "" : "s"} in ${preview.fileCount} files.` }),
           el("ul", {}, ...preview.groups.map((group) => el("li", {
             text: `${group.title || "Untitled"}${group.author ? ` (${group.author})` : ""}: ${group.fileCount} file${group.fileCount === 1 ? "" : "s"}, ${label(group)}`,
           }))),
           preview.unidentified.length ? el("p", { class: "muted", text: `${preview.unidentified.length} file(s) name no work.` }) : null,
           preview.unreadable.length ? el("p", { class: "muted", text: `${preview.unreadable.length} file(s) could not be read.` }) : null,
-          el("p", { class: "muted", text: preview.note }));
+          el("p", { class: "muted", text: preview.note })].filter(Boolean));
         out.hidden = false;
       } finally {
         node.textContent = "Show recordings";
