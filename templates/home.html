@@ -160,24 +160,6 @@
         <small class="muted">Schedules and running tasks are shown in <a href="/system">System</a>.</small>
       </section>
 
-      <section class="card home-card" aria-labelledby="automationHeading">
-        <div class="card-head"><h2 id="automationHeading">Automation</h2><a class="more" href="/system">System →</a></div>
-        {% set automation = home.automation %}
-        <div class="mode-display" role="group" aria-label="Automation mode">
-          {% for mode, label in [('manual', 'Manual'), ('observe', 'Observe')] %}
-            <span class="{{ 'current' if automation.mode == mode }}"{% if automation.mode == mode %} aria-current="true"{% endif %}>{{ label }}</span>
-          {% endfor %}
-        </div>
-        <p>{{ automation.sentence }}</p>
-        <small class="muted">
-          {% if automation.lastObserve %}Last observe check <time data-local datetime="{{ automation.lastObserve }}">{{ automation.lastObserve[:16]|replace('T', ' ') }}</time>.{% else %}No observe check has run yet.{% endif %}
-          The mode is set by <code>BOOKGUARD_AUTOMATION_MODE</code> for now.
-        </small>
-        {% if automation.mode == 'observe' %}
-          <div><button id="observeButton" type="button">Run observe check</button></div>
-        {% endif %}
-      </section>
-
       <section class="card home-card" aria-labelledby="healthHeading">
         <div class="card-head"><h2 id="healthHeading">System health</h2><a class="more" href="/system">System →</a></div>
         <dl class="health-list">

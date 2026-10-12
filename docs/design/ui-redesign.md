@@ -274,6 +274,8 @@ Steps 1-3 as built (one PR):
   verification, and unassigned-file check in order. It reuses compatible proof,
   reports postponed books, and reserves the sequence against overlapping job
   starts. Scheduled scans remain scan-only.
+- Home no longer shows an Automation card. The mode and the Observe check
+  live on System; the data stays in `GET /api/home` for now.
 - Mixed recording folders get a read-only **Show recordings** preview
   (`GET /api/triage/{id}/recording-groups`, `app/recording_groups.py`). It
   groups the folder's audio files by the work each declares, matches each

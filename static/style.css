@@ -369,9 +369,6 @@ main > .notice { margin: 0 0 1rem; }
 .event-list time { flex: 0 0 96px; color: var(--faint); }
 .event-list a { color: #d4d4d8; text-decoration: none; }
 .event-list a:hover { text-decoration: underline; }
-.mode-display { display: flex; gap: 3px; padding: 3px; background: var(--inset); border: 1px solid var(--border); border-radius: .5rem; }
-.mode-display span { flex: 1; text-align: center; padding: .45rem; border-radius: .38rem; font-size: .84rem; color: var(--muted); }
-.mode-display span.current { background: var(--panel-2); color: #fff; font-weight: 500; }
 .health-list { margin: 0; display: grid; gap: .55rem; font-size: .84rem; }
 .health-list div { display: flex; gap: .7rem; }
 .health-list dt { width: 128px; flex: 0 0 auto; color: #e4e4e7; font-weight: 500; display: flex; align-items: center; gap: .5rem; }
