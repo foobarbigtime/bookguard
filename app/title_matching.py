@@ -148,3 +148,18 @@ def title_number_conflict(expected: str, observed: str) -> bool:
     """Explicit volume numbers cannot be discarded by catalogue normalization."""
     e, o = normalize(canonical_title_designations(expected)), normalize(canonical_title_designations(observed))
     return _conflicting_title_number(e, o) or _conflicting_title_number(o, e)
+
+
+_EDITION_MARKERS = {
+    "graphic": r"\bgraphic\b", "illustrated": r"\billustrated\b", "abridged": r"\babridged\b",
+    "unabridged": r"\bunabridged\b", "adaptation": r"\badaptation\b", "comic": r"\bcomics?\b",
+    "manga": r"\bmanga\b", "annotated": r"\bannotated\b", "collection": r"\bcollection\b",
+    "omnibus": r"\bomnibus\b", "anthology": r"\banthology\b", "boxset": r"\bbox(?:ed)? set\b",
+    "screenplay": r"\bscreenplay\b",
+}
+
+
+def edition_markers(title: str) -> frozenset[str]:
+    """Words that make a title a different form of the same story (graphic novel, abridged, ...)."""
+    text = normalize(title)
+    return frozenset(name for name, pattern in _EDITION_MARKERS.items() if re.search(pattern, text))

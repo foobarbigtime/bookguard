@@ -8,7 +8,7 @@ import pytest
 
 from app.config import settings
 from app.identity_search import (
-    catalogue_candidates, second_pass, soft_author_match, soft_title_match,
+    author_match_level, catalogue_candidates, second_pass, soft_author_match, soft_title_match,
 )
 from app.verification_engine import classify_identity
 
@@ -230,3 +230,46 @@ def test_full_cast_edition_ebook_verifies_when_the_author_is_in_the_book():
                     "embedded_signal": {"title_found": True}},
     }
     assert second_pass({"book_id": 1, "series": []}, ev) == ("VERIFIED_CORRECT", 88)
+
+
+# --- author matching: structured names, found by adversarial review ---------------------------
+
+
+def test_different_people_sharing_a_surname_never_match():
+    for expected, credits in [
+        ("Michael Martin", "Ann M. Martin"), ("Roger Martin", "George R. R. Martin"),
+        ("Kevin Dick", "Philip K. Dick"), ("Jennifer Maas", "Sarah J. Maas"),
+        ("Mary Higgins Clark", "Mary Jane Clark"), ("Robert B. Parker", "Robert M. Parker Jr."),
+        ("George R. R. Martin", "George W. Martin"), ("J. Smith", "Smith Jr."), ("A. Smith", "Smith et al."),
+        ("Ann Martin", "Martin"), ("Cressida Cowell", "Dave Cowell"),
+    ]:
+        assert author_match_level(expected, credits) == "", (expected, credits)
+
+
+def test_same_person_forms_are_exact_or_soft():
+    from app.identity_search import author_match_level
+    assert author_match_level("Cressida Cowell", "Cowell, Cressida") == "exact"
+    assert author_match_level("Ann M. Martin", "Ann M. Martin; Neil Gaiman") == "exact"
+    assert author_match_level("Ann M. Martin", "Martin, Ann M.") == "exact"
+    assert author_match_level("Cressida Cowell", "C. Cowell") == "soft"
+    assert author_match_level("Daniel Silva", "D. Silva") == "soft"
+    assert author_match_level("Ann M. Martin", "Ann Martin") == "soft"   # a middle initial omitted
+
+
+def _soft_author_evidence(author_found):
+    return {
+        "expected": {"title": "How to Steal a Dragon's Sword", "author": "J. K. Rowling"},
+        "embedded": {"title": "How to Steal a Dragon's Sword", "author": "Jack Rowling", "identifiers": []},
+        "content": {"expected_signal": {"title_found": True, "author_found": author_found},
+                    "embedded_signal": {"title_found": True}},
+    }
+
+
+def test_a_soft_author_match_needs_the_assigned_author_in_the_book():
+    assert second_pass({"book_id": 1, "series": []}, _soft_author_evidence(False)) is None
+    assert second_pass({"book_id": 1, "series": []}, _soft_author_evidence(True)) == ("VERIFIED_CORRECT", 88)
+
+
+def test_the_catalogue_search_accepts_only_exact_authors(bindery):
+    assert catalogue_candidates("How to Cheat a Dragon's Curse", "C. Cowell", 1) == []
+    assert [c["bookId"] for c in catalogue_candidates("How to Cheat a Dragon's Curse", "Cowell, Cressida", 1)] == [2]

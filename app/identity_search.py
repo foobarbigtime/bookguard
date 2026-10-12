@@ -24,33 +24,20 @@ from typing import Any
 
 from .db import bindery_conn
 from .matcher import author_match_strict
+from .provenance import provenance_proof, releases_for_book
 from .series_titles import ebook_title_conflict, expected_title_variants
-from .title_matching import meaningful_words, normalize
+from .title_matching import edition_markers, meaningful_words, normalize
 
 MAX_CANDIDATES = 5
 # Bump when the second pass gets stricter, so earlier second-pass verdicts are re-examined.
 SECOND_PASS_VERSION = 2
 TOLERANT_CONFIDENCE = 88
 ISBN_CONFIDENCE = 95
+PROVENANCE_CONFIDENCE = 90
 CATALOGUE_CONFIDENCE = 95
 
 _PEOPLE = re.compile(r"\s*(?:;|&|\||\band\b|\bwith\b)\s*", re.IGNORECASE)
 _GENERIC_SUFFIX = re.compile(r"\s*[:;,\-\u2013\u2014]\s*(?:a\s+)?(?:novel|memoir|thriller)\s*$", re.IGNORECASE)
-
-
-_EDITION_MARKERS = {
-    "graphic": r"\bgraphic\b", "illustrated": r"\billustrated\b", "abridged": r"\babridged\b",
-    "unabridged": r"\bunabridged\b", "adaptation": r"\badaptation\b", "comic": r"\bcomics?\b",
-    "manga": r"\bmanga\b", "annotated": r"\bannotated\b", "collection": r"\bcollection\b",
-    "omnibus": r"\bomnibus\b", "anthology": r"\banthology\b", "boxset": r"\bbox(?:ed)? set\b",
-    "screenplay": r"\bscreenplay\b",
-}
-
-
-def edition_markers(title: str) -> frozenset[str]:
-    """Words that make a title a different form of the same story (graphic novel, abridged, ...)."""
-    text = normalize(title)
-    return frozenset(name for name, pattern in _EDITION_MARKERS.items() if re.search(pattern, text))
 
 
 def _title_equivalent(expected: str, observed: str) -> bool:
@@ -139,32 +126,90 @@ def _people(value: str) -> list[str]:
     return [part.strip() for part in _PEOPLE.split(value) if part.strip()] or ([value] if value else [])
 
 
-def soft_author_match(expected: str, credits: str) -> bool:
-    """Same person: surname plus a matching given name or initial, in any order.
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "phd", "md", "dr", "mr", "mrs", "ms", "esq"}
+_NAME_APOSTROPHES = str.maketrans("", "", "'\u2019\u02bc\u2018")
 
-    A surname alone is never enough.
+
+def _parse_person(person: str) -> tuple[list[str], str] | None:
+    """(given names, surname) from "Given [Middle] Surname" or "Surname, Given [Middle]"."""
+    raw = str(person or "").translate(_NAME_APOSTROPHES)
+    if "," in raw:
+        surname_part, given_part = raw.split(",", 1)
+        surname_tokens = normalize(surname_part).split()
+        given = [t for t in normalize(given_part).split() if t not in _NAME_SUFFIXES]
+        if not surname_tokens or not given:
+            return None
+        surname = surname_tokens[-1]
+    else:
+        tokens = [t for t in normalize(raw).split() if t not in _NAME_SUFFIXES]
+        if len(tokens) < 2:
+            return None
+        surname, given = tokens[-1], tokens[:-1]
+    return (given, surname) if len(surname) >= 3 else None
+
+
+def _given_compatible(a: str, b: str) -> str:
+    """"exact", "initial" (one side is just the first letter of the other), or "" (different)."""
+    if a == b:
+        return "exact"
+    if (len(a) == 1 and b.startswith(a)) or (len(b) == 1 and a.startswith(b)):
+        return "initial"
+    return ""
+
+
+def author_match_level(expected: str, credits: str) -> str:
+    """"exact", "soft" or "" for whether two author credits name the same person.
+
+    Names are compared as given names plus a surname, never as a bag of words:
+    the surnames must be equal, the FIRST given names must agree (in full, or as an
+    initial), and middle names must agree wherever both sides give one. "soft" means
+    an initial stood in for a name or one side omitted a middle name; the caller must
+    then require other evidence (the assigned author's name in the book's text).
+    A surname alone, and a different person's middle initial, never match.
     """
-    for person in _people(expected):
-        tokens = normalize(person).split()
-        if len(tokens) < 2 or len(tokens[-1]) < 3:
+    if not expected or not credits:
+        return ""
+    if author_match_strict(expected, credits):
+        return "exact"
+    best = ""
+    for e_person in _people(expected):
+        parsed_e = _parse_person(e_person)
+        if not parsed_e:
             continue
-        surname, first = tokens[-1], tokens[0]
-        for credited in _people(credits):
-            others = [t for t in normalize(credited).split() if t != surname]
-            if surname not in normalize(credited).split():
+        for c_person in _people(credits):
+            parsed_c = _parse_person(c_person)
+            if not parsed_c or parsed_c[1] != parsed_e[1]:
                 continue
-            if any(
-                t == first or (len(t) == 1 and t == first[0]) or (len(first) == 1 and t[0] == first)
-                for t in others
-            ):
-                return True
-    return False
+            given_e, given_c = parsed_e[0], parsed_c[0]
+            first = _given_compatible(given_e[0], given_c[0])
+            if not first:
+                continue
+            level = "exact" if first == "exact" else "soft"
+            conflict = False
+            for x, y in zip(given_e[1:], given_c[1:]):
+                middle = _given_compatible(x, y)
+                if not middle:
+                    conflict = True
+                    break
+                if middle == "initial":
+                    level = "soft"
+            if conflict:
+                continue
+            if len(given_e) != len(given_c):
+                level = "soft"
+            if level == "exact":
+                return "exact"
+            best = "soft"
+    return best
+
+
+def soft_author_match(expected: str, credits: str) -> bool:
+    return bool(author_match_level(expected, credits))
 
 
 def same_author(expected: str, credits: str) -> bool:
-    return bool(expected and credits) and (
-        author_match_strict(expected, credits) or soft_author_match(expected, credits)
-    )
+    """Whether the credits plausibly name the same person; see author_match_level for strength."""
+    return bool(author_match_level(expected, credits))
 
 
 def catalogue_candidates(title: str, author: str, exclude_book_id: int) -> list[dict[str, Any]]:
@@ -183,7 +228,7 @@ def catalogue_candidates(title: str, author: str, exclude_book_id: int) -> list[
             (f"%{words[0]}%", int(exclude_book_id or 0)),
         ).fetchall()
         for row in rows:
-            if not soft_title_match(str(row["title"] or ""), title) or not same_author(str(row["author"] or ""), author):
+            if not soft_title_match(str(row["title"] or ""), title) or author_match_level(str(row["author"] or ""), author) != "exact":
                 continue
             files = conn.execute(
                 "SELECT path, size_bytes FROM book_files WHERE book_id = ? AND format = 'ebook' ORDER BY id LIMIT 5",
@@ -214,6 +259,14 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
     tried: list[dict[str, Any]] = []
     evidence["secondPass"] = tried
     evidence["secondPassVersion"] = SECOND_PASS_VERSION
+    # What Bindery actually downloaded for this book: a witness that is neither the file nor
+    # the catalogue title. Recorded for the panel whether or not it settles the book.
+    releases = releases_for_book(int(result.get("book_id") or 0))
+    if releases:
+        evidence["provenance"] = {
+            "releases": [release.to_json() for release in releases[:5]],
+            "notABook": [release.raw for release in releases if release.kind == "music"][:3],
+        }
 
     if file_title and file_author:
         isbn_is_assigned_book = bool((evidence.get("isbn") or {}).get("expectedMatch"))
@@ -225,11 +278,15 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
             allow_unnumbered=isbn_is_assigned_book,
             allow_unnumbered_expected=bool(expected_signal.get("title_found")),
         )
-        author_ok = same_author(author, file_author)
+        author_level = author_match_level(author, file_author)
+        author_ok = bool(author_level)
         in_text = bool(expected_signal.get("title_found") or expected_signal.get("author_found"))
+        # An initial standing in for a name is only the same person if the book itself prints
+        # the assigned author's name; an exact match needs nothing more.
+        author_backed = author_level == "exact" or bool(expected_signal.get("author_found"))
         tried.append({"check": "tolerantIdentity", "titleMatches": title_ok,
-                      "authorMatches": author_ok, "foundInBookText": in_text})
-        if title_ok and author_ok and in_text:
+                      "authorMatches": author_level or "no", "foundInBookText": in_text})
+        if title_ok and author_ok and in_text and author_backed:
             evidence["explanation"] = (
                 "The file's own title and author match this book once initials, name order and "
                 "extra credited authors are allowed for, and the book's text contains the title or author."
@@ -237,6 +294,22 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
             if isbn_is_assigned_book:
                 evidence["explanation"] += " The file's ISBN is also one of this book's editions in Bindery."
             return "VERIFIED_CORRECT", ISBN_CONFIDENCE if isbn_is_assigned_book else TOLERANT_CONFIDENCE
+
+        proof = provenance_proof(
+            expected, embedded,
+            {"expectedTitleInText": bool(expected_signal.get("title_found")),
+             "expectedAuthorInText": bool(expected_signal.get("author_found")),
+             "fileTitleInText": bool(embedded_signal.get("title_found"))},
+            releases, author_match_level,
+        )
+        tried.append({"check": "provenance", "releases": len(releases), "agreed": bool(proof)})
+        if proof:
+            evidence["proof"] = proof
+            evidence["explanation"] = (
+                "Three independent sources name the same book: " + "; ".join(proof["sources"])
+                + f" (Bindery downloaded it as “{proof['release']}”)."
+            )
+            return "VERIFIED_CORRECT", PROVENANCE_CONFIDENCE
 
         expected_in_text = bool(expected_signal.get("title_found") and expected_signal.get("author_found"))
         # The file's ISBN belongs to the assigned book: the first pass already

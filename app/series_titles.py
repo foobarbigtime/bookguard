@@ -243,3 +243,4 @@ def catalogue_title_variants(title: str, series_names: Iterable[str] = ()) -> li
             seen.add(key)
             out.append(value.strip())
     return out
+
