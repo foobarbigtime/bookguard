@@ -7,3 +7,5 @@ MIN_USEFUL_TEXT = 500
 OCR_ONLY_BELOW_CHARS = 20
 # The longest title or author kept from a file's own metadata.
 MAX_METADATA_CHARS = 1_000
+# Bumped when what OCR reads (pages, ISBNs) changes, so scans left undecided by an older version are looked at once more.
+OCR_VERSION = 2

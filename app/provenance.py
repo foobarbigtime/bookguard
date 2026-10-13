@@ -175,7 +175,9 @@ def provenance_proof(
     return None
 
 
-def scan_provenance_proof(expected: dict, releases: Iterable[Release], author_level) -> dict[str, Any] | None:
+def scan_provenance_proof(
+    expected: dict, releases: Iterable[Release], author_level, other_source: str = "the scan's title page",
+) -> dict[str, Any] | None:
     """Two independent sources for a scan: Bindery's own download record, and the scan's opening page.
 
     A scan's page text alone is not accepted (a cover can name other books), but Bindery grabbed a
@@ -196,7 +198,7 @@ def scan_provenance_proof(expected: dict, releases: Iterable[Release], author_le
         if not _same_designations(title, release.title, release_number=release.number):
             continue
         return {
-            "sources": ["download name in Bindery's history", "the scan's title page"],
+            "sources": ["download name in Bindery's history", other_source],
             "release": release.raw,
             "coreTitle": assigned_core,
         }

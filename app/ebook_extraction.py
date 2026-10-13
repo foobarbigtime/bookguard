@@ -10,10 +10,12 @@ import zipfile
 from .archive_io import read_zip_member_bounded, read_zip_member_prefix
 from .config import settings
 from .file_safety import read_file_prefix
+from .isbn_evidence import text_isbns
 from .metadata import ebook_metadata
 from .mobi_text import read_mobi_text
 from . import ocr_probe, pdf_probe
-from .verification_constants import FRONT_TEXT_CHARS, MAX_METADATA_CHARS, OCR_ONLY_BELOW_CHARS
+from .scan_text import PAGE_BREAK
+from .verification_constants import FRONT_TEXT_CHARS, MAX_METADATA_CHARS, OCR_ONLY_BELOW_CHARS, OCR_VERSION
 
 
 @dataclass(frozen=True)
@@ -209,11 +211,20 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
         # A scan has no text layer: read the first pages as images so the title page can be checked.
         found = ocr_probe.ocr_pdf_front(path)
         ocr = {"attempted": True, "pages": int(found.get("pages") or 0), "chars": len(found.get("text") or ""),
-               "error": str(found.get("error") or ""), "setAside": int(found.get("setAside") or 0)}
+               "error": str(found.get("error") or ""), "setAside": int(found.get("setAside") or 0),
+               "version": OCR_VERSION}
         if found.get("text"):
             text = found["text"]
             front_text = text[:FRONT_TEXT_CHARS]
             source = "native-pdf+ocr"
+            # What the first page reads as (so the panel can show it), and any ISBN printed in the
+            # front matter: a checksum-valid ISBN is an identifier like one inside an EPUB.
+            ocr["firstPage"] = " / ".join(line.strip() for line in text.split(PAGE_BREAK)[0].splitlines()
+                                          if line.strip())[:160]
+            isbns = text_isbns(text)
+            if isbns:
+                ocr["isbns"] = isbns
+                identifiers = [f"isbn:{value}" for value in isbns]
             notes.append(f"OCR of the first {ocr['pages']} page(s) supplied the text because the PDF has no "
                          "text layer. OCR can misread a name, which can only make a match fail, never invent one."
                          + (f" {ocr['setAside']} page(s) listing other books were set aside." if ocr["setAside"] else ""))

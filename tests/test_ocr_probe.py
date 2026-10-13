@@ -147,7 +147,14 @@ def test_image_only_pdfs_verified_before_ocr_are_looked_at_again_once(monkeypatc
     old = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
            "evidence": {"content": {"text_characters_examined": 0}}}
     assert predates_ocr(old)
-    assert not predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True}}})   # already tried
+    from app.verification_constants import OCR_VERSION
+    current = {**old, "evidence": {**old["evidence"], "ocr": {"attempted": True, "version": OCR_VERSION}}}
+    assert not predates_ocr(current)                                                                # already tried
+    assert predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True}}})       # an older reader
+    assert predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True, "version": 1}}})
+    assert not predates_ocr({**current, "evidence": {**current["evidence"], "ocr": {"attempted": True, "error": "x"}}})
+    assert not predates_ocr({**old, "verdict": "VERIFIED_CORRECT",
+                             "evidence": {**old["evidence"], "ocr": {"attempted": True, "version": 1}}})
     assert not predates_ocr({**old, "evidence": {"content": {"text_characters_examined": 90000}}})  # has text
     assert not predates_ocr({**old, "source": "native-epub"})
     monkeypatch.setattr(settings, "verification_ocr", False)
@@ -829,3 +836,95 @@ def test_a_first_page_with_next_to_no_words_is_skipped_not_taken_as_the_opening(
     for noise in ("wo", "~", "i", "|  .", "—"):
         pages = f"{noise}\fTHE LAST COLONY\nJOHN SCALZI\nA TOR BOOK"
         assert _signal("The Last Colony", "John Scalzi", pages)["strong_identity"], noise
+
+
+# --- ISBNs printed in a scan, and what the panel shows -----------------------------------------------
+
+def _isbn13(body12: str) -> str:
+    check = (10 - sum((1 if i % 2 == 0 else 3) * int(c) for i, c in enumerate(body12)) % 10) % 10
+    return body12 + str(check)
+
+
+LAST_COLONY_ISBN = _isbn13("978076535" + "375")           # a checksum-valid ISBN-13
+OTHER_ISBN = _isbn13("978076535" + "355")
+
+
+def test_isbns_are_read_from_a_copyright_page_and_only_when_the_checksum_holds():
+    from app.isbn_evidence import text_isbns
+    page = f"Copyright 2007 by John Scalzi\nISBN {LAST_COLONY_ISBN[:3]}-{LAST_COLONY_ISBN[3]}-{LAST_COLONY_ISBN[4:9]}-{LAST_COLONY_ISBN[9:12]}-{LAST_COLONY_ISBN[12]}\n1 3 5 7 9 10 8 6 4 2"
+    assert text_isbns(page) == [LAST_COLONY_ISBN]
+    assert text_isbns(f"ISBN: {LAST_COLONY_ISBN}") == [LAST_COLONY_ISBN]
+    assert text_isbns(f"ISBN-13: {LAST_COLONY_ISBN} (hardback)") == [LAST_COLONY_ISBN]
+    assert text_isbns(f"First published {LAST_COLONY_ISBN[:3]} {LAST_COLONY_ISBN[3:]}") == [LAST_COLONY_ISBN]  # unlabelled 13
+    assert text_isbns("ISBN 978-0-7653-5375-0") == []            # wrong check digit (an OCR misread): lost, not invented
+    assert text_isbns("Printed in 2007, 1234567890123 copies, page 12345") == []
+    assert text_isbns("") == [] and text_isbns("ISBN") == []
+
+
+@pytest.fixture
+def scalzi_editions(scalzi_bindery):
+    import sqlite3
+    with sqlite3.connect(scalzi_bindery) as conn:
+        conn.executescript(
+            f"""
+            CREATE TABLE editions (id INTEGER PRIMARY KEY, book_id INTEGER, isbn_13 TEXT, isbn_10 TEXT);
+            INSERT INTO editions(book_id, isbn_13) VALUES (3, '{LAST_COLONY_ISBN}'), (2, '{OTHER_ISBN}');
+            """
+        )
+    return scalzi_bindery
+
+
+def _isbn_result(book_id=3, title="The Last Colony"):
+    from app.isbn_evidence import isbn_evidence
+    return lambda isbns: {"title": title, "author": "John Scalzi", "book_id": book_id, "series": [],
+                          "isbn_evidence": isbn_evidence(book_id, isbns), "_ocr_text": True}
+
+
+def test_a_printed_isbn_plus_the_download_record_verify_a_scan_whose_cover_cannot_be_read(scalzi_editions):
+    """The case that motivated this: a children's-book scan whose cover and first pages OCR as noise."""
+    result = _isbn_result()([f"isbn:{LAST_COLONY_ISBN}"])
+    noise = "- +\nrise\fWARNING\nAmy relakyorwshep bo\fABOUT THE HERO\nA very ordinary boy, finding it hard to be a hero."
+    verdict, confidence, evidence = classify_identity(result, {"title": "Book to Do 1", "author": "Unknown"},
+                                                      noise, [f"isbn:{LAST_COLONY_ISBN}"], [], noise)
+    assert (verdict, confidence) == ("VERIFIED_CORRECT", 95)
+    assert evidence["proof"]["sources"] == ["download name in Bindery's history",
+                                            "the ISBN printed in the scan is one of this book's editions in Bindery"]
+
+
+def test_a_printed_isbn_alone_or_naming_another_book_verifies_nothing(scalzi_editions):
+    noise = "- +\nrise\fWARNING\nAmy relakyorwshep bo"
+    junk = {"title": "Book to Do 1", "author": "Unknown"}
+    # No download record for this book (book 2 has none): the ISBN is the only source.
+    result = _isbn_result(book_id=2, title="Old Man's War")([f"isbn:{OTHER_ISBN}"])
+    verdict, _, evidence = classify_identity(result, junk, noise, [f"isbn:{OTHER_ISBN}"], [], noise)
+    assert verdict == "INSUFFICIENT_EVIDENCE" and "proof" not in evidence
+    # The ISBN printed in the scan belongs to another Bindery book.
+    result = _isbn_result()([f"isbn:{OTHER_ISBN}"])
+    verdict, _, evidence = classify_identity(result, junk, noise, [f"isbn:{OTHER_ISBN}"], [], noise)
+    assert verdict == "INSUFFICIENT_EVIDENCE" and evidence["isbn"]["otherOwners"][0]["bookId"] == 2
+
+
+def test_a_printed_isbn_plus_the_title_page_verify_a_scan_without_a_download_record(scalzi_editions):
+    result = _isbn_result(book_id=3)([f"isbn:{LAST_COLONY_ISBN}"])
+    result["title"] = "The Last Colony"
+    import sqlite3
+    with sqlite3.connect(scalzi_editions) as conn:
+        conn.execute("DELETE FROM history")
+    page = "THE LAST COLONY\nJOHN SCALZI\nA TOR BOOK"
+    verdict, confidence, evidence = classify_identity(result, {"title": "", "author": ""}, page,
+                                                      [f"isbn:{LAST_COLONY_ISBN}"], [], page)
+    assert (verdict, confidence) == ("VERIFIED_CORRECT", 95)
+    assert evidence["proof"]["sources"][1] == "the scan's title page"
+
+
+@NEEDS_TOOLS
+def test_a_real_scan_with_noise_pages_then_a_copyright_page_gets_its_isbn_read(tmp_path):
+    pdf = scan_pdf(tmp_path / "scan.pdf", [
+        ["WARNING", "THIS BOOK CONTAINS", "DRAGONS"],
+        ["ABOUT HICCUP", "A very ordinary boy"],
+        ["Copyright 2007 by John Scalzi", f"ISBN {LAST_COLONY_ISBN}", "1 3 5 7 9 10 8 6 4 2"],
+    ], metadata={"title": "Book to Do 1", "author": "Unknown"})
+    extracted = ebook_extraction.extract_ebook_identity(str(pdf))
+    assert extracted.source == "native-pdf+ocr"
+    assert extracted.identifiers == [f"isbn:{LAST_COLONY_ISBN}"] and extracted.ocr["isbns"] == [LAST_COLONY_ISBN]
+    assert extracted.ocr["firstPage"].startswith("WARNING") and extracted.ocr["version"] >= 2

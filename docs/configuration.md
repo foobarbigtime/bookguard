@@ -97,7 +97,7 @@ and its temporary images are removed immediately.
 | Variable | Default | Meaning |
 |---|---|---|
 | `BOOKGUARD_VERIFICATION_OCR` | `true` | Turn OCR of scanned PDFs on or off. |
-| `BOOKGUARD_VERIFICATION_OCR_PAGES` | `3` | How many pages from the front to read (1-6). |
+| `BOOKGUARD_VERIFICATION_OCR_PAGES` | `6` | How many pages from the front to read (1-6). Six reaches the title page and the copyright page of most books. |
 | `BOOKGUARD_VERIFICATION_OCR_LANGUAGES` | `eng` | Tesseract languages, e.g. `eng+nld`. The matching `tesseract-ocr-<lang>` package must be in the image. |
 
 A scan's page text is held to a stricter rule than a text layer, because OCR can misread a name and a

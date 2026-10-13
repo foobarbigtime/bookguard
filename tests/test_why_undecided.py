@@ -211,3 +211,24 @@ def test_a_scan_that_does_not_open_with_the_book_says_what_was_and_was_not_found
         "text_characters_examined": 400, "expected_signal": {"title_found": True, "author_found": False},
         "embedded_signal": {}}})
     assert "author “Cressida Cowell” is not credited beside it" in text
+
+
+def _isbn13(body12):
+    check = (10 - sum((1 if i % 2 == 0 else 3) * int(c) for i, c in enumerate(body12)) % 10) % 10
+    return body12 + str(check)
+
+
+def test_the_scan_panel_shows_what_the_first_page_read_the_isbn_and_how_to_read_further():
+    owned = _isbn13("978076535355")
+    ocr = {"attempted": True, "pages": 3, "chars": 342, "error": "", "setAside": 0, "firstPage": "- + / rise"}
+    kind, text = scan_why(file_title="Book to Do 1", file_author="Unknown", extra={"ocr": ocr})
+    assert kind == "scan_not_opening" and "The first page reads: “- + / rise”." in text
+    assert "Only 3 pages were read" in text and "up to 6" in text and "ISBN" in text
+    # With an ISBN found, the hint about reading further goes and the ISBN's owner is named.
+    isbn = {"isbns": [owned], "expectedMatch": False,
+            "otherOwners": [{"bookId": 2, "title": "Old Man's War", "author": "John Scalzi"}]}
+    kind, text = scan_why(file_title="Book to Do 1", extra={"ocr": {**ocr, "pages": 6, "isbns": [owned]}, "isbn": isbn})
+    assert "belongs to “Old Man's War” by John Scalzi in Bindery, not to this book" in text and "Only" not in text
+    isbn["otherOwners"] = []
+    kind, text = scan_why(extra={"ocr": {**ocr, "pages": 6, "isbns": [owned]}, "isbn": isbn})
+    assert "is not one of this book's editions in Bindery" in text

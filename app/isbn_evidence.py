@@ -32,6 +32,32 @@ def isbn13(raw: Any) -> str | None:
     return None
 
 
+_ISBN_LABELLED = re.compile(r"ISBN(?:[- ]?1[03])?[ \t]*[:#]?[ \t]*([0-9][0-9Xx \t\-\u2013]{8,24})", re.IGNORECASE)
+_ISBN_BARE = re.compile(r"(?<![0-9])(97[89](?:[ \t\-\u2013]?[0-9]){10})(?![0-9])")
+
+
+def text_isbns(text: str, limit: int = 5) -> list[str]:
+    """Checksum-valid ISBN-13s printed in a block of text (OCR of a copyright page), first-seen order.
+
+    A labelled number ("ISBN 978-0-340-99910-8") may be an ISBN-10 or -13; an unlabelled number must be
+    a full 978/979 ISBN-13. Only a valid checksum counts, so an OCR misread is lost, never invented, and
+    the printer's key ("1 3 5 7 9 10 8 6 4 2") that often follows an ISBN does not matter."""
+    found: list[str] = []
+    for match in _ISBN_LABELLED.finditer(text or ""):
+        digits = re.sub(r"[^0-9Xx]", "", match.group(1)).upper()
+        for length in (13, 10):
+            value = isbn13(digits[:length]) if len(digits) >= length else None
+            if value:
+                if value not in found:
+                    found.append(value)
+                break
+    for match in _ISBN_BARE.finditer(text or ""):
+        value = isbn13(match.group(1))
+        if value and value not in found:
+            found.append(value)
+    return found[:limit]
+
+
 def file_isbns(identifiers: Iterable[Any]) -> list[str]:
     """Checksum-valid ISBN-13s from a file's identifiers, in first-seen order."""
     found: list[str] = []

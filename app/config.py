@@ -307,7 +307,7 @@ class Settings:
     )
     # OCR of the first pages of a PDF that has no text layer (a scan), so its title page can be read.
     verification_ocr: bool = _bool("BOOKGUARD_VERIFICATION_OCR", True)
-    verification_ocr_pages: int = _clamp(_int("BOOKGUARD_VERIFICATION_OCR_PAGES", 3), 1, 6)
+    verification_ocr_pages: int = _clamp(_int("BOOKGUARD_VERIFICATION_OCR_PAGES", 6), 1, 6)
     verification_ocr_languages: str = os.getenv("BOOKGUARD_VERIFICATION_OCR_LANGUAGES", "eng").strip() or "eng"
     verification_file_signatures: bool = _bool(
         "BOOKGUARD_VERIFICATION_FILE_SIGNATURES", True

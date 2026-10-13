@@ -110,7 +110,7 @@
             <label class="check-field"><input name="verification_ocr" type="checkbox" {% if settings.verification_ocr %}checked{% endif %}><span>Read the first pages of a PDF that has no text layer, so its title page can be checked</span></label>
             <small>Runs only for a PDF that yields almost no text, in bounded helper processes. OCR can misread a name; that can only make a match fail, never invent one. Languages are deployment-only: <code>{{ settings.verification_ocr_languages }}</code> (set <code>BOOKGUARD_VERIFICATION_OCR_LANGUAGES</code> to change).</small>
           </div>
-          <label class="field"><span>OCR pages read</span><input name="verification_ocr_pages" type="number" min="1" max="6" value="{{ settings.verification_ocr_pages }}"><small>From the front of the PDF. Three covers a cover, a half-title and the title page.</small></label>
+          <label class="field"><span>OCR pages read</span><input name="verification_ocr_pages" type="number" min="1" max="6" value="{{ settings.verification_ocr_pages }}"><small>From the front of the PDF. Six reaches the title page and the copyright page (where the ISBN is) of most books; stop early once enough text is read.</small></label>
         </div>
         <div class="notice info">BookGuard runs deterministic file safety checks before native, position-aware identity verification. Audiobook content verification remains a future feature.</div>
       </section>
