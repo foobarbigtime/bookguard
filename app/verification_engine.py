@@ -67,11 +67,12 @@ def _author_found(author: str, text: str) -> bool:
 # --- OCR text ------------------------------------------------------------------------------
 # A scan's text comes from OCR, which drops spaces and misreads letters, and the page is the only
 # witness to what the book is. So scanned text is held to a stricter rule than a text layer:
-#   opening - a scan is the book whose title it OPENS with: the title must be on the first page
-#           that has text, among its first lines (a cover, a half-title or a title page). A
-#           promotion, a contents page, a series header, a dedication or a running header further
-#           in prints other titles beside the author's name just as a title page does, so nothing
-#           after the first page can establish what the book is.
+#   title page - a scan is the book named by its TITLE PAGE: the first page that credits the author
+#           (a cover, a half-title or a title page; in an illustrated book it can be page 7). Its title
+#           must be among its first lines, beside the author. A promotion, a contents page, a series
+#           header, a dedication or a running header further in prints other titles beside the
+#           author's name just as a title page does, so nothing after the title page can change
+#           what the book is.
 #   own line - the TITLE fills its own line(s) (a leading "The", and a tail that is "A Novel" or
 #           "by <the author>", are allowed) and the AUTHOR stands on a line of their own, optionally
 #           after "by" / "a novel by". "Dune" is not "Dune Messiah", "It" is not a word in a
@@ -98,7 +99,8 @@ _OCR_LEADING = {"", "the"}   # "A" / "An" are part of a different title ("A Dog'
 _OCR_DESCRIPTOR = r"(?:(?:a|an|the)\s+)?(?:novel|memoir|thriller)"
 _OCR_TITLE_BY = re.compile(rf"(?:{_OCR_DESCRIPTOR}\s+)?by\s+(.+)")             # "A Novel by John Scalzi"
 _OCR_DESCRIPTOR_ONLY = re.compile(_OCR_DESCRIPTOR)                              # ": A Novel"
-_OCR_AUTHOR_LEAD = re.compile(rf"(?:{_OCR_DESCRIPTOR}(?:\s+|$))?(?:written(?:\s+|$))?(?:by)?")
+_OCR_AUTHOR_LEAD = re.compile(
+    rf"(?:{_OCR_DESCRIPTOR}(?:\s+|$))?(?:written(?:\s+|$))?(?:by)?|as told to|(?:re)?told by")
 _OCR_AUTHOR_TAIL = re.compile(r"and\s+\S.*")                                   # a co-author may follow
 # A cover that refers to another work ("author of ...", "sequel to ...", an omnibus, a sampler, a study
 # guide) cannot be read as the title of THIS book, whatever else is printed on it.
@@ -283,20 +285,24 @@ def _ocr_identity_signal(title: str, author: str, full_text: str, front_text: st
     def near_author_in(page: _Squashed) -> bool:
         return any(_ocr_near_pos(name, page, OCR_MIN_NEAR) >= 0 for name in squashed_names)
 
-    opening_at = None                      # where the first page's opening lines show the title
+    opening_at = None                      # where the title page shows the title
     author_at = None                       # first credit of the author, over all pages
-    tight: int | None = None               # closest title/author pair printed on one page
+    title_page = None                      # the first page that credits the author
+    tight: int | None = None               # title and author printed together on that page
     near_title = near_author = False
     offset = 0
     for number, page in enumerate(pages):
         t = _ocr_exact_pos(squashed_title, page, title=True, authors=squashed_names)
         a = find_author(page)
-        if number == 0 and 0 <= t < page.opening_end() and not _OCR_REFERENCE.search(page.opening_text()):
-            opening_at = t
-        if a >= 0 and author_at is None:
-            author_at = offset + a
-        if t >= 0 and a >= 0 and abs(t - a) <= OCR_TITLE_PAGE_CHARS:
-            tight = abs(t - a) if tight is None else min(tight, abs(t - a))
+        if a >= 0 and title_page is None:
+            title_page, author_at = number, offset + a
+        # The title page is the first page that credits the author, wherever it falls in the front
+        # matter (illustrated books put it at page 7). Its title must be among its first lines, beside
+        # the author, and not a reference to another work.
+        if number == title_page and 0 <= t < page.opening_end() and not _OCR_REFERENCE.search(page.opening_text()):
+            opening_at = offset + t
+            if abs(t - a) <= OCR_TITLE_PAGE_CHARS:
+                tight = abs(t - a)
         near_title = near_title or t >= 0 or _ocr_near_pos(squashed_title, page, OCR_MIN_NEAR) >= 0
         near_author = near_author or a >= 0 or near_author_in(page)
         offset += len(page.readable) + 1

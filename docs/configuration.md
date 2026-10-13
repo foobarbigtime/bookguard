@@ -97,15 +97,17 @@ and its temporary images are removed immediately.
 | Variable | Default | Meaning |
 |---|---|---|
 | `BOOKGUARD_VERIFICATION_OCR` | `true` | Turn OCR of scanned PDFs on or off. |
-| `BOOKGUARD_VERIFICATION_OCR_PAGES` | `6` | How many pages from the front to read (1-6). Six reaches the title page and the copyright page of most books. |
+| `BOOKGUARD_VERIFICATION_OCR_PAGES` | `8` | How many pages from the front to read (1-12). Illustrated books can put the title page at page 7 or later. |
 | `BOOKGUARD_VERIFICATION_OCR_LANGUAGES` | `eng` | Tesseract languages, e.g. `eng+nld`. The matching `tesseract-ocr-<lang>` package must be in the image. |
 
 A scan's page text is held to a stricter rule than a text layer, because OCR can misread a name and a
 cover can print other titles. **A scan is never decided by its first page alone.** The page counts as
-one source; a verdict needs a second. The first page counts only when the assigned title opens it - among
-the first lines, on its own line(s) ("Dune" is not "Dune Messiah", "Love" is not "Love Story") - with the
-author credited on a line of their own ("by John Scalzi"; a foreword, blurb, translator or "Jr." is not
-the author) on the same page. A cover that refers to another work ("author of ...", "sequel to ...", an
+one source; a verdict needs a second. The page counts only when it is the scan's **title page** - the first page that credits the author (a
+cover, a half-title or a title page; in an illustrated book that can be page 7) - and the assigned title
+is among its first lines, on its own line(s) ("Dune" is not "Dune Messiah", "Love" is not "Love Story"),
+beside the author. The author is credited on a line of their own ("by John Scalzi", "as told to ...";
+a foreword, blurb, translator or "Jr." is not the author). A promotion, contents page or series list
+that comes after the title page cannot change what the book is. A cover that refers to another work ("author of ...", "sequel to ...", an
 omnibus, a sampler, a study guide) is never read as this book's title. Pages that list other books ("Also
 by ...", "Other books", "Praise for", "About the author") are set aside. The second source is either the
 file's own title and author agreeing (then it is verified), or Bindery's download record for this book
@@ -114,7 +116,7 @@ scan with only its first page behind it stays undecided, with the reason stated,
 "wrong details" or moved to another book from a cover alone (moving needs an ISBN). A misread letter
 ("The Lost Colony" for "The Last Colony") is never evidence for a book. OCR is used only for a PDF with
 essentially no text of its own (under 20 characters), and its text is not used by the Unmatched files
-check. Limits: a title wrapped over lines ("DUNE" above "MESSIAH") cannot be told from a short title with a
+check. Limits: a promotion that credits the author and is printed before the real title page is read as the title page (a second source still has to agree); a title wrapped over lines ("DUNE" above "MESSIAH") cannot be told from a short title with a
 subtitle; a scan whose cover OCRs as noise falls back to its next page; and a PDF whose own title and author
 were set to the assigned book's exact details, on a cover that lists several books without saying so, can
 still be verified. Changing the OCR settings does not re-read scans that were already checked. The image adds about 100 MB for Poppler and Tesseract.

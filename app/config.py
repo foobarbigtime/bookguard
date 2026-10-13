@@ -307,7 +307,7 @@ class Settings:
     )
     # OCR of the first pages of a PDF that has no text layer (a scan), so its title page can be read.
     verification_ocr: bool = _bool("BOOKGUARD_VERIFICATION_OCR", True)
-    verification_ocr_pages: int = _clamp(_int("BOOKGUARD_VERIFICATION_OCR_PAGES", 6), 1, 6)
+    verification_ocr_pages: int = _clamp(_int("BOOKGUARD_VERIFICATION_OCR_PAGES", 8), 1, 12)
     verification_ocr_languages: str = os.getenv("BOOKGUARD_VERIFICATION_OCR_LANGUAGES", "eng").strip() or "eng"
     verification_file_signatures: bool = _bool(
         "BOOKGUARD_VERIFICATION_FILE_SIGNATURES", True
@@ -400,7 +400,7 @@ class Settings:
             "strong_mismatch_consensus_percent": (50, 100),
             "verification_max_text_chars": (50000, 5000000),
             "verification_pdf_pages": (1, 100),
-            "verification_ocr_pages": (1, 6),
+            "verification_ocr_pages": (1, 12),
             "dashboard_poll_ms": (500, 10000),
             "live_results_limit": (5, 100),
             "dashboard_result_limit": (50, 5000),

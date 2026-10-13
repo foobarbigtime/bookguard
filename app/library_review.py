@@ -296,7 +296,7 @@ def _why_undecided(evidence: dict, suffix: str = "", fmt: str = "ebook") -> tupl
                             else f"title and author and found {count}, too many to pick one safely."))
     return kind, " ".join(parts)
 
-MAX_OCR_PAGES = 6
+MAX_OCR_PAGES = 12
 
 
 def _why_scan(evidence: dict, who: dict, ocr: dict, placeholder: bool) -> tuple[str, str]:
@@ -325,7 +325,8 @@ def _why_scan(evidence: dict, who: dict, ocr: dict, placeholder: bool) -> tuple[
             f"only one source (a cover can name other books) and nothing else confirms it: the file's own "
             f"details {details}, and {record}.{isbn_note}")
     signal = (evidence.get("content") or {}).get("expected_signal") or {}
-    reason = f"{read}, but it does not open with “{title}”{by}: a scan is matched only by a first page that shows the title and the author together."
+    reason = (f"{read}, but no page is a title page for “{title}”{by}: a scan is matched only by the first page that "
+              "credits the author, which must show the title beside the author.")
     if ocr.get("firstPage"):
         reason += f" The first page reads: “{ocr['firstPage']}”."
     isbn = evidence.get("isbn") or {}
@@ -337,15 +338,17 @@ def _why_scan(evidence: dict, who: dict, ocr: dict, placeholder: bool) -> tuple[
                        f"{_by(owners[0].get('author'))} in Bindery, not to this book.")
         else:
             reason += f" An ISBN is printed in it ({shown}), but it is not one of this book's editions in Bindery."
-    elif pages < MAX_OCR_PAGES:
-        reason += (f" Only {pages} page{'s' if pages != 1 else ''} were read: “OCR pages read” in Settings "
-                   f"(up to {MAX_OCR_PAGES}) can reach the title page and the copyright page, where an ISBN is printed.")
+    else:
+        reason += f" No ISBN could be read from the {pages} page{'s' if pages != 1 else ''} read."
+        if pages < MAX_OCR_PAGES:
+            reason += (f" “OCR pages read” in Settings (up to {MAX_OCR_PAGES}) can reach a title page or copyright "
+                       "page that comes later, as it does in many illustrated books.")
     if signal.get("title_near") and not signal.get("title_found"):
         reason += " A passage close to the title does appear, which may be an OCR misreading of it."
     elif signal.get("title_found") and not signal.get("author_found"):
         reason += f" The title is there, but the author “{who['expectedAuthor']}” is not credited beside it."
     elif signal.get("author_found") and not signal.get("title_found"):
-        reason += " The author is there, but the title is not what the first page opens with."
+        reason += " The author is credited, but the title is not beside it."
     return "scan_not_opening", reason
 
 
