@@ -96,7 +96,7 @@ replacement workflow. The action appears only when that record is eligible.
 - Reads Bindery's `book_files`, books, and authors from the Bindery SQLite database in **read-only mode**.
 - Audits audiobook associations with `ffprobe` and representative sampling across audiobook folders.
 - Audits EPUB, PDF, MOBI, AZW/AZW3, CBZ ComicInfo.xml, RTF metadata, and explicit Title:/Author: headers in TXT files.
-- Reads the first pages of a scanned PDF (no text layer) with OCR so its title page can be checked like any other book. OCR runs in bounded child processes (Poppler and Tesseract, with CPU, memory and time limits), only for a PDF that yields almost no text, and can only make a match fail, never invent one. Control it with `BOOKGUARD_VERIFICATION_OCR` (default on), `BOOKGUARD_VERIFICATION_OCR_PAGES` (default 6) and `BOOKGUARD_VERIFICATION_OCR_LANGUAGES` (default `eng`; add Tesseract language packs to the image for others).
+- Reads the first pages of a scanned PDF (no text layer) with OCR so its title page can be checked like any other book. OCR runs in bounded child processes (Poppler and Tesseract, with CPU, memory and time limits), only for a PDF that yields almost no text, and can only make a match fail, never invent one. Control it with `BOOKGUARD_VERIFICATION_OCR` (default on), `BOOKGUARD_VERIFICATION_OCR_PAGES` (default 8, up to 12) and `BOOKGUARD_VERIFICATION_OCR_LANGUAGES` (default `eng`; add Tesseract language packs to the image for others).
 - Detects music/soundtrack imports, strong spoken-word semantic mismatches, missing tracked files, partial matches, and unsupported metadata formats.
 - Supports configurable author aliases/pen names.
 - Detects mechanically swapped EPUB title/author fields without loosening general matching rules.

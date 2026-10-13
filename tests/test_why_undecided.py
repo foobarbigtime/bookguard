@@ -202,7 +202,7 @@ def test_a_scan_whose_first_page_agrees_says_why_that_is_not_enough():
 
 def test_a_scan_that_does_not_open_with_the_book_says_what_was_and_was_not_found():
     kind, text = scan_why(file_title="Zoe's Tale", file_author="John Scalzi")
-    assert kind == "scan_not_opening" and "does not open with “How to Steal a Dragon's Sword”" in text
+    assert kind == "scan_not_opening" and "no page is a title page for “How to Steal a Dragon's Sword”" in text
     kind, text = scan_why(extra={"content": {
         "text_characters_examined": 400, "expected_signal": {"title_found": False, "title_near": True},
         "embedded_signal": {}}})
@@ -223,12 +223,12 @@ def test_the_scan_panel_shows_what_the_first_page_read_the_isbn_and_how_to_read_
     ocr = {"attempted": True, "pages": 3, "chars": 342, "error": "", "setAside": 0, "firstPage": "- + / rise"}
     kind, text = scan_why(file_title="Book to Do 1", file_author="Unknown", extra={"ocr": ocr})
     assert kind == "scan_not_opening" and "The first page reads: “- + / rise”." in text
-    assert "Only 3 pages were read" in text and "up to 6" in text and "ISBN" in text
+    assert "No ISBN could be read from the 3 pages read" in text and "up to 12" in text
     # With an ISBN found, the hint about reading further goes and the ISBN's owner is named.
     isbn = {"isbns": [owned], "expectedMatch": False,
             "otherOwners": [{"bookId": 2, "title": "Old Man's War", "author": "John Scalzi"}]}
     kind, text = scan_why(file_title="Book to Do 1", extra={"ocr": {**ocr, "pages": 6, "isbns": [owned]}, "isbn": isbn})
-    assert "belongs to “Old Man's War” by John Scalzi in Bindery, not to this book" in text and "Only" not in text
+    assert "belongs to “Old Man's War” by John Scalzi in Bindery, not to this book" in text and "No ISBN" not in text
     isbn["otherOwners"] = []
     kind, text = scan_why(extra={"ocr": {**ocr, "pages": 6, "isbns": [owned]}, "isbn": isbn})
     assert "is not one of this book's editions in Bindery" in text

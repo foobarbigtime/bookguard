@@ -188,8 +188,9 @@ def test_ocr_text_with_a_lost_space_still_finds_the_title_and_author():
 def test_a_misread_letter_is_near_but_never_found_or_strong():
     page = "HOW TO STEAL A DRAGON'S SWORD\nCRESSIDA COWELI"
     signal = _signal("How to Steal a Dragon's Sword", "Cressida Cowell", page)
-    assert signal["title_found"] and not signal["author_found"]
-    assert signal["author_near"] and signal["strong_identity"] is False
+    # No exact author credit means no title page, so neither counts as found; both are only "near".
+    assert not signal["title_found"] and not signal["author_found"]
+    assert signal["title_near"] and signal["author_near"] and signal["strong_identity"] is False
 
 
 def test_a_similar_title_is_never_evidence_for_the_expected_book():
@@ -547,23 +548,33 @@ UNLISTED_PAGES = [
 
 
 @pytest.mark.parametrize("promo", UNLISTED_PAGES)
-def test_a_page_after_the_first_can_never_make_a_scan_another_book(promo, scalzi_bindery):
-    """A sibling's scan opens with ITS title; whatever it prints later cannot say otherwise."""
-    pages = "\f".join(["ZOE'S TALE", promo, SIBLING_TITLE_PAGE])
+def test_a_page_after_the_title_page_can_never_make_a_scan_another_book(promo, scalzi_bindery):
+    """A sibling's scan is the book its title page names; whatever it prints later cannot say otherwise."""
+    pages = "\f".join(["ZOE'S TALE", SIBLING_TITLE_PAGE, promo])
     for metadata in ({"title": "The Last Colony", "author": "John Scalzi"}, {"title": "", "author": ""},
                      {"title": "Book to Do 1", "author": "Unknown"}):
         verdict, confidence, _ = _scan("The Last Colony", "John Scalzi", pages,
                                        file_title=metadata["title"], file_author=metadata["author"])
         assert verdict not in ("VERIFIED_CORRECT", "METADATA_ERROR"), (promo, metadata, verdict, confidence)
     # ...and a promotion for ANOTHER book of the author's cannot make the file that other book, nor
-    # send the genuine book to it (the second pass names a catalogue book only from an opening title).
+    # send the genuine book to it (the second pass names a catalogue book only from a title page).
     other = promo.replace("THE LAST COLONY", "OLD MAN'S WAR").replace("Last Colony", "Old Man's War")
     result = {"title": "Zoe's Tale", "author": "John Scalzi", "book_id": 1, "series": [], "isbn_evidence": {},
               "_ocr_text": True}
     verdict, _, evidence = classify_identity(
         result, {"title": "Old Man's War", "author": "John Scalzi"},
-        "\f".join(["ZOES TAL", other, SIBLING_TITLE_PAGE]), [], [], "")
+        "\f".join(["ZOES TAL", SIBLING_TITLE_PAGE, other]), [], [], "")
     assert verdict != "WRONG_CONTENT" and "actualBook" not in evidence
+
+
+def test_a_promotion_that_credits_the_author_before_the_title_page_cannot_verify_a_scan_alone():
+    """Accepted limit: the first page that credits the author is taken as the title page. A promotion
+    printed before the real one is rare, and a second source still has to agree."""
+    pages = "\f".join(["ZOE'S TALE", "COMING SOON\nTHE LAST COLONY\nJOHN SCALZI", SIBLING_TITLE_PAGE])
+    for metadata in ({"title": "", "author": ""}, {"title": "Book to Do 1", "author": "Unknown"}):
+        verdict, _, evidence = _scan("The Last Colony", "John Scalzi", pages,
+                                     file_title=metadata["title"], file_author=metadata["author"])
+        assert verdict == "INSUFFICIENT_EVIDENCE" and evidence["scanPage"] == {"readsAs": "expected"}
 
 
 def test_the_titles_must_open_the_scan_but_a_half_title_and_a_cover_both_do():
@@ -640,7 +651,7 @@ def test_the_title_and_author_must_be_found_together_for_90_as_well_as_99():
 def test_a_real_scan_with_an_unlisted_promotion_page_does_not_verify_a_sibling(tmp_path):
     for promo in (["COMING SOON", "THE LAST COLONY", "JOHN SCALZI"],
                   ["THE OLD MAN'S WAR SERIES", "by John Scalzi", "Old Man's War", "The Last Colony"]):
-        pdf = scan_pdf(tmp_path / "scan.pdf", [["ZOE'S TALE"], promo, ["ZOE'S TALE", "JOHN SCALZI", "A TOR BOOK"]],
+        pdf = scan_pdf(tmp_path / "scan.pdf", [["ZOE'S TALE"], ["ZOE'S TALE", "JOHN SCALZI", "A TOR BOOK"], promo],
                        metadata={"title": "The Last Colony", "author": "John Scalzi"})
         verdict, confidence, _ = _classify_scan(pdf, "The Last Colony", "John Scalzi")
         assert verdict not in {"VERIFIED_CORRECT", "METADATA_ERROR"}, (promo, verdict, confidence)
@@ -955,3 +966,75 @@ def test_a_printed_isbn_plus_the_files_own_matching_title_is_the_two_source_rule
     other = _isbn_result()([f"isbn:{OTHER_ISBN}"])
     assert classify_identity(other, {"title": "The Last Colony", "author": "John Scalzi"}, noise,
                              [f"isbn:{OTHER_ISBN}"], [], noise)[0] == "INSUFFICIENT_EVIDENCE"
+
+
+# --- the real "How to Steal a Dragon's Sword" scan: its title page is page 7 ------------------------------
+
+DRAGON_SCAN = "\f".join([
+    "- +\nrise",
+    "[Baad\nSARNING\nAmy. relakyorwshep bo\nang Wualereak fact\nWHATSOEVER 4\nov HAVE BEEN\nWARNED",
+    "ABOUT HICCUP\n\nHiccup Horrendous Haddock the Third was\nan awesome swordfighter, a dragon-whisperer,\n"
+    "and the greatest Viking Hero that ever lived.\nBut Hiccup\u2019s memoirs look back to when\n"
+    "he was a very ordinary boy, and finding\nit hard to be a Hero.",
+    "the Witch Excellmeor\nahd\nScary with <-",
+    "Ss athe;\ncork ss Hool; an",
+    "ag Tn\n(aE ohn Aten =\nStaves\nThis book is a work of fiction. Names, characters, places, me incicicmia aire the\n"
+    "ptexhict of the wihor\u2019s imagination or are t\nactual events, locales, or persons, li",
+    "How to Steala\nDragon\u2019s Sword\nThe Heroic Misadventures of\nHiccup the Viking\nas told to\nCressida Cowell\n"
+    "@\u00ae\u00a9\nLITTLE, BROWN AND COMPANY\nNew York Boston",
+    "A small plea to readers:\nPLEASE DO NOT BLAME THE STORY\nUp anti now Hrecup bas just been playing at adventure,",
+])
+
+
+@pytest.fixture
+def dragon_bindery(tmp_path, monkeypatch):
+    import sqlite3
+    path = tmp_path / "bindery.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT);
+            CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, excluded INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE book_files (id INTEGER PRIMARY KEY, book_id INTEGER, format TEXT, path TEXT, size_bytes INTEGER);
+            CREATE TABLE history (id INTEGER PRIMARY KEY, book_id INTEGER, event_type TEXT, source_title TEXT, data TEXT, created_at TEXT);
+            INSERT INTO authors VALUES (1, 'Cressida Cowell');
+            INSERT INTO books(id, title, author_id) VALUES (2570, 'How to Steal a Dragon''s Sword', 1);
+            INSERT INTO history(book_id, event_type, source_title) VALUES
+              (2570, 'bookImported', 'Cressida Cowell - [How to Train Your Dragon 09] - How to Steal a Dragons Sword (image pdf)');
+            """
+        )
+    monkeypatch.setattr(settings, "bindery_db", str(path))
+    return path
+
+
+def test_the_real_dragon_scan_is_verified_by_its_title_page_and_binderys_download_record(dragon_bindery):
+    result = {"title": "How to Steal a Dragon's Sword", "author": "Cressida Cowell", "book_id": 2570,
+              "series": [], "isbn_evidence": {}, "_ocr_text": True}
+    junk = {"title": "Book to Do 1", "author": "Unknown"}
+    verdict, confidence, evidence = classify_identity(result, junk, DRAGON_SCAN, [], [], DRAGON_SCAN)
+    assert (verdict, confidence) == ("VERIFIED_CORRECT", 90)
+    assert evidence["proof"]["sources"] == ["download name in Bindery's history", "the scan's title page"]
+    signal = evidence["content"]["expected_signal"]
+    assert signal["strong_identity"] is True and signal["title_found"] and signal["author_found"]
+
+
+def test_without_a_download_record_the_real_dragon_scan_stays_undecided_and_says_what_it_read(dragon_bindery):
+    import sqlite3
+    with sqlite3.connect(dragon_bindery) as conn:
+        conn.execute("DELETE FROM history")
+    result = {"title": "How to Steal a Dragon's Sword", "author": "Cressida Cowell", "book_id": 2570,
+              "series": [], "isbn_evidence": {}, "_ocr_text": True}
+    verdict, _, evidence = classify_identity(result, {"title": "Book to Do 1", "author": "Unknown"},
+                                             DRAGON_SCAN, [], [], DRAGON_SCAN)
+    assert verdict == "INSUFFICIENT_EVIDENCE" and evidence["scanPage"] == {"readsAs": "expected"}
+
+
+@NEEDS_TOOLS
+def test_a_real_scan_whose_title_page_is_page_seven_is_read_with_the_default_pages(tmp_path):
+    assert settings.verification_ocr_pages >= 8
+    noise = [["WARNING", "THIS BOOK CONTAINS", "DRAGONS"]] * 6
+    title_page = ["HOW TO STEAL A", "DRAGON'S SWORD", "The Heroic Misadventures of", "as told to", "CRESSIDA COWELL"]
+    pdf = scan_pdf(tmp_path / "scan.pdf", [*noise, title_page], metadata={"title": "Book to Do 1", "author": "Unknown"})
+    verdict, _, evidence = _classify_scan(pdf, "How to Steal a Dragon's Sword", "Cressida Cowell")
+    assert evidence["content"]["expected_signal"]["strong_identity"] is True
+    assert verdict == "INSUFFICIENT_EVIDENCE" and evidence["scanPage"] == {"readsAs": "expected"}   # one source

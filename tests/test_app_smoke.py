@@ -170,7 +170,7 @@ def test_settings_clamp_and_lists():
     assert cfg.repair_audio_genre_value == "Audiobook"
     assert cfg.verification_enabled is True
     assert cfg.verification_ocr is False
-    assert cfg.verification_ocr_pages == 6
+    assert cfg.verification_ocr_pages == 12
     assert cfg.verification_file_signatures is False
     assert cfg.verification_archive_safety is False
     assert cfg.verification_epub_structure is False
