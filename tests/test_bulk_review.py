@@ -17,6 +17,7 @@ def plan(monkeypatch):
     monkeypatch.setattr(settings, "allow_actions", True)
     monkeypatch.setattr(settings, "metadata_repair_mode", "safe")
     monkeypatch.setattr(bulk_review, "result_by_id", lambda rid: {"id": rid, "book_id": rid, "format": "ebook", "stored_path": f"/p/{rid}"})
+    monkeypatch.setattr(bulk_review, "associations_inside_path", lambda path: [{"file_id": 1}])
     monkeypatch.setattr(bulk_review, "latest_verifications", lambda ids: {rid: {"verdict": "X"} for rid in ids if rid != 3})
     return monkeypatch
 
@@ -74,16 +75,42 @@ def test_metadata_shows_before_and_after(plan):
     assert result["books"][0]["detail"] == "Wrong / X → Right / Y"
 
 
-def test_wrong_skips_books_with_another_copy_and_mixed_audio(plan):
-    plan.setattr(bulk_review, "open_review_items",
-                 lambda: [item(1, "wrong"), item(2, "wrong"), item(5, "wrong", mixed=True)])
+def test_wrong_skips_books_with_another_copy(plan):
+    plan.setattr(bulk_review, "open_review_items", lambda: [item(1, "wrong"), item(2, "wrong")])
     plan.setattr(bulk_review, "bindery_files_for_book",
                  lambda book, fmt: [{"stored_path": "/other"}] if book == 2 else [{"stored_path": f"/p/{book}"}])
     plan.setattr(bulk_review, "triage_action_preview", lambda row, action: {"safe": True})
     result = bulk_review.bulk_preview("wrong")
-    assert [b["id"] for b in result["books"]] == [1, 2]  # mixed-audio folder excluded
     assert [b["eligible"] for b in result["books"]] == [True, False]
     assert result["books"][1]["blockers"] == "binderyHasAnotherCopy"
+
+
+def test_wrong_includes_mixed_audio_folders_and_says_the_whole_folder_goes(plan):
+    plan.setattr(bulk_review, "open_review_items", lambda: [item(1, "wrong"), item(5, "wrong", mixed=True)])
+    plan.setattr(bulk_review, "bindery_files_for_book", lambda book, fmt: [{"stored_path": f"/p/{book}"}])
+    plan.setattr(bulk_review, "triage_action_preview", lambda row, action: {"safe": True})
+    result = bulk_review.bulk_preview("wrong")
+    by_id = {b["id"]: b for b in result["books"]}
+    assert set(by_id) == {1, 5} and by_id[5]["eligible"]
+    assert "whole folder" in by_id[5]["detail"] and "cannot be put back" in by_id[5]["detail"]
+    assert "whole folder" not in by_id[1]["detail"]
+
+
+def test_mixed_audio_stays_out_of_move_and_metadata_fixes(plan):
+    plan.setattr(bulk_review, "open_review_items",
+                 lambda: [item(1, "move"), item(5, "move", mixed=True), item(6, "metadata", mixed=True)])
+    plan.setattr(bulk_review, "move_preview", lambda row, verification, client: {"eligible": True, "blockers": [], "targetTitle": "T"})
+    assert [b["id"] for b in bulk_review.bulk_preview("move", client=object())["books"]] == [1]
+    assert bulk_review.bulk_preview("metadata")["books"] == []
+
+
+def test_wrong_refuses_a_folder_that_holds_another_books_files(plan):
+    plan.setattr(bulk_review, "open_review_items", lambda: [item(5, "wrong", mixed=True)])
+    plan.setattr(bulk_review, "bindery_files_for_book", lambda book, fmt: [{"stored_path": f"/p/{book}"}])
+    plan.setattr(bulk_review, "associations_inside_path", lambda path: [{"file_id": 1}, {"file_id": 2}])
+    plan.setattr(bulk_review, "triage_action_preview", lambda row, action: {"safe": True})
+    book = bulk_review.bulk_preview("wrong")["books"][0]
+    assert (book["eligible"], book["blockers"]) == (False, "binderyTracksOtherBooksInside")
 
 
 def test_actions_disabled_blocks_replace(plan):

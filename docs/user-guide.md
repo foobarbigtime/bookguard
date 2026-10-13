@@ -55,7 +55,7 @@ is a reason to gather more evidence, not proof that the file is unsafe.
 | Move to correct book | Ask Bindery to move a proven misfiled ebook to the identified book; this does not download a new file |
 | Show recordings | For a folder holding several works, list each work, how many files it has, and which Bindery book it matches. Read-only: it changes nothing, and splitting is not available yet |
 | Quarantine | Move the file out of the library and remove its Bindery association after the action's checks |
-| Replace | Quarantine the wrong file, then ask Bindery to search for a replacement; follow-up problems remain visible in Activity |
+| Replace | Quarantine the wrong file, then ask Bindery to search for a replacement; follow-up problems remain visible in Activity. On a mixed audiobook folder flagged as the wrong book, the whole folder is quarantined, including any good copy of the right book; Put back does not work on folders, so getting it back means moving it out of the quarantine folder yourself |
 | Detach from Bindery | Remove the exact association and leave the physical file in place |
 
 An unavailable action may need a deployment setting or writable alias, not just
@@ -76,6 +76,9 @@ recorded paths and hashes cannot be put back this way.
 
 Put back is not a general undo for every automatic quarantine, cleanup, or
 replacement workflow. The action appears only when that record is eligible.
+It works on single files only. A quarantined folder (an audiobook) is never
+deleted and stays untouched in the quarantine folder, but BookGuard cannot put
+it back: move it out of the quarantine folder yourself if you need it.
 
 ## Specialized reviews
 
