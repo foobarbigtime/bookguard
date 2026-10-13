@@ -17,7 +17,7 @@ from .actions import ActionError, resolve_bindery_api_key
 from .bindery_client import BinderyClient
 from .catalogue_move import move_preview
 from .config import settings
-from .db import bindery_files_for_book, result_by_id
+from .db import associations_inside_path, bindery_files_for_book, result_by_id
 from .library_review import latest_verifications, open_review_items
 from .triage import triage_action_preview
 from .verifier import verified_repair_preview
@@ -71,6 +71,12 @@ def _wrong(row: dict, verification: dict, client: BinderyClient) -> tuple[bool, 
     if others:
         return False, "binderyHasAnotherCopy", ""
     try:
+        inside = associations_inside_path(str(row["stored_path"]))
+    except Exception:
+        return False, "binderyDatabaseUnreadable", ""
+    if len(inside) != 1:  # the same guard quarantine applies: never take another book's folder along
+        return False, "binderyTracksOtherBooksInside", ""
+    try:
         preview = triage_action_preview(row, "quarantine")
     except ActionError as exc:
         return False, str(exc), ""
@@ -90,8 +96,11 @@ def bulk_preview(group: str, client: BinderyClient | None = None) -> dict[str, A
     """Which open books in ``group`` can be fixed now, and why the rest cannot."""
     if group not in BULK_ACTIONS:
         raise ValueError("Bulk fixes are available for: " + ", ".join(sorted(BULK_ACTIONS)) + ".")
+    # A mixed audiobook folder is never moved or re-labelled as a whole, but a "wrong book"
+    # verdict on it can be Replaced: the folder is quarantined (Put back restores it) and
+    # Bindery searches for a clean copy.
     items = [item for item in open_review_items()
-             if item["group"] == group and not item["mixedAudio"]]
+             if item["group"] == group and (group == "wrong" or not item["mixedAudio"])]
     verifications = latest_verifications([item["id"] for item in items])
     if client is None and items and group == "move":
         client = BinderyClient(api_key=resolve_bindery_api_key())
@@ -107,6 +116,9 @@ def bulk_preview(group: str, client: BinderyClient | None = None) -> dict[str, A
                 ok, why, detail = check(row, verification, client)
             except Exception as exc:  # one bad book must not hide the others
                 ok, why, detail = False, f"previewFailed: {exc}"[:200], ""
+        if ok and group == "wrong" and item["mixedAudio"]:
+            detail = ("The whole folder (it holds other books too) goes to quarantine, "
+                      "then Bindery searches for a clean copy.")
         books.append({"id": item["id"], "title": item["title"], "author": item["author"],
                       "eligible": ok, "blockers": why, "detail": detail})
     action = BULK_ACTIONS[group]
