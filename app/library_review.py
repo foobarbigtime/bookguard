@@ -296,6 +296,9 @@ def _why_undecided(evidence: dict, suffix: str = "", fmt: str = "ebook") -> tupl
                             else f"title and author and found {count}, too many to pick one safely."))
     return kind, " ".join(parts)
 
+MAX_OCR_PAGES = 6
+
+
 def _why_scan(evidence: dict, who: dict, ocr: dict, placeholder: bool) -> tuple[str, str]:
     """Why a scan (a PDF whose text is OCR of its first pages) is undecided."""
     pages, aside = int(ocr.get("pages") or 0), int(ocr.get("setAside") or 0)
@@ -315,12 +318,28 @@ def _why_scan(evidence: dict, who: dict, ocr: dict, placeholder: bool) -> tuple[
             record = "Bindery has no download record for this book"
         else:
             record = "Bindery's download record does not name this exact title and author"
+        isbn_note = (" No ISBN was found in the pages read." if not (ocr.get("isbns")) else
+                     " The ISBN printed in it is not one of this book's editions in Bindery.")
         return "scan_page_only", (
             f"{read}. The first page reads as “{title}”{by}, which is this book, but a scan's first page is "
             f"only one source (a cover can name other books) and nothing else confirms it: the file's own "
-            f"details {details}, and {record}. An ISBN, or a download record, would settle it.")
+            f"details {details}, and {record}.{isbn_note}")
     signal = (evidence.get("content") or {}).get("expected_signal") or {}
     reason = f"{read}, but it does not open with “{title}”{by}: a scan is matched only by a first page that shows the title and the author together."
+    if ocr.get("firstPage"):
+        reason += f" The first page reads: “{ocr['firstPage']}”."
+    isbn = evidence.get("isbn") or {}
+    if isbn.get("isbns"):
+        owners = isbn.get("otherOwners") or []
+        shown = ", ".join(isbn["isbns"][:2])
+        if owners:
+            reason += (f" An ISBN printed in it ({shown}) belongs to “{owners[0].get('title')}”"
+                       f"{_by(owners[0].get('author'))} in Bindery, not to this book.")
+        else:
+            reason += f" An ISBN is printed in it ({shown}), but it is not one of this book's editions in Bindery."
+    elif pages < MAX_OCR_PAGES:
+        reason += (f" Only {pages} page{'s' if pages != 1 else ''} were read: “OCR pages read” in Settings "
+                   f"(up to {MAX_OCR_PAGES}) can reach the title page and the copyright page, where an ISBN is printed.")
     if signal.get("title_near") and not signal.get("title_found"):
         reason += " A passage close to the title does appear, which may be an OCR misreading of it."
     elif signal.get("title_found") and not signal.get("author_found"):

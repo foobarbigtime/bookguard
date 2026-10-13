@@ -13,7 +13,7 @@ from .identity_search import SECOND_PASS_VERSION
 from .audiobook_evidence import build_audiobook_evidence
 from .catalogue_relationship import classify_relationship, latest_ebook_scan_status
 from .config import settings
-from .verification_constants import OCR_ONLY_BELOW_CHARS
+from .verification_constants import OCR_ONLY_BELOW_CHARS, OCR_VERSION
 from .db import (
     create_metadata_repair,
     finish_metadata_repair,
@@ -228,7 +228,12 @@ def predates_ocr(item: dict) -> bool:
     content = evidence.get("content") or {}
     if not settings.verification_ocr or "text_characters_examined" not in content:
         return False
-    if evidence.get("ocr") or int(content.get("text_characters_examined") or 0) >= OCR_ONLY_BELOW_CHARS:
+    ocr = evidence.get("ocr")
+    if ocr:
+        # Read by an older version of the reader (fewer pages, no ISBN): once more, if still undecided.
+        return (str(item.get("verdict") or "") == "INSUFFICIENT_EVIDENCE"
+                and int(ocr.get("version") or 1) < OCR_VERSION and not ocr.get("error"))
+    if int(content.get("text_characters_examined") or 0) >= OCR_ONLY_BELOW_CHARS:
         return False
     return str(item.get("source") or "").startswith("native-pdf")
 

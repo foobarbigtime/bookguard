@@ -333,8 +333,23 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
             "notABook": [release.raw for release in releases if release.kind == "music"][:3],
         }
 
-    if scan and expected_signal.get("strong_identity") and releases and not (
-            embedded_signal.get("strong_identity") and not soft_title_match(title, file_title, series)):
+    printed_isbn_is_this_book = bool((evidence.get("isbn") or {}).get("expectedMatch"))
+    contradicted = bool(embedded_signal.get("strong_identity")) and not soft_title_match(title, file_title, series)
+    if scan and printed_isbn_is_this_book and not contradicted:
+        # An ISBN printed in the scan is content evidence of which edition it is. With the page itself, or
+        # Bindery's own download record for this book, agreeing, that is two independent sources.
+        isbn_source = "the ISBN printed in the scan is one of this book's editions in Bindery"
+        if expected_signal.get("strong_identity"):
+            proof = {"sources": [isbn_source, "the scan's title page"], "release": "", "coreTitle": ""}
+        else:
+            proof = scan_provenance_proof(expected, releases, author_match_level, other_source=isbn_source)
+        tried.append({"check": "scanIsbn", "agreed": bool(proof)})
+        if proof:
+            evidence["proof"] = proof
+            evidence["explanation"] = "Two independent sources name the same book: " + "; ".join(proof["sources"]) + "."
+            return "VERIFIED_CORRECT", ISBN_CONFIDENCE
+
+    if scan and expected_signal.get("strong_identity") and releases and not contradicted:
         proof = scan_provenance_proof(expected, releases, author_match_level)
         tried.append({"check": "scanProvenance", "releases": len(releases), "agreed": bool(proof)})
         if proof:
