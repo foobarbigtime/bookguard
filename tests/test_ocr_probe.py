@@ -421,20 +421,20 @@ def test_the_download_name_plus_the_authors_name_alone_does_not_prove_a_scan(sca
     assert (verdict, confidence) == ("VERIFIED_CORRECT", 99)
 
 
-def scan_pdf(path, pages, *, metadata=None):
+def scan_pdf(path, pages, *, metadata=None, size=54, gap=100, top=300):
     """A multi-page image-only PDF: each page is a list of lines drawn as pixels."""
     pil = pytest.importorskip("PIL.Image")
     draw_module = pytest.importorskip("PIL.ImageDraw")
     font_module = pytest.importorskip("PIL.ImageFont")
-    font = font_module.load_default(size=54)
+    font = font_module.load_default(size=size)
     images = []
     for lines in pages:
         image = pil.new("L", (1275, 1650), 255)
         draw = draw_module.Draw(image)
-        y = 300
+        y = top
         for line in lines:
             draw.text((120, y), line, fill=0, font=font)
-            y += 100
+            y += gap
         images.append(image)
     images[0].save(path, "PDF", resolution=150, save_all=True, append_images=images[1:], **(metadata or {}))
     return path
@@ -512,3 +512,201 @@ def test_a_misread_name_is_found_wherever_it_sits_in_a_long_page():
         page = "lorem ipsum dolor sit amet " * (150 + pad) + "HOW TO STEAL A DRAGONS SW0RD" + " consectetur" * 200
         squashed = engine._Squashed(page)
         assert engine._ocr_near_pos("howtostealadragonssword", squashed, engine.OCR_MIN_NEAR) >= 0, pad
+
+
+# --- the third review: pages no heading list can name ----------------------------------------------
+
+SIBLING_TITLE_PAGE = "ZOE'S TALE\nJOHN SCALZI\nA TOR BOOK"
+UNLISTED_PAGES = [
+    "COMING SOON\nTHE LAST COLONY\nJOHN SCALZI",
+    "DON'T MISS\nTHE LAST COLONY\nBY JOHN SCALZI",
+    "THE OLD MAN'S WAR SERIES\nby John Scalzi\nOld Man's War\nThe Ghost Brigades\nThe Last Colony",
+    "JOHN SCALZI\n\nOld Man's War\nThe Ghost Brigades\nThe Last Colony\nZoe's Tale",      # an author-name heading
+    "JOHN SCALZI\nNOVELS\nOld Man's War\nThe Ghost Brigades\nThe Last Colony",
+    "CONTENTS\nTHE LAST COLONY\nZOE'S TALE",
+    "BOOK THREE\nTHE LAST COLONY\nJOHN SCALZI",
+    "JOHN SCALZI\nTHE LAST COLONY\n3",                                                     # a running header
+    "For John Scalzi\nTHE LAST COLONY",                                                    # a dedication
+    "From the bestselling author of\nTHE LAST COLONY\ncomes a new adventure from\nJOHN SCALZI",
+    "JOHN SCALZI (CONTINUED)\nTHE LAST COLONY\nZOE'S TALE",
+    "CRITICAL ACCLAIM FOR\nJOHN SCALZI\nTHE LAST COLONY",
+    "REVIEWS\nTHE LAST COLONY\nJOHN SCALZI",
+    "NEXT IN THE SERIES\nTHE LAST COLONY\nJOHN SCALZI",
+    "READ MORE\nTHE LAST COLONY\nJOHN SCALZI",
+    "A companion to\nTHE LAST COLONY\nJOHN SCALZI",
+]
+
+
+@pytest.mark.parametrize("promo", UNLISTED_PAGES)
+def test_a_page_after_the_first_can_never_make_a_scan_another_book(promo, scalzi_bindery):
+    """A sibling's scan opens with ITS title; whatever it prints later cannot say otherwise."""
+    pages = "\f".join(["ZOE'S TALE", promo, SIBLING_TITLE_PAGE])
+    for metadata in ({"title": "The Last Colony", "author": "John Scalzi"}, {"title": "", "author": ""},
+                     {"title": "Book to Do 1", "author": "Unknown"}):
+        verdict, confidence, _ = _scan("The Last Colony", "John Scalzi", pages,
+                                       file_title=metadata["title"], file_author=metadata["author"])
+        assert verdict not in ("VERIFIED_CORRECT", "METADATA_ERROR"), (promo, metadata, verdict, confidence)
+    # ...and a promotion for ANOTHER book of the author's cannot make the file that other book, nor
+    # send the genuine book to it (the second pass names a catalogue book only from an opening title).
+    other = promo.replace("THE LAST COLONY", "OLD MAN'S WAR").replace("Last Colony", "Old Man's War")
+    result = {"title": "Zoe's Tale", "author": "John Scalzi", "book_id": 1, "series": [], "isbn_evidence": {},
+              "_ocr_text": True}
+    verdict, _, evidence = classify_identity(
+        result, {"title": "Old Man's War", "author": "John Scalzi"},
+        "\f".join(["ZOES TAL", other, SIBLING_TITLE_PAGE]), [], [], "")
+    assert verdict != "WRONG_CONTENT" and "actualBook" not in evidence
+
+
+def test_the_titles_must_open_the_scan_but_a_half_title_and_a_cover_both_do():
+    assert _signal("The Last Colony", "John Scalzi", "THE LAST COLONY\fTHE LAST COLONY\nJOHN SCALZI\nA TOR BOOK")["strong_identity"]
+    assert _signal("The Last Colony", "John Scalzi", "#1 NEW YORK TIMES BESTSELLER\nTHE LAST COLONY\nJOHN SCALZI")["strong_identity"]
+    # a first page whose lines run on long enough pushes the title out of the opening
+    filler = "\n".join(f"A LINE OF TEXT NUMBER {n}" for n in range(12))
+    assert _signal("The Last Colony", "John Scalzi", filler + "\nTHE LAST COLONY\nJOHN SCALZI")["title_found"] is False
+
+
+@pytest.mark.parametrize("heading", [
+    "ALSOBY JOHNSCALZI", "A L S O  B Y", "ALSO\nBY\nJOHN SCALZI", "FROM THE SAME AUTHOR", "MORE BY JOHN SCALZI",
+    "MORE FROM JOHN SCALZI", "ALSO FROM JOHN SCALZI", "ALSO IN THIS SERIES", "ACCLAIM FOR JOHN SCALZI",
+    "AL5O BY JOHN SCALZI", "3 ALSO BY JOHN SCALZI", "OTHER\nBOOKS BY JOHN SCALZI",
+])
+def test_headings_read_as_ocr_actually_reads_them_still_set_the_page_aside(heading):
+    from app.scan_text import without_book_lists
+    text, affected = without_book_lists(f"{heading}\nOld Man's War\nThe Last Colony")
+    assert affected == 1 and "Last Colony" not in text
+
+
+@pytest.mark.parametrize("line", [
+    "THE LAST COLONY\nA Novel by John Scalzi", "THE LAST COLONY\nA NOVEL BY\nJOHN SCALZI",
+    "BOOK 3 IN THE OLD MAN'S WAR SERIES\nTHE LAST COLONY\nJOHN SCALZI", "LOOK FOR ME\nJOHN SCALZI",
+    "ALSO KNOWN AS\nJOHN SCALZI", "THE LAST COLONY\nJOHN SCALZI\nA TOR BOOK",
+])
+def test_real_title_page_lines_are_not_mistaken_for_list_headings(line):
+    from app.scan_text import without_book_lists
+    assert without_book_lists(line) == (line, 0)
+
+
+@pytest.mark.parametrize("title, author, page", [
+    ("Love", "Erich Segal", "LOVE STORY\nERICH SEGAL"),
+    ("Taken", "Benedict Jacka", "TAKEN BY STORM\nBENEDICT JACKA"),
+    ("Twilight", "Stephenie Meyer", "THE TWILIGHT SAGA\nECLIPSE\nSTEPHENIE MEYER"),
+    ("Fairy", "Stephen King", "FAIRY TALE\nSTEPHEN KING"),
+    ("The Last Colony", "John Scalzi", "THE LAST COLONY by Eoin Colfer\nJOHN SCALZI"),
+])
+def test_a_longer_title_is_not_the_assigned_one_whatever_follows_it(title, author, page):
+    assert _signal(title, author, page)["title_found"] is False
+    assert _scan(title, author, page, file_title=title, file_author=author)[0] != "VERIFIED_CORRECT"
+
+
+@pytest.mark.parametrize("credit", [
+    "Foreword by John Scalzi", "Translated by John Scalzi", "JOHN SCALZI JR.", "JOHN SCALZI-SMITH",
+    "With an introduction by John Scalzi", '"A thrilling ride" - John Scalzi', "A Study Guide for John Scalzi",
+])
+def test_the_author_is_credited_as_the_author_not_named_in_some_other_role(credit):
+    page = f"THE LAST COLONY\nEOIN COLFER\n{credit}"
+    assert _signal("The Last Colony", "John Scalzi", page)["author_found"] is False
+    assert _scan("The Last Colony", "John Scalzi", page, file_title="The Last Colony",
+                 file_author="John Scalzi")[0] != "VERIFIED_CORRECT"
+
+
+def test_co_authors_and_configured_aliases_are_credited_like_the_authors_themselves():
+    assert _signal("Good Omens", "Neil Gaiman; Terry Pratchett", "GOOD OMENS\nTERRY PRATCHETT")["strong_identity"]
+    assert _signal("Good Omens", "Neil Gaiman; Terry Pratchett", "GOOD OMENS\nNEIL GAIMAN AND TERRY PRATCHETT")["strong_identity"]
+    # the default alias list says Robert Galbraith is J.K. Rowling
+    assert _signal("The Cuckoo's Calling", "J.K. Rowling", "THE CUCKOO'S CALLING\nROBERT GALBRAITH")["strong_identity"]
+    assert _scan("The Cuckoo's Calling", "J.K. Rowling", "THE CUCKOO'S CALLING\nROBERT GALBRAITH",
+                 file_title="The Cuckoo's Calling", file_author="J.K. Rowling")[:2] == ("VERIFIED_CORRECT", 99)
+
+
+def test_the_title_and_author_must_be_found_together_for_90_as_well_as_99():
+    """A contents entry or series header on a later page plus the author elsewhere is not a title page."""
+    for pages in ("ZOE'S TALE\nJOHN SCALZI\fCONTENTS\nTHE LAST COLONY\nZOE'S TALE\fx",
+                  "ZOE'S TALE\fBOOK THREE\nTHE LAST COLONY\fZOE'S TALE\nJOHN SCALZI\nA TOR BOOK"):
+        verdict, _, _ = _scan("The Last Colony", "John Scalzi", pages,
+                              file_title="The Last Colony", file_author="John Scalzi")
+        assert verdict != "VERIFIED_CORRECT", pages
+
+
+@NEEDS_TOOLS
+def test_a_real_scan_with_an_unlisted_promotion_page_does_not_verify_a_sibling(tmp_path):
+    for promo in (["COMING SOON", "THE LAST COLONY", "JOHN SCALZI"],
+                  ["THE OLD MAN'S WAR SERIES", "by John Scalzi", "Old Man's War", "The Last Colony"]):
+        pdf = scan_pdf(tmp_path / "scan.pdf", [["ZOE'S TALE"], promo, ["ZOE'S TALE", "JOHN SCALZI", "A TOR BOOK"]],
+                       metadata={"title": "The Last Colony", "author": "John Scalzi"})
+        verdict, confidence, _ = _classify_scan(pdf, "The Last Colony", "John Scalzi")
+        assert verdict not in {"VERIFIED_CORRECT", "METADATA_ERROR"}, (promo, verdict, confidence)
+
+
+# --- extraction, the unmatched check and the OCR reader ------------------------------------------
+
+def test_a_short_real_text_layer_is_kept_not_replaced_by_ocr(monkeypatch, tmp_path):
+    pdf = tmp_path / "book.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    calls = []
+    monkeypatch.setattr(ocr_probe, "ocr_pdf_front", lambda path: calls.append(path) or {"text": "OCR", "pages": 1})
+    monkeypatch.setattr(ebook_extraction.pdf_probe, "extract_pdf_text",
+                        lambda path, **kw: {"title": "", "author": "", "text": "THE LAST COLONY\nJOHN SCALZI",
+                                            "front_text": "THE LAST COLONY\nJOHN SCALZI"})
+    extracted = ebook_extraction.extract_ebook_identity(str(pdf))
+    assert not calls and extracted.source == "native-pdf" and extracted.text.startswith("THE LAST COLONY")
+    # The re-look rule agrees: a PDF with that much text was never waiting for OCR.
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    assert not predates_ocr({"source": "native-pdf", "verdict": "VERIFIED_CORRECT",
+                             "evidence": {"content": {"text_characters_examined": 29}}})
+    assert predates_ocr({"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+                         "evidence": {"content": {"text_characters_examined": 0}}})
+
+
+def _unmatched_stubs(monkeypatch, tmp_path, source):
+    from types import SimpleNamespace
+    from app import unmatched
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n" + b"x" * 5000)
+    prose = "The Last Colony by John Scalzi. " + "A line of ordinary prose about colonists. " * 200
+    monkeypatch.setattr(unmatched, "inspect_ebook_security", lambda *a, **k: {"failures": [], "checks": {}, "inconclusive": False})
+    monkeypatch.setattr(unmatched, "_drm_locked", lambda path: False)
+    pages = []
+    monkeypatch.setattr(unmatched, "_picture_pages", lambda path: pages.append(path) or 1)
+    monkeypatch.setattr(unmatched, "extract_ebook_identity", lambda path: SimpleNamespace(
+        text=prose, front_text=prose, source=source, metadata={}, identifiers=[]))
+    return unmatched, pdf, pages
+
+
+def test_the_unmatched_check_does_not_read_ocr_text_as_a_title_page_or_a_books_length(monkeypatch, tmp_path):
+    """That check matches loosely (a title phrase and a surname anywhere), which is only safe on real text."""
+    unmatched, pdf, pages = _unmatched_stubs(monkeypatch, tmp_path, "native-pdf+ocr")
+    facts = unmatched._ebook_facts(pdf, [])
+    assert facts["front"] == "" and pages           # a scan is judged as before OCR existed: by its pictures
+    unmatched, pdf, pages = _unmatched_stubs(monkeypatch, tmp_path, "native-pdf")
+    facts = unmatched._ebook_facts(pdf, [])
+    assert "last colony" in facts["front"] and not pages
+
+
+@NEEDS_TOOLS
+def test_praise_or_a_list_on_the_first_page_does_not_stop_the_reader_before_the_title_page(tmp_path):
+    filler = ["Reviewers agree that this is a remarkable and thoroughly enjoyable novel indeed."] * 44
+    pdf = scan_pdf(tmp_path / "scan.pdf", [["PRAISE FOR JOHN SCALZI", *filler], ["THE LAST COLONY", "JOHN SCALZI"],
+                                           ["Copyright 2007"]],
+                   metadata={"title": "The Last Colony", "author": "John Scalzi"}, size=18, gap=33, top=40)
+    found = ocr_probe.ocr_pdf_front(pdf)
+    assert found["setAside"] >= 1 and "COLONY" in found["text"].upper()
+    assert _classify_scan(pdf, "The Last Colony", "John Scalzi")[:2] == ("VERIFIED_CORRECT", 99)
+
+
+def test_pages_are_rendered_at_a_bounded_size_whatever_the_page_size(monkeypatch, tmp_path):
+    pdf = tmp_path / "book.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    seen = []
+
+    def fake(command, **kwargs):
+        seen.append(command)
+        raise OSError("stop")
+
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(ocr_probe.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(ocr_probe, "_preflight", lambda path: None)
+    monkeypatch.setattr(ocr_probe, "run_bounded_process", fake)
+    ocr_probe.ocr_pdf_front(pdf)
+    command = seen[0]
+    assert "-scale-to" in command and command[command.index("-scale-to") + 1] == str(ocr_probe.RENDER_MAX_PIXELS)
+    assert "-r" not in command          # an absolute size, not a resolution: a huge page cannot cost more

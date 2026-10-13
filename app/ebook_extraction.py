@@ -13,7 +13,7 @@ from .file_safety import read_file_prefix
 from .metadata import ebook_metadata
 from .mobi_text import read_mobi_text
 from . import ocr_probe, pdf_probe
-from .verification_constants import FRONT_TEXT_CHARS, MIN_USEFUL_TEXT
+from .verification_constants import FRONT_TEXT_CHARS, MAX_METADATA_CHARS, OCR_ONLY_BELOW_CHARS
 
 
 @dataclass(frozen=True)
@@ -142,9 +142,11 @@ def extract_pdf_identity(path: str) -> tuple[dict, str, list[str], str]:
     if payload.get("error"):
         raise ValueError(str(payload["error"]))
 
+    # A PDF's own title and author can be any length (megabytes slow every matcher down): no real
+    # title or credit line is longer than this.
     metadata = {
-        "title": str(payload.get("title") or "").strip(),
-        "author": str(payload.get("author") or "").strip(),
+        "title": str(payload.get("title") or "").strip()[:MAX_METADATA_CHARS],
+        "author": str(payload.get("author") or "").strip()[:MAX_METADATA_CHARS],
         "source": "pdf",
     }
     text = str(payload.get("text") or "")[: settings.verification_max_text_chars]
@@ -203,7 +205,7 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
         notes.append(f"Native extraction error: {str(exc)[:300]}")
 
     ocr: dict | None = None
-    if suffix == ".pdf" and len(text.strip()) < MIN_USEFUL_TEXT and settings.verification_ocr:
+    if suffix == ".pdf" and len(text.strip()) < OCR_ONLY_BELOW_CHARS and settings.verification_ocr:
         # A scan has no text layer: read the first pages as images so the title page can be checked.
         found = ocr_probe.ocr_pdf_front(path)
         ocr = {"attempted": True, "pages": int(found.get("pages") or 0), "chars": len(found.get("text") or ""),

@@ -431,7 +431,10 @@ def _ebook_facts(path: Path, evidence: list) -> dict:
         _check(evidence, "Text", "fail", f"No readable text: {exc}")
         facts["junk"] = facts["junk"] or "BookGuard could not read any text from it."
         return facts
-    words = _words(identity.text)
+    # Text that came from OCR of a scan's first pages is neither the book's length nor a title page: this
+    # check matches loosely (a title phrase and a surname anywhere), which is only safe on real text.
+    ocr_read = str(identity.source).endswith("+ocr")
+    words = 0 if ocr_read else _words(identity.text)
     pages = _picture_pages(path) if words < MIN_BOOK_WORDS else None
     if pages is not None:  # comics and scanned PDFs are pictures, not prose
         if pages < MIN_PICTURE_PAGES:
@@ -454,7 +457,7 @@ def _ebook_facts(path: Path, evidence: list) -> dict:
     metadata = identity.metadata or {}
     if metadata.get("title"):
         facts["identities"].append(("Embedded metadata", metadata.get("title"), metadata.get("author") or ""))
-    facts["front"] = _norm((identity.front_text or identity.text or "")[:6000])
+    facts["front"] = "" if ocr_read else _norm((identity.front_text or identity.text or "")[:6000])
     facts["isbns"] = file_isbns(identity.identifiers)
     return facts
 

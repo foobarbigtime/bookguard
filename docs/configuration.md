@@ -100,15 +100,20 @@ and its temporary images are removed immediately.
 | `BOOKGUARD_VERIFICATION_OCR_PAGES` | `3` | How many pages from the front to read (1-6). |
 | `BOOKGUARD_VERIFICATION_OCR_LANGUAGES` | `eng` | Tesseract languages, e.g. `eng+nld`. The matching `tesseract-ocr-<lang>` package must be in the image. |
 
-OCR can misread a name, so a scan is held to a stricter rule than a text layer. A scan counts as the
-assigned book only when its title and its author are both on the same page, close together, and the
-title fills its own line (or lines) as it does on a title page: "Dune" is not "Dune Messiah", and
-"It" is not the word "it" in a paragraph. Lost spaces and punctuation are tolerated; a misread letter
-("The Lost Colony" for "The Last Colony") is never evidence for a book, it only stops BookGuard
-rejecting or rewriting a book that OCR may have misread. Pages that list other books ("Also by ...",
-"Other books", "Praise for", "About the author") are set aside, from the heading to the end of the page,
-because they name other titles beside the author's name. A scan can therefore end up undecided, but
-cannot be confirmed by a list, by the author alone, or by a title that belongs to a different book.
-One limit remains: a title printed over several lines ("DUNE" above "MESSIAH") cannot be told from a
-short title followed by a subtitle without more information, so such a scan should be checked by hand
-or by an ISBN. The image adds about 100 MB for Poppler and Tesseract.
+OCR can misread a name, so a scan is held to a stricter rule than a text layer. A scan is the book whose
+title it **opens** with: the assigned title must be among the first lines of the first page that has
+text (a cover, half-title or title page), printed on its own line(s) - "Dune" is not "Dune Messiah",
+"Love" is not "Love Story", "It" is not the word in a paragraph - and the author must be credited on a
+line of their own ("by John Scalzi", "A Novel by ..."), on the same page as the title and close to it.
+A foreword, a blurb, "Jr." or a translator is not the author. A promotion, contents page, series header,
+dedication or running header further in cannot make a scan another book, however it is worded. Pages
+that list other books ("Also by ...", "Other books", "Praise for", "About the author") are also set
+aside, from the heading to the end of the page. A misread letter ("The Lost Colony" for "The Last
+Colony") is never evidence for a book; it only stops BookGuard rejecting or rewriting a book that OCR may
+have misread. A scan can therefore end up undecided, but cannot be confirmed by a list, by the author
+alone, by a title that belongs to a different book, or by a page that is not the opening. OCR is used
+only for a PDF with essentially no text of its own (under 20 characters), and its text is not used by
+the Unmatched files check. Limits: a title wrapped over lines ("DUNE" above "MESSIAH") cannot be told
+from a short title followed by a subtitle, and a scan whose cover OCRs badly stays undecided; both are
+safe failures, resolved by an ISBN or by hand. Changing the OCR settings does not re-read scans that
+were already checked. The image adds about 100 MB for Poppler and Tesseract.

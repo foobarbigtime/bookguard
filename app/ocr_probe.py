@@ -29,7 +29,7 @@ from .pdf_probe import _preflight
 from .scan_text import PAGE_BREAK, without_book_lists
 from .subprocess_capture import ProcessOutputLimitExceeded, run_bounded_process
 
-RENDER_DPI = 200
+RENDER_MAX_PIXELS = 2400           # longest side of a rendered page: bounds the work whatever the page size
 RENDER_TIMEOUT_SECONDS = 45
 PAGE_OCR_TIMEOUT_SECONDS = 60
 RENDER_CPU_SECONDS = 40
@@ -84,7 +84,7 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="bookguard-ocr-") as work:
         try:
             rendered = run_bounded_process(
-                _limited([pdftoppm, "-f", "1", "-l", str(pages), "-r", str(RENDER_DPI), "-gray", "-png", source,
+                _limited([pdftoppm, "-f", "1", "-l", str(pages), "-scale-to", str(RENDER_MAX_PIXELS), "-gray", "-png", source,
                           str(Path(work) / "pg")], RENDER_CPU_SECONDS, RENDER_ADDRESS_SPACE_BYTES),
                 timeout=RENDER_TIMEOUT_SECONDS, stdout_limit=64 * 1024, stderr_limit=64 * 1024,
                 env=_child_env(work),
@@ -113,7 +113,8 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
                 continue
             read += 1
             chunks.append(re.sub(r"[ \t]+", " ", result.stdout.decode("utf-8", errors="replace")).strip())
-            if sum(len(c) for c in chunks) >= ENOUGH_TEXT_CHARS:
+            # Count only what will be kept: a page of praise or of other titles is set aside.
+            if len(without_book_lists(PAGE_BREAK.join(c for c in chunks if c))[0]) >= ENOUGH_TEXT_CHARS:
                 break
     raw = PAGE_BREAK.join(c for c in chunks if c)
     if not raw.strip():

@@ -6,7 +6,7 @@ import re
 import sqlite3
 
 from .identity_search import second_pass
-from .matcher import author_match_strict, author_mentioned_in_text, meaningful_words, normalize
+from .matcher import author_match_strict, author_mentioned_in_text, author_names, meaningful_words, normalize
 from .scan_text import PAGE_BREAK, without_book_lists
 from .series_titles import ebook_title_conflict, expected_title_variants
 from .verification_constants import FRONT_TEXT_CHARS
@@ -67,15 +67,21 @@ def _author_found(author: str, text: str) -> bool:
 # --- OCR text ------------------------------------------------------------------------------
 # A scan's text comes from OCR, which drops spaces and misreads letters, and the page is the only
 # witness to what the book is. So scanned text is held to a stricter rule than a text layer:
-#   exact - the title or name, spaces and punctuation aside, stands alone as whole words. A TITLE
-#           must also fill its own line(s) on the page (a leading "The" and a tail such as
-#           ": A Novel" or "by <author>" are allowed): "Dune" is not "Dune Messiah", and "It" is not
-#           the word "it" in a paragraph. Title and author must be on the same page, close together.
-#           Only an exact match is ever evidence FOR a book.
+#   opening - a scan is the book whose title it OPENS with: the title must be on the first page
+#           that has text, among its first lines (a cover, a half-title or a title page). A
+#           promotion, a contents page, a series header, a dedication or a running header further
+#           in prints other titles beside the author's name just as a title page does, so nothing
+#           after the first page can establish what the book is.
+#   own line - the TITLE fills its own line(s) (a leading "The", and a tail that is "A Novel" or
+#           "by <the author>", are allowed) and the AUTHOR stands on a line of their own, optionally
+#           after "by" / "a novel by". "Dune" is not "Dune Messiah", "It" is not a word in a
+#           paragraph, "Love" is not "Love Story", and a foreword by the author is not the author.
+#   exact - spaces and punctuation are ignored, nothing else. Only an exact match is evidence FOR a
+#           book; title and author must also be on one page, close together, to be "strong".
 #   near  - a very close but not identical passage (a misread letter). It is never evidence for
 #           a book ("The Lost Colony" is one letter from "The Last Colony"); it is used only to
 #           hold back a verdict that would reject or rewrite a book that OCR may have misread.
-# Pages that list books ("Also by ...") never reach this code: see scan_text.
+# Pages that list books ("Also by ...") are set aside first: see scan_text.
 OCR_MIN_NEAR = 10            # shorter names tolerate no misread letter at 90%, so they are exact-only
 OCR_MAX_NEAR_NEEDLE = 80     # longer names are matched exactly only (a PDF /Title can be anything)
 OCR_NEAR_RATIO = 0.9
@@ -86,11 +92,14 @@ OCR_MAX_CANDIDATES = 16      # at most this many places are compared closely, wh
 OCR_CANDIDATE_SLACK = 2
 OCR_MAX_EXACT_HITS = 2_000
 OCR_TITLE_PAGE_CHARS = 400   # a title page prints the title and the author within a few lines
-_OCR_LEADING = {"", "the"}      # "A" / "An" are part of a different title ("A Dog's Purpose")
-_OCR_TITLE_TAIL = re.compile(
-    r"(?:(?:a|an|the)\s+)?(?:novel|memoir|thriller|mystery|story|romance|tale|saga)"   # ": A Novel"
-    r"|by\s+\S.*",                                                                     # "by John Scalzi"
-)
+OCR_OPENING_LINES = 8        # the title is among the first lines of the first page
+OCR_MIN_AUTHOR = 5           # as the text-layer matcher: shorter names are never matched
+_OCR_LEADING = {"", "the"}   # "A" / "An" are part of a different title ("A Dog's Purpose")
+_OCR_DESCRIPTOR = r"(?:(?:a|an|the)\s+)?(?:novel|memoir|thriller)"
+_OCR_TITLE_BY = re.compile(rf"(?:{_OCR_DESCRIPTOR}\s+)?by\s+(.+)")             # "A Novel by John Scalzi"
+_OCR_DESCRIPTOR_ONLY = re.compile(_OCR_DESCRIPTOR)                              # ": A Novel"
+_OCR_AUTHOR_LEAD = re.compile(rf"(?:{_OCR_DESCRIPTOR}(?:\s+|$))?(?:written(?:\s+|$))?(?:by)?")
+_OCR_AUTHOR_TAIL = re.compile(r"and\s+\S.*")                                   # a co-author may follow
 _OCR_GENERIC_TITLES = frozenset({
     "novel", "anovel", "thenovel", "memoir", "amemoir", "thriller", "athriller", "mystery", "amystery",
     "story", "astory", "stories", "book", "abook", "tale", "atale", "romance", "aromance",
@@ -112,17 +121,39 @@ class _Squashed:
         self.text = "".join(char for char, _ in kept)[:OCR_MAX_CHARS]
         self.origin = [index for _, index in kept][:OCR_MAX_CHARS]
 
+    def opening_end(self, lines: int = OCR_OPENING_LINES) -> int:
+        """Where the first ``lines`` non-empty lines of the page end, in the readable text."""
+        seen, index = 0, 0
+        for line in self.readable.split("\n"):
+            index += len(line) + 1
+            if line.strip():
+                seen += 1
+                if seen >= lines:
+                    break
+        return index
+
 
 def _squash(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", normalize(value))
 
 
-def _ocr_exact_pos(needle: str, squashed: _Squashed, *, own_line: bool = False, author: str = "") -> int:
-    """Position (in the page's readable text) of ``needle`` standing alone on the page, else -1.
+def _title_tail_ok(tail: str, authors: frozenset[str]) -> bool:
+    if not tail or _OCR_DESCRIPTOR_ONLY.fullmatch(tail):
+        return True
+    by = _OCR_TITLE_BY.fullmatch(tail)
+    return (_squash(by.group(1)) in authors) if by else (_squash(tail) in authors)
 
-    Standing alone means whole words: nothing alphanumeric touches either end. With ``own_line``
-    (titles) the match must also fill its lines, bar a leading "The" and a tail that is a generic
-    descriptor, "by ...", or the (squashed) ``author``'s name."""
+
+def _ocr_exact_pos(
+    needle: str, squashed: _Squashed, *, title: bool = False, authors: frozenset[str] = frozenset(),
+    after_title: str = "",
+) -> int:
+    """Position (in the page's readable text) of ``needle`` standing alone on its line(s), else -1.
+
+    Whole words: nothing alphanumeric touches either end. A TITLE (``title=True``) fills its
+    lines, bar a leading "The" and a tail that is a descriptor (": A Novel") or "by <author>" -
+    ``authors`` are the squashed names that count as the author. A name (the default) stands on
+    a line of its own, after at most "by" / "a novel by", and is followed by at most a co-author."""
     if not needle or needle in _OCR_GENERIC_TITLES:
         return -1
     readable = squashed.readable
@@ -135,13 +166,16 @@ def _ocr_exact_pos(needle: str, squashed: _Squashed, *, own_line: bool = False, 
         before = readable[first - 1] if first > 0 else " "
         after = readable[last + 1] if last + 1 < len(readable) else " "
         if not before.isalnum() and not after.isalnum():
-            if not own_line:
-                return first
             line_start = readable.rfind("\n", 0, first) + 1
             line_end = readable.find("\n", last + 1)
+            lead = readable[line_start:first].strip()
             tail = readable[last + 1:line_end if line_end >= 0 else len(readable)].strip()
-            if readable[line_start:first].strip() in _OCR_LEADING and (
-                    not tail or _OCR_TITLE_TAIL.fullmatch(tail) or (author and _squash(tail) == author)):
+            if title:
+                if lead in _OCR_LEADING and _title_tail_ok(tail, authors):
+                    return first
+            elif (_OCR_AUTHOR_LEAD.fullmatch(lead)
+                  or (after_title and _squash(re.sub(r"\s*\bby$", "", lead)) == after_title)) and (
+                    not tail or _OCR_AUTHOR_TAIL.fullmatch(tail)):
                 return first
         start = hit + 1
     return -1
@@ -190,41 +224,54 @@ def _ocr_near_pos(needle: str, squashed: _Squashed, min_length: int) -> int:
 
 
 def _ocr_identity_signal(title: str, author: str, full_text: str, front_text: str) -> dict:
-    """Like _identity_signal, for OCR text (see the notes above on exact and near matches).
+    """Like _identity_signal, for OCR text (see the notes above).
 
-    ``title_found`` and ``author_found`` (and everything built on them: strong identity, the
-    "verified" verdicts, the second pass) are exact matches only. ``title_near`` / ``author_near``
-    and ``near_identity`` exist so a book OCR may have misread is not rejected or rewritten."""
-    first_author = author.split(";")[0]
-    squashed_title, squashed_author = _squash(title), _squash(first_author)
+    ``title_found`` means the book OPENS with this title; ``author_found`` that the author is credited
+    on a line of their own. They, and everything built on them (strong identity, the "verified"
+    verdicts, the second pass), are exact matches only. ``title_near`` / ``author_near`` /
+    ``near_identity`` (any page, any close passage) exist so a book OCR may have misread is not
+    rejected or rewritten."""
+    names = [part for credit in (author or "").split(";") for part in author_names(credit.strip()) if part.strip()]
+    squashed_names = frozenset(name for name in (_squash(part) for part in names) if len(name) >= OCR_MIN_AUTHOR)
+    squashed_title = _squash(title or "")
     # OCR text is far shorter than the front-text window, so the two are the same text. Pages that
     # list other books are already gone when it comes from ocr_probe; doing it again costs nothing
     # and means no caller can hand this function a list page.
     pages = [_Squashed(page) for page in without_book_lists(full_text)[0].split(PAGE_BREAK) if page.strip()][:12]
 
-    title_at = author_at = None            # first position of each over all pages
+    def find_author(page: _Squashed) -> int:
+        found = [pos for name in squashed_names
+                 if (pos := _ocr_exact_pos(name, page, authors=squashed_names, after_title=squashed_title)) >= 0]
+        return min(found) if found else -1
+
+    def near_author_in(page: _Squashed) -> bool:
+        return any(_ocr_near_pos(name, page, OCR_MIN_NEAR) >= 0 for name in squashed_names)
+
+    opening_at = None                      # where the first page's opening lines show the title
+    author_at = None                       # first credit of the author, over all pages
     tight: int | None = None               # closest title/author pair printed on one page
     near_title = near_author = False
     offset = 0
-    for page in pages:
-        t = _ocr_exact_pos(squashed_title, page, own_line=True, author=squashed_author)
-        a = _ocr_exact_pos(squashed_author, page)
-        if t >= 0 and title_at is None:
-            title_at = offset + t
+    for number, page in enumerate(pages):
+        t = _ocr_exact_pos(squashed_title, page, title=True, authors=squashed_names)
+        a = find_author(page)
+        if number == 0 and 0 <= t < page.opening_end():
+            opening_at = t
         if a >= 0 and author_at is None:
             author_at = offset + a
         if t >= 0 and a >= 0 and abs(t - a) <= OCR_TITLE_PAGE_CHARS:
             tight = abs(t - a) if tight is None else min(tight, abs(t - a))
         near_title = near_title or t >= 0 or _ocr_near_pos(squashed_title, page, OCR_MIN_NEAR) >= 0
-        near_author = near_author or a >= 0 or _ocr_near_pos(squashed_author, page, OCR_MIN_NEAR) >= 0
+        near_author = near_author or a >= 0 or near_author_in(page)
         offset += len(page.readable) + 1
-    found_title, found_author = title_at is not None, author_at is not None
+    found_title, found_author = opening_at is not None, author_at is not None
+    strong = found_title and tight is not None
     return {
         "title_found": found_title, "author_found": found_author,
         "title_front_found": found_title, "author_front_found": found_author,
-        "front_proximity": tight is not None, "front_proximity_chars": tight,
-        "strong_identity": tight is not None,
-        "title_first_position": title_at,
+        "front_proximity": strong, "front_proximity_chars": tight if strong else None,
+        "strong_identity": strong,
+        "title_first_position": opening_at,
         "author_exact_first_position": author_at,
         "ocr": True,
         "title_near": near_title, "author_near": near_author,
