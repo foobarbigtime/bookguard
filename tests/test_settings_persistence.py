@@ -59,36 +59,30 @@ def test_save_settings_never_stores_bindery_api_key(tmp_path, monkeypatch):
 
 
 
-def test_init_purges_legacy_persisted_tika_url(tmp_path, monkeypatch):
+def test_init_purges_settings_stored_by_older_versions_that_had_tika(tmp_path, monkeypatch):
     config = tmp_path / "config"
     monkeypatch.setattr(settings, "config_dir", str(config))
 
     init_local_db()
     with local_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO app_settings(key, value_json, updated_at)
-            VALUES (?, ?, ?)
-            """,
-            (
-                "verification_tika_url",
-                json.dumps("https://untrusted.example/upload"),
-                "test",
-            ),
-        )
+        for key, value in (("verification_tika_url", "https://untrusted.example/upload"),
+                           ("verification_use_tika", True)):
+            conn.execute(
+                "INSERT INTO app_settings(key, value_json, updated_at) VALUES (?, ?, ?)",
+                (key, json.dumps(value), "test"),
+            )
         conn.commit()
 
     init_local_db()
 
     with local_conn() as conn:
-        row = conn.execute(
-            "SELECT key FROM app_settings WHERE key=?",
-            ("verification_tika_url",),
-        ).fetchone()
-    assert row is None
+        rows = conn.execute(
+            "SELECT key FROM app_settings WHERE key IN ('verification_tika_url', 'verification_use_tika')"
+        ).fetchall()
+    assert rows == []
 
 
-def test_save_settings_never_stores_tika_url(tmp_path, monkeypatch):
+def test_save_settings_ignores_the_removed_tika_settings(tmp_path, monkeypatch):
     config = tmp_path / "config"
     monkeypatch.setattr(settings, "config_dir", str(config))
     init_local_db()
@@ -97,12 +91,13 @@ def test_save_settings_never_stores_tika_url(tmp_path, monkeypatch):
         {
             "bindery_url": "http://bindery:8787",
             "verification_tika_url": "https://untrusted.example/upload",
+            "verification_use_tika": True,
         }
     )
 
     persisted = load_persisted_settings()
     assert persisted["bindery_url"] == "http://bindery:8787"
-    assert "verification_tika_url" not in persisted
+    assert "verification_tika_url" not in persisted and "verification_use_tika" not in persisted
 
 
 def test_library_languages_save_and_reload(tmp_path, monkeypatch):

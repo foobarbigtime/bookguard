@@ -173,3 +173,31 @@ def provenance_proof(
             "coreTitle": assigned_core,
         }
     return None
+
+
+def scan_provenance_proof(expected: dict, releases: Iterable[Release], author_level) -> dict[str, Any] | None:
+    """Two independent sources for a scan: Bindery's own download record, and the scan's opening page.
+
+    A scan's page text alone is not accepted (a cover can name other books), but Bindery grabbed a
+    release for this very book: when that release's author and core title are the assigned book's
+    (same edition markers and volume numbers) and the scan opens with that title, the two agree.
+    The caller has already established that the page's opening is the assigned title and author."""
+    title, author = str(expected.get("title") or ""), str(expected.get("author") or "")
+    assigned_core = core_title(title, author)
+    if not (title and author and assigned_core):
+        return None
+    for release in releases:
+        if release.kind != "book" or not release.title or author_level(author, release.author) != "exact":
+            continue
+        if core_title(release.title, release.author) != assigned_core:
+            continue
+        if edition_markers(title) != edition_markers(release.title):
+            continue
+        if not _same_designations(title, release.title, release_number=release.number):
+            continue
+        return {
+            "sources": ["download name in Bindery's history", "the scan's title page"],
+            "release": release.raw,
+            "coreTitle": assigned_core,
+        }
+    return None

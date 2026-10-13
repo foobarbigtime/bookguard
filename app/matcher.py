@@ -96,6 +96,11 @@ def author_match(expected: str, credits: str) -> bool:
     return any(_author_candidate_match(candidate, credits) for candidate in _author_alias_group(expected))
 
 
+def author_names(expected: str) -> list[str]:
+    """The expected author and every configured alias of them (``author_aliases`` setting)."""
+    return _author_alias_group(expected)
+
+
 def author_match_strict(expected: str, credits: str) -> bool:
     return any(
         _author_candidate_match_strict(candidate, credits)

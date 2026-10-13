@@ -36,6 +36,7 @@ def run_bounded_process(
     stdout_limit: int,
     stderr_limit: int,
     cancel_check: Callable[[], bool] | None = None,
+    env: dict[str, str] | None = None,
 ) -> BoundedProcessResult:
     """Run a child while enforcing wall-clock and captured-output limits."""
     if timeout <= 0:
@@ -47,6 +48,7 @@ def run_bounded_process(
         list(cmd),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=env,
     )
     if proc.stdout is None or proc.stderr is None:
         proc.kill()

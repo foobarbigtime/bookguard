@@ -106,13 +106,13 @@
           <label class="field"><span>Maximum text examined per ebook</span><input name="verification_max_text_chars" type="number" min="50000" max="5000000" step="50000" value="{{ settings.verification_max_text_chars }}"><small>Default 1,500,000 characters. Verification is read-only.</small></label>
           <label class="field"><span>PDF pages examined</span><input name="verification_pdf_pages" type="number" min="1" max="100" value="{{ settings.verification_pdf_pages }}"><small>BookGuard starts with the front matter because title/author evidence is usually strongest there.</small></label>
           <div class="field checks-stack span-2 option-panel">
-            <span>Optional Apache Tika fallback</span>
-            <label class="check-field"><input name="verification_use_tika" type="checkbox" {% if settings.verification_use_tika %}checked{% endif %}><span>Use Tika when native extraction does not produce useful text</span></label>
+            <span>Scanned PDFs (OCR)</span>
+            <label class="check-field"><input name="verification_ocr" type="checkbox" {% if settings.verification_ocr %}checked{% endif %}><span>Read the first pages of a PDF that has no text layer, so its title page can be checked</span></label>
+            <small>Runs only for a PDF that yields almost no text, in bounded helper processes. OCR can misread a name; that can only make a match fail, never invent one. Languages are deployment-only: <code>{{ settings.verification_ocr_languages }}</code> (set <code>BOOKGUARD_VERIFICATION_OCR_LANGUAGES</code> to change).</small>
           </div>
-          <label class="field span-2"><span>Tika URL</span><input type="text" value="{{ settings.verification_tika_url }}" placeholder="Not configured" readonly><small>Deployment-only for safety. Set <code>BOOKGUARD_TIKA_URL</code> and restart BookGuard to change this endpoint.</small></label>
-          <div class="field span-2"><button id="testTikaButton" type="button">Test Tika connection</button><small id="tikaStatus" class="muted"></small></div>
+          <label class="field"><span>OCR pages read</span><input name="verification_ocr_pages" type="number" min="1" max="6" value="{{ settings.verification_ocr_pages }}"><small>From the front of the PDF. Three covers a cover, a half-title and the title page.</small></label>
         </div>
-        <div class="notice info">BookGuard runs deterministic file safety checks before native, position-aware identity verification. Tika is an optional fallback when native extraction cannot obtain useful text. Audiobook content verification remains a future feature.</div>
+        <div class="notice info">BookGuard runs deterministic file safety checks before native, position-aware identity verification. Audiobook content verification remains a future feature.</div>
       </section>
 
       <section class="settings-section metadata-repair-section">
@@ -165,14 +165,12 @@ const form = document.getElementById("settingsForm");
 const saveButton = document.getElementById("saveButton");
 const resetButton = document.getElementById("resetButton");
 const saveStatus = document.getElementById("saveStatus");
-const testTikaButton = document.getElementById("testTikaButton");
-const tikaStatus = document.getElementById("tikaStatus");
 const testMalwareButton = document.getElementById("testMalwareButton");
 const malwareStatus = document.getElementById("malwareStatus");
 const booleanFields = [
   "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks", "watch_imports", "fix_duplicates_hourly",
   "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
-  "verification_enabled", "verification_use_tika", "verification_file_signatures",
+  "verification_enabled", "verification_ocr", "verification_file_signatures",
   "verification_archive_safety",
   "verification_epub_structure", "verification_pdf_integrity", "verification_malware_scan",
   "repair_audiobooks", "repair_ebooks", "repair_normalize_pass", "repair_audio_album",
@@ -181,7 +179,7 @@ const booleanFields = [
 const integerFields = [
   "sample_files", "progress_every", "watch_imports_minutes", "scan_schedule_day", "title_min_shared_words",
   "strong_mismatch_min_samples", "strong_mismatch_consensus_percent",
-  "verification_max_text_chars", "verification_pdf_pages",
+  "verification_max_text_chars", "verification_pdf_pages", "verification_ocr_pages",
   "dashboard_poll_ms", "live_results_limit", "dashboard_result_limit"
 ];
 const weeklyOnly = form.querySelector("[data-weekly-only]");
@@ -219,16 +217,6 @@ resetButton.addEventListener("click", async () => {
   if (!response.ok) { showStatus(body.detail || "Unable to reset settings.", "bad"); return; }
   showStatus("Settings reset. Reloading…"); setTimeout(() => window.location.reload(), 500);
 });
-if (testTikaButton) {
-  testTikaButton.addEventListener("click", async () => {
-    testTikaButton.disabled = true;
-    tikaStatus.textContent = " Testing…";
-    const response = await fetch("/api/verification/tika-test", {cache:"no-store"});
-    const body = await response.json().catch(() => ({}));
-    testTikaButton.disabled = false;
-    tikaStatus.textContent = ` ${body.ok ? 'OK' : 'Not available'}: ${body.message || ''}`;
-  });
-}
 if (testMalwareButton) {
   testMalwareButton.addEventListener("click", async () => {
     testMalwareButton.disabled = true;

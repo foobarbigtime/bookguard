@@ -297,7 +297,7 @@ class Settings:
         default_factory=lambda: _lines_env("BOOKGUARD_AUTHOR_ALIASES", DEFAULT_AUTHOR_ALIASES)
     )
 
-    # Content verification. Native verification is core; Tika is an optional fallback.
+    # Content verification: native, position-aware identity checks, with OCR for scanned PDFs.
     verification_enabled: bool = _bool("BOOKGUARD_VERIFICATION_ENABLED", True)
     verification_max_text_chars: int = _clamp(
         _int("BOOKGUARD_VERIFICATION_MAX_TEXT_CHARS", 1500000), 50000, 5000000
@@ -305,8 +305,10 @@ class Settings:
     verification_pdf_pages: int = _clamp(
         _int("BOOKGUARD_VERIFICATION_PDF_PAGES", 24), 1, 100
     )
-    verification_use_tika: bool = _bool("BOOKGUARD_VERIFICATION_USE_TIKA", True)
-    verification_tika_url: str = os.getenv("BOOKGUARD_TIKA_URL", "").rstrip("/")
+    # OCR of the first pages of a PDF that has no text layer (a scan), so its title page can be read.
+    verification_ocr: bool = _bool("BOOKGUARD_VERIFICATION_OCR", True)
+    verification_ocr_pages: int = _clamp(_int("BOOKGUARD_VERIFICATION_OCR_PAGES", 3), 1, 6)
+    verification_ocr_languages: str = os.getenv("BOOKGUARD_VERIFICATION_OCR_LANGUAGES", "eng").strip() or "eng"
     verification_file_signatures: bool = _bool(
         "BOOKGUARD_VERIFICATION_FILE_SIGNATURES", True
     )
@@ -381,7 +383,7 @@ class Settings:
         bool_fields = {
             "allow_actions", "scan_on_start", "scan_audiobooks", "scan_ebooks", "watch_imports", "fix_duplicates_hourly",
             "allow_author_surname_match", "reject_music_mismatch", "reject_strong_mismatch",
-            "verification_enabled", "verification_use_tika",
+            "verification_enabled", "verification_ocr",
             "verification_file_signatures", "verification_archive_safety",
             "verification_epub_structure",
             "verification_pdf_integrity", "verification_malware_scan",
@@ -398,6 +400,7 @@ class Settings:
             "strong_mismatch_consensus_percent": (50, 100),
             "verification_max_text_chars": (50000, 5000000),
             "verification_pdf_pages": (1, 100),
+            "verification_ocr_pages": (1, 6),
             "dashboard_poll_ms": (500, 10000),
             "live_results_limit": (5, 100),
             "dashboard_result_limit": (50, 5000),
@@ -486,8 +489,9 @@ class Settings:
             "verification_enabled": self.verification_enabled,
             "verification_max_text_chars": self.verification_max_text_chars,
             "verification_pdf_pages": self.verification_pdf_pages,
-            "verification_use_tika": self.verification_use_tika,
-            "verification_tika_url": self.verification_tika_url,
+            "verification_ocr": self.verification_ocr,
+            "verification_ocr_pages": self.verification_ocr_pages,
+            "verification_ocr_languages": self.verification_ocr_languages,
             "verification_file_signatures": self.verification_file_signatures,
             "verification_archive_safety": self.verification_archive_safety,
             "verification_epub_structure": self.verification_epub_structure,
@@ -510,7 +514,6 @@ class Settings:
         """Return UI settings that are safe to store in BookGuard's database."""
         data = self.public_dict()
         data.pop("bindery_api_key_set", None)
-        data.pop("verification_tika_url", None)
         return data
 
 

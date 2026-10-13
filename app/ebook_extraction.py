@@ -12,9 +12,8 @@ from .config import settings
 from .file_safety import read_file_prefix
 from .metadata import ebook_metadata
 from .mobi_text import read_mobi_text
-from . import pdf_probe
-from .tika_client import extract_text as tika_text
-from .verification_constants import FRONT_TEXT_CHARS, MIN_USEFUL_TEXT
+from . import ocr_probe, pdf_probe
+from .verification_constants import FRONT_TEXT_CHARS, MAX_METADATA_CHARS, OCR_ONLY_BELOW_CHARS
 
 
 @dataclass(frozen=True)
@@ -27,6 +26,7 @@ class ExtractedEbookIdentity:
     front_text: str
     source: str
     notes: list[str]
+    ocr: dict | None = None
 
 
 def _strip_html_bytes(raw: bytes) -> str:
@@ -142,9 +142,11 @@ def extract_pdf_identity(path: str) -> tuple[dict, str, list[str], str]:
     if payload.get("error"):
         raise ValueError(str(payload["error"]))
 
+    # A PDF's own title and author can be any length (megabytes slow every matcher down): no real
+    # title or credit line is longer than this.
     metadata = {
-        "title": str(payload.get("title") or "").strip(),
-        "author": str(payload.get("author") or "").strip(),
+        "title": str(payload.get("title") or "").strip()[:MAX_METADATA_CHARS],
+        "author": str(payload.get("author") or "").strip()[:MAX_METADATA_CHARS],
         "source": "pdf",
     }
     text = str(payload.get("text") or "")[: settings.verification_max_text_chars]
@@ -176,7 +178,7 @@ def extract_mobi_identity(path: str) -> tuple[dict, str, list[str], str, list[st
 
 
 def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
-    """Extract native ebook evidence and use Tika only when configured and needed."""
+    """Extract native ebook evidence (with OCR for a scanned PDF that has no text layer)."""
     suffix = Path(path).suffix.lower()
     metadata = ebook_metadata(path)
     text = ""
@@ -202,19 +204,21 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
     except Exception as exc:
         notes.append(f"Native extraction error: {str(exc)[:300]}")
 
-    if (
-        len(text.strip()) < MIN_USEFUL_TEXT
-        and settings.verification_use_tika
-        and settings.verification_tika_url
-    ):
-        fallback_text, tika_error = tika_text(path)
-        if fallback_text:
-            text = fallback_text
-            front_text = fallback_text[:FRONT_TEXT_CHARS]
-            source = f"{source}+tika" if source != "native" else "tika"
-            notes.append("Tika fallback supplied content because native extraction was insufficient.")
-        elif tika_error:
-            notes.append(tika_error)
+    ocr: dict | None = None
+    if suffix == ".pdf" and len(text.strip()) < OCR_ONLY_BELOW_CHARS and settings.verification_ocr:
+        # A scan has no text layer: read the first pages as images so the title page can be checked.
+        found = ocr_probe.ocr_pdf_front(path)
+        ocr = {"attempted": True, "pages": int(found.get("pages") or 0), "chars": len(found.get("text") or ""),
+               "error": str(found.get("error") or ""), "setAside": int(found.get("setAside") or 0)}
+        if found.get("text"):
+            text = found["text"]
+            front_text = text[:FRONT_TEXT_CHARS]
+            source = "native-pdf+ocr"
+            notes.append(f"OCR of the first {ocr['pages']} page(s) supplied the text because the PDF has no "
+                         "text layer. OCR can misread a name, which can only make a match fail, never invent one."
+                         + (f" {ocr['setAside']} page(s) listing other books were set aside." if ocr["setAside"] else ""))
+        elif found.get("error"):
+            notes.append(str(found["error"]))
 
     return ExtractedEbookIdentity(
         metadata=metadata,
@@ -223,4 +227,5 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
         front_text=front_text,
         source=source,
         notes=notes,
+        ocr=ocr,
     )

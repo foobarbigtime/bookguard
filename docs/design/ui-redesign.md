@@ -88,7 +88,7 @@ Legend: **Main** = main-page essential · **Detail** = secondary detail ·
 | Repairs | Candidates, history, Undo | Remove as a page | Review (candidates), Activity (Undo on the entry) |
 | Diagnostics | Deployment environment and gate states | Advanced | System → Advanced |
 | Diagnostics | ClamAV and Bindery status | Main (summary) | Home health, System health |
-| Settings | All sections, Test Tika, Test scanner, Reset | Detail | Settings (tests under Advanced; Reset in a danger zone) |
+| Settings | All sections, Test scanner, Reset | Detail | Settings (tests under Advanced; Reset in a danger zone) |
 | API only today | Automation mode, allowlist, Observe run, automatic cycle | Main | Home automation card, Settings → Automation |
 | API only today | Automatic run journal, readiness checks | Detail / Advanced | Activity, System → Advanced |
 

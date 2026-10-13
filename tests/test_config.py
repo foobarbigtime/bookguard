@@ -92,17 +92,13 @@ def test_auth_username_cannot_contain_basic_auth_separator(monkeypatch):
         load_auth_settings()
 
 
-def test_persistable_settings_exclude_secrets_and_deployment_only_tika_url():
-    configured = Settings(
-        bindery_api_key="super-secret",
-        verification_tika_url="http://trusted-tika:9998",
-    )
+def test_persistable_settings_exclude_secrets():
+    configured = Settings(bindery_api_key="super-secret")
 
     persisted = configured.persistable_dict()
 
     assert "bindery_api_key" not in persisted
     assert "bindery_api_key_set" not in persisted
-    assert "verification_tika_url" not in persisted
 
 
 

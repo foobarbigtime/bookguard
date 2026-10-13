@@ -176,6 +176,7 @@ def _identity(evidence: dict) -> dict[str, Any]:
         "trackCount": int(whole.get("readableCount") or names.get("fileCount") or 0),
         "filenamesNameTheBook": bool(names.get("strong")),
         "notes": [str(n)[:300] for n in (evidence.get("notes") or [])][:5],
+        "ocr": evidence.get("ocr") or None,
         "downloadNames": [str(r.get("raw") or "") for r in ((evidence.get("provenance") or {}).get("releases") or [])][:3],
         "notABook": [str(n) for n in ((evidence.get("provenance") or {}).get("notABook") or [])][:3],
         "proofSources": [str(n) for n in ((evidence.get("proof") or {}).get("sources") or [])],
@@ -242,6 +243,11 @@ def _why_undecided(evidence: dict, suffix: str = "", fmt: str = "ebook") -> tupl
             reason = ("The file opened but contains no readable text, so its content could not be "
                       "compared with the book. It may be image-only or empty.")
             kind = "no_text"
+            ocr = who["ocr"]
+            if ocr and ocr.get("error"):
+                reason += f" BookGuard tried to read the page images with OCR: {ocr['error']}"
+            elif ocr and ocr.get("attempted"):
+                reason += " OCR of the first pages found no text either."
         if not who["fileTitle"] and not who["fileAuthor"]:
             reason += " The file carries no title or author of its own either."
         elif placeholder:
@@ -251,6 +257,9 @@ def _why_undecided(evidence: dict, suffix: str = "", fmt: str = "ebook") -> tupl
             reason += (f" The file calls itself “{who['fileTitle'] or 'untitled'}”{_by(who['fileAuthor'])}; "
                        f"Bindery has it as “{who['expectedTitle']}”{_by(who['expectedAuthor'])}.")
         return kind, reason
+    ocr = who["ocr"]
+    if ocr and ocr.get("chars"):
+        return _why_scan(evidence, who, ocr, placeholder)
     parts = []
     kind = "other"
     if who["fileTitle"] or who["fileAuthor"]:
@@ -286,6 +295,40 @@ def _why_undecided(evidence: dict, suffix: str = "", fmt: str = "ebook") -> tupl
                          + ("title and author and found none." if not count
                             else f"title and author and found {count}, too many to pick one safely."))
     return kind, " ".join(parts)
+
+def _why_scan(evidence: dict, who: dict, ocr: dict, placeholder: bool) -> tuple[str, str]:
+    """Why a scan (a PDF whose text is OCR of its first pages) is undecided."""
+    pages, aside = int(ocr.get("pages") or 0), int(ocr.get("setAside") or 0)
+    read = f"BookGuard read the first {pages} page{'s' if pages != 1 else ''} of this scan with OCR"
+    if aside:
+        read += f", setting aside {aside} page{'s' if aside != 1 else ''} that list other books"
+    title, by = who["expectedTitle"], _by(who["expectedAuthor"])
+    if evidence.get("scanPage"):
+        if not (who["fileTitle"] or who["fileAuthor"]):
+            details = "carries no title or author"
+        elif placeholder:
+            details = f"look like placeholders (“{who['fileTitle'] or 'untitled'}” by “{who['fileAuthor']}”)"
+        else:
+            details = f"say “{who['fileTitle'] or 'untitled'}”{_by(who['fileAuthor'])}, not this book"
+        history = next((step for step in evidence.get("secondPass") or [] if step.get("check") == "scanProvenance"), None)
+        if history is None or not int(history.get("releases") or 0):
+            record = "Bindery has no download record for this book"
+        else:
+            record = "Bindery's download record does not name this exact title and author"
+        return "scan_page_only", (
+            f"{read}. The first page reads as “{title}”{by}, which is this book, but a scan's first page is "
+            f"only one source (a cover can name other books) and nothing else confirms it: the file's own "
+            f"details {details}, and {record}. An ISBN, or a download record, would settle it.")
+    signal = (evidence.get("content") or {}).get("expected_signal") or {}
+    reason = f"{read}, but it does not open with “{title}”{by}: a scan is matched only by a first page that shows the title and the author together."
+    if signal.get("title_near") and not signal.get("title_found"):
+        reason += " A passage close to the title does appear, which may be an OCR misreading of it."
+    elif signal.get("title_found") and not signal.get("author_found"):
+        reason += f" The title is there, but the author “{who['expectedAuthor']}” is not credited beside it."
+    elif signal.get("author_found") and not signal.get("title_found"):
+        reason += " The author is there, but the title is not what the first page opens with."
+    return "scan_not_opening", reason
+
 
 def _suggestion(group: str, verification: dict | None, language: dict | None = None) -> str:
     evidence = (verification or {}).get("evidence") or {}
@@ -404,6 +447,8 @@ UNDECIDED_KINDS = {
     "drm": "DRM-protected", "unsupported_format": "Unsupported file type", "extract_error": "Could not be read",
     "no_text": "No readable text", "no_metadata": "No title or author inside the file",
     "author_missing": "Author not found in the book", "title_missing": "Title not found in the book",
+    "scan_page_only": "Scan: first page agrees, nothing else confirms it",
+    "scan_not_opening": "Scan: first page does not show this book",
     "both_found": "Title and author found, position unclear", "other_book": "May be a different book",
     "neither_found": "Neither found in the text", "audiobook_collection": "Collection of several books",
     "audiobook_tags": "Audio tags do not name the book", "audiobook_other_work": "Audio tags name a different book",
