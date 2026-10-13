@@ -242,21 +242,21 @@ def test_ocr_tolerance_never_turns_one_book_into_another():
 
 def test_a_same_author_also_by_list_is_not_a_title_page():
     """The back matter of another Scalzi book names the expected title next to the author."""
-    page = ("ALSO BY JOHN SCALZI\nOld Man's War\nThe Ghost Brigades\nThe Last Colony\nZOE'S TALE\n\n"
+    page = ("ALSO BY JOHN SCALZI\nOld Man's War\nThe Ghost Brigades\nThe Last Colony\nZOE'S TALE\f"
             "ZOE'S TALE\nJOHN SCALZI\nA TOR BOOK")
     assert _signal("The Last Colony", "John Scalzi", page)["strong_identity"] is False
     verdict, _, _ = _scan("The Last Colony", "John Scalzi", page, file_title="Book to Do 1", file_author="Unknown")
     assert verdict not in ("METADATA_ERROR", "VERIFIED_CORRECT")
-    # ...but the same title on the title page, before or after a list, still counts.
-    page = "THE LAST COLONY\nJOHN SCALZI\n\nALSO BY JOHN SCALZI\nOld Man's War\nZOE'S TALE"
+    # ...but the same title on the title page, before or after a list page, still counts.
+    page = "THE LAST COLONY\nJOHN SCALZI\fALSO BY JOHN SCALZI\nOld Man's War\nZOE'S TALE"
     assert _signal("The Last Colony", "John Scalzi", page)["strong_identity"]
-    page = "ALSO BY JOHN SCALZI\nOld Man's War\n\nTHE LAST COLONY\nJOHN SCALZI"
+    page = "ALSO BY JOHN SCALZI\nOld Man's War\fTHE LAST COLONY\nJOHN SCALZI"
     assert _signal("The Last Colony", "John Scalzi", page)["strong_identity"]
 
 
 def test_a_short_real_title_in_the_files_own_metadata_is_recognised_so_it_can_dissent():
     """Short embedded titles ("Old Man's War") used to be unsearchable, which let a list entry win."""
-    page = ("ALSO BY JOHN SCALZI\nThe Ghost Brigades\nThe Last Colony\n\nOLD MAN'S WAR\nJOHN SCALZI\nA TOR BOOK")
+    page = "ALSO BY JOHN SCALZI\nThe Ghost Brigades\nThe Last Colony\fOLD MAN'S WAR\nJOHN SCALZI\nA TOR BOOK"
     verdict, _, evidence = _scan("The Last Colony", "John Scalzi", page,
                                  file_title="Old Man's War", file_author="John Scalzi")
     assert verdict != "METADATA_ERROR"
@@ -265,16 +265,211 @@ def test_a_short_real_title_in_the_files_own_metadata_is_recognised_so_it_can_di
 
 def test_a_file_whose_own_identity_was_misread_by_ocr_is_not_rewritten_to_another_book():
     # The page prints the file's own identity, but OCR read a letter wrong ("WAF"), and the expected
-    # title sits beside the author in a promotion that is not labelled as a list.
-    page = "OLD MAN S WAF\nJOHN SCALZI\n\nNOW IN PAPERBACK: THE LAST COLONY\nJOHN SCALZI"
+    # title is printed with the author in another block that is not labelled as a list.
+    page = "OLD MAN S WAF\nJOHN SCALZI\n\nTHE LAST COLONY\nJOHN SCALZI"
     verdict, _, evidence = _scan("The Last Colony", "John Scalzi", page,
                                  file_title="Old Man's War", file_author="John Scalzi")
     assert evidence["content"]["embedded_signal"]["near_identity"] is True
     assert verdict != "METADATA_ERROR"
     # With the file's identity absent from the page altogether, the old behaviour is unchanged.
-    verdict, _, _ = _scan("The Last Colony", "John Scalzi", "NOW IN PAPERBACK: THE LAST COLONY\nJOHN SCALZI",
+    verdict, _, _ = _scan("The Last Colony", "John Scalzi", "THE LAST COLONY\nJOHN SCALZI",
                           file_title="Old Man's War", file_author="John Scalzi")
     assert verdict == "METADATA_ERROR"
+
+
+# --- the layouts a second review used to defeat the list rule -----------------------------------
+
+LIST_PAGES = [
+    "ALSO BY JOHN SCALZI\nOld Man's War\nThe Ghost Brigades\nThe Last Colony",                     # heading first
+    "ili\nALSO BY JOHN SCALZI\n\nOld Man's War\nThe Last Colony",                                  # a folio above it
+    "ALSO BY\n\nJOHN SCALZI\n\nOld Man's War\n\nThe Last Colony",                                # split heading
+    "ALSO BY JOHN SCALZI\n\nOld Man's War\n\nThe Ghost Brigades\n\nThe Human Division\n\nThe Last Colony",
+    "ALS0 BY JOHN SCALZI\nOld Man's War\nThe Last Colony",                                         # 0 read for o
+    "AL5O BY JOHN SCALZI\nOld Man's War\nThe Last Colony",
+    "OTHER BOOKS BY JOHN SCALZI\nThe Last Colony",
+    "MORE BOOKS IN THE OLD MAN'S WAR SERIES\nThe Last Colony",
+    "PRAISE FOR JOHN SCALZI\n\"Brilliant\" - The Last Colony review",
+    "ABOUT THE AUTHOR\nJohn Scalzi wrote Old Man's War and The Last Colony.",
+    "Also available\nThe Last Colony\nJohn Scalzi",
+]
+
+
+@pytest.mark.parametrize("list_page", LIST_PAGES)
+def test_a_list_page_is_set_aside_wherever_its_heading_and_whatever_its_length(list_page):
+    from app.scan_text import without_book_lists
+    text, affected = without_book_lists("ZOE'S TALE\fZOE'S TALE\nJOHN SCALZI\nA TOR BOOK\f" + list_page)
+    assert affected == 1 and "Last Colony" not in text and "ZOE'S TALE\nJOHN SCALZI" in text
+    # ...whichever page the list is on, and the real title page is untouched.
+    text, affected = without_book_lists(list_page + "\fTHE LAST COLONY\nJOHN SCALZI")
+    assert affected == 1 and "THE LAST COLONY\nJOHN SCALZI" in text and "Old Man" not in text
+    for position in range(3):
+        pages = ["ZOE'S TALE", "ZOE'S TALE\nJOHN SCALZI"]
+        pages.insert(position, list_page)
+        verdict, _, _ = _scan("The Last Colony", "John Scalzi", "\f".join(pages),
+                              file_title="The Last Colony", file_author="John Scalzi")
+        assert verdict not in ("VERIFIED_CORRECT", "METADATA_ERROR"), (position, list_page)
+
+
+def test_a_cover_cut_at_its_heading_keeps_what_is_above_it():
+    from app.scan_text import without_book_lists
+    text, affected = without_book_lists("THE LAST COLONY\nJOHN SCALZI\nALSO BY JOHN SCALZI\nOld Man's War")
+    assert affected == 1 and text == "THE LAST COLONY\nJOHN SCALZI"
+    assert without_book_lists("") == ("", 0) and without_book_lists("THE LAST COLONY") == ("THE LAST COLONY", 0)
+
+
+@pytest.mark.parametrize("title, author, page", [
+    ("Dune", "Frank Herbert", "DUNE MESSIAH\nFRANK HERBERT"),                                    # a longer title
+    ("It", "Stephen King", "Copyright 1986 by Stephen King. It is a crime to copy it."),         # a word in prose
+    ("Emma", "Jane Austen", "EMMA WOODHOUSE\nJANE AUSTEN"),
+    ("Home", "Toni Morrison", "WELCOME HOME\nTONI MORRISON"),
+    ("The Stand", "Stephen King", "WE TAKE A STAND\nSTEPHEN KING"),
+    ("Beloved", "Toni Morrison", "WE ARE BE LOVED BY ALL\nTONI MORRISON"),
+])
+def test_a_title_must_fill_its_own_lines_not_sit_inside_a_longer_title_or_a_sentence(title, author, page):
+    assert _signal(title, author, page)["title_found"] is False
+    assert _signal(title, author, page)["strong_identity"] is False
+    assert _scan(title, author, page)[0] not in ("METADATA_ERROR", "VERIFIED_CORRECT")
+
+
+def test_the_generic_subtitle_alone_is_never_a_title():
+    page = "A NOVEL\nBY JOHN SCALZI"
+    for generic in ("A Novel", "Novel", "A Memoir", "A Thriller"):
+        assert _signal(generic, "John Scalzi", page)["title_found"] is False
+
+
+def test_a_titles_own_line_may_carry_an_article_a_generic_tail_the_author_or_nothing():
+    for page in ("THE LAST COLONY", "THE LAST COLONY: A NOVEL", "THE LAST COLONY\nA NOVEL",
+                 "THE LAST COLONY BY JOHN SCALZI", "THE LAST COLONY JOHN SCALZI", "THE LAST\nCOLONY"):
+        assert _signal("The Last Colony", "John Scalzi", page + "\nJOHN SCALZI")["title_found"], page
+    for page in ("THE LAST COLONY OF MARS", "NOW IN PAPERBACK THE LAST COLONY", "A THE LAST COLONY", "LAST COLONY"):
+        assert _signal("The Last Colony", "John Scalzi", page + "\nJOHN SCALZI")["title_found"] is False, page
+
+
+def test_the_title_and_the_author_must_be_on_the_same_page_and_close_together():
+    far = "THE LAST COLONY\n" + ("A LONG PARAGRAPH ABOUT SOMETHING ELSE ENTIRELY. " * 12) + "\nJOHN SCALZI"
+    assert _signal("The Last Colony", "John Scalzi", far)["strong_identity"] is False
+    assert _signal("The Last Colony", "John Scalzi", "THE LAST COLONY\fJOHN SCALZI")["strong_identity"] is False
+    assert _signal("The Last Colony", "John Scalzi", "THE LAST COLONY\nJOHN SCALZI")["strong_identity"] is True
+
+
+def test_for_a_scan_the_title_and_the_author_must_both_be_found_to_verify():
+    # Same title, another author (a different book of that name) with metadata copying the catalogue.
+    for page in ("THE LAST COLONY\nEOIN COLFER", "THE LAST COLONY"):
+        verdict, _, _ = _scan("The Last Colony", "John Scalzi", page,
+                              file_title="The Last Colony", file_author="John Scalzi")
+        assert verdict != "VERIFIED_CORRECT", page
+
+
+@pytest.fixture
+def scalzi_bindery(tmp_path, monkeypatch):
+    import sqlite3
+    path = tmp_path / "bindery.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT);
+            CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, excluded INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE book_files (id INTEGER PRIMARY KEY, book_id INTEGER, format TEXT, path TEXT, size_bytes INTEGER);
+            CREATE TABLE history (id INTEGER PRIMARY KEY, book_id INTEGER, event_type TEXT, source_title TEXT, data TEXT, created_at TEXT);
+            INSERT INTO authors VALUES (1, 'John Scalzi');
+            INSERT INTO books(id, title, author_id) VALUES (1, 'Zoe''s Tale', 1), (2, 'Old Man''s War', 1),
+                                                           (3, 'The Last Colony', 1);
+            INSERT INTO history(book_id, event_type, source_title) VALUES
+              (3, 'bookImported', 'John Scalzi - The Last Colony (retail) (pdf)');
+            """
+        )
+    monkeypatch.setattr(settings, "bindery_db", str(path))
+    return path
+
+
+SIBLING_SCAN = "\f".join(["ZOE'S TALE", "ALSO BY JOHN SCALZI\nOld Man's War\nThe Ghost Brigades\nThe Last Colony",
+                          "ZOE'S TALE\nJOHN SCALZI\nA TOR BOOK"])
+
+
+def test_a_books_also_by_page_never_makes_it_another_book_or_a_move(scalzi_bindery):
+    """The genuine Zoe's Tale, tagged (wrongly) as Old Man's War, must not be 'moved' to Old Man's War."""
+    result = {"title": "Zoe's Tale", "author": "John Scalzi", "book_id": 1, "series": [], "isbn_evidence": {},
+              "_ocr_text": True}
+    verdict, _, evidence = classify_identity(result, {"title": "Old Man's War", "author": "John Scalzi"},
+                                             SIBLING_SCAN, [], [], SIBLING_SCAN)
+    assert verdict != "WRONG_CONTENT" and "actualBook" not in evidence
+    assert evidence["content"]["embedded_signal"]["strong_identity"] is False
+
+
+def test_a_sibling_scan_with_the_right_metadata_or_none_is_not_the_assigned_book(scalzi_bindery):
+    result = {"title": "The Last Colony", "author": "John Scalzi", "book_id": 3, "series": [], "isbn_evidence": {},
+              "_ocr_text": True}
+    for metadata in ({"title": "The Last Colony", "author": "John Scalzi"}, {"title": "", "author": ""},
+                     {"title": "Book to Do 1", "author": "Unknown"},
+                     {"title": "Zoe's Tale (Old Man's War, Book 4)", "author": "John Scalzi"}):
+        verdict, confidence, _ = classify_identity(result, metadata, SIBLING_SCAN, [], [], SIBLING_SCAN)
+        assert verdict not in ("VERIFIED_CORRECT", "METADATA_ERROR"), (metadata, verdict, confidence)
+
+
+def test_the_download_name_plus_the_authors_name_alone_does_not_prove_a_scan(scalzi_bindery):
+    """Provenance counted 'the book's text' when only the author was on the page."""
+    result = {"title": "The Last Colony", "author": "John Scalzi", "book_id": 3, "series": [], "isbn_evidence": {},
+              "_ocr_text": True}
+    page = "ZOE'S TALE\nJOHN SCALZI\nA TOR BOOK"
+    verdict, _, evidence = classify_identity(result, {"title": "The Last Colony", "author": "John Scalzi"},
+                                             page, [], [], page)
+    assert verdict == "INSUFFICIENT_EVIDENCE" and "proof" not in evidence
+    # The same evidence for the genuine book (title and author on the page) is accepted.
+    page = "THE LAST COLONY\nJOHN SCALZI\nA TOR BOOK"
+    verdict, confidence, _ = classify_identity(result, {"title": "The Last Colony", "author": "John Scalzi"},
+                                               page, [], [], page)
+    assert (verdict, confidence) == ("VERIFIED_CORRECT", 99)
+
+
+def scan_pdf(path, pages, *, metadata=None):
+    """A multi-page image-only PDF: each page is a list of lines drawn as pixels."""
+    pil = pytest.importorskip("PIL.Image")
+    draw_module = pytest.importorskip("PIL.ImageDraw")
+    font_module = pytest.importorskip("PIL.ImageFont")
+    font = font_module.load_default(size=54)
+    images = []
+    for lines in pages:
+        image = pil.new("L", (1275, 1650), 255)
+        draw = draw_module.Draw(image)
+        y = 300
+        for line in lines:
+            draw.text((120, y), line, fill=0, font=font)
+            y += 100
+        images.append(image)
+    images[0].save(path, "PDF", resolution=150, save_all=True, append_images=images[1:], **(metadata or {}))
+    return path
+
+
+@NEEDS_TOOLS
+def test_a_real_multi_page_scan_of_a_sibling_book_does_not_verify_through_its_also_by_page(tmp_path):
+    pdf = scan_pdf(tmp_path / "scan.pdf", [
+        ["ZOE'S TALE"],
+        ["ALSO BY JOHN SCALZI", "Old Man's War", "The Ghost Brigades", "The Human Division", "The Last Colony"],
+        ["ZOE'S TALE", "JOHN SCALZI", "A TOR BOOK"],
+    ], metadata={"title": "The Last Colony", "author": "John Scalzi"})
+    extracted = ebook_extraction.extract_ebook_identity(str(pdf))
+    assert extracted.source == "native-pdf+ocr" and extracted.ocr["setAside"] == 1
+    assert "colony" not in extracted.text.lower().replace("\f", " ") and "\f" in extracted.text
+    assert any("set aside" in note for note in extracted.notes)
+    verdict, confidence, _ = _classify_scan(pdf, "The Last Colony", "John Scalzi")
+    assert verdict not in {"VERIFIED_CORRECT", "METADATA_ERROR"}, (verdict, confidence)
+
+
+@NEEDS_TOOLS
+def test_a_real_multi_page_scan_of_the_right_book_still_verifies_with_an_also_by_page(tmp_path):
+    pdf = scan_pdf(tmp_path / "scan.pdf", [
+        ["THE LAST COLONY"],
+        ["ALSO BY JOHN SCALZI", "Old Man's War", "The Ghost Brigades"],
+        ["THE LAST COLONY", "JOHN SCALZI", "A TOR BOOK"],
+    ], metadata={"title": "The Last Colony", "author": "John Scalzi"})
+    assert _classify_scan(pdf, "The Last Colony", "John Scalzi")[:2] == ("VERIFIED_CORRECT", 99)
+
+
+@NEEDS_TOOLS
+def test_a_scan_that_is_only_a_list_reports_why_instead_of_inventing_a_title(tmp_path):
+    pdf = scan_pdf(tmp_path / "scan.pdf", [["ALSO BY JOHN SCALZI", "Old Man's War", "The Last Colony"]])
+    found = ocr_probe.ocr_pdf_front(pdf)
+    assert "text" not in found and "list other books" in found["error"] and found["setAside"] == 1
 
 
 def test_ocr_search_work_is_bounded_by_the_text_and_the_name(monkeypatch):

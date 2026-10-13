@@ -7,6 +7,7 @@ import sqlite3
 
 from .identity_search import second_pass
 from .matcher import author_match_strict, author_mentioned_in_text, meaningful_words, normalize
+from .scan_text import PAGE_BREAK, without_book_lists
 from .series_titles import ebook_title_conflict, expected_title_variants
 from .verification_constants import FRONT_TEXT_CHARS
 
@@ -64,13 +65,17 @@ def _author_found(author: str, text: str) -> bool:
 
 
 # --- OCR text ------------------------------------------------------------------------------
-# A scan's text comes from OCR, which drops spaces and misreads letters. Two kinds of match:
-#   exact - the title or name, spaces and punctuation aside, stands alone in the text (a word
-#           boundary on both ends: "Volume I" is not "Volume II", "Anne Rice" is not "JoAnne
-#           Rice"). Only an exact match is ever evidence FOR a book.
+# A scan's text comes from OCR, which drops spaces and misreads letters, and the page is the only
+# witness to what the book is. So scanned text is held to a stricter rule than a text layer:
+#   exact - the title or name, spaces and punctuation aside, stands alone as whole words. A TITLE
+#           must also fill its own line(s) on the page (a leading "The" and a tail such as
+#           ": A Novel" or "by <author>" are allowed): "Dune" is not "Dune Messiah", and "It" is not
+#           the word "it" in a paragraph. Title and author must be on the same page, close together.
+#           Only an exact match is ever evidence FOR a book.
 #   near  - a very close but not identical passage (a misread letter). It is never evidence for
 #           a book ("The Lost Colony" is one letter from "The Last Colony"); it is used only to
 #           hold back a verdict that would reject or rewrite a book that OCR may have misread.
+# Pages that list books ("Also by ...") never reach this code: see scan_text.
 OCR_MIN_NEAR = 10            # shorter names tolerate no misread letter at 90%, so they are exact-only
 OCR_MAX_NEAR_NEEDLE = 80     # longer names are matched exactly only (a PDF /Title can be anything)
 OCR_NEAR_RATIO = 0.9
@@ -80,22 +85,30 @@ OCR_MAX_GRAM_HITS = 200      # a fragment this common says nothing about where a
 OCR_MAX_CANDIDATES = 16      # at most this many places are compared closely, whatever the text
 OCR_CANDIDATE_SLACK = 2
 OCR_MAX_EXACT_HITS = 2_000
-_LIST_HEADING = re.compile(
-    r"^\W*(?:also\s+by|other\s+(?:books|titles|works|novels)\s+by|more\s+(?:books\s+)?by|"
-    r"books\s+by|titles\s+by|novels\s+by|by\s+the\s+same\s+author|praise\s+for)\b",
-    flags=re.IGNORECASE,
+OCR_TITLE_PAGE_CHARS = 400   # a title page prints the title and the author within a few lines
+_OCR_LEADING = {"", "the"}      # "A" / "An" are part of a different title ("A Dog's Purpose")
+_OCR_TITLE_TAIL = re.compile(
+    r"(?:(?:a|an|the)\s+)?(?:novel|memoir|thriller|mystery|story|romance|tale|saga)"   # ": A Novel"
+    r"|by\s+\S.*",                                                                     # "by John Scalzi"
 )
-OCR_MAX_LIST_BLOCKS = 3
+_OCR_GENERIC_TITLES = frozenset({
+    "novel", "anovel", "thenovel", "memoir", "amemoir", "thriller", "athriller", "mystery", "amystery",
+    "story", "astory", "stories", "book", "abook", "tale", "atale", "romance", "aromance",
+})
 
 
 class _Squashed:
-    """Text reduced to letters and digits, with each character's place in the readable text."""
+    """One OCR page reduced to letters and digits, with each character's place in the readable text.
+
+    ``readable`` keeps the page's lines (words lower-cased and separated by spaces, lines by
+    newlines) so a match can be checked against the line it sits on."""
 
     __slots__ = ("text", "origin", "readable")
 
     def __init__(self, value: str):
-        self.readable = normalize(value)[:OCR_MAX_CHARS * 2]
-        kept = [(char, index) for index, char in enumerate(self.readable) if char != " "]
+        lines = [normalize(line) for line in (value or "").split("\n")]
+        self.readable = "\n".join(lines)[:OCR_MAX_CHARS * 2]
+        kept = [(char, index) for index, char in enumerate(self.readable) if char not in " \n"]
         self.text = "".join(char for char, _ in kept)[:OCR_MAX_CHARS]
         self.origin = [index for _, index in kept][:OCR_MAX_CHARS]
 
@@ -104,43 +117,32 @@ def _squash(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", normalize(value))
 
 
-def _drop_book_lists(text: str, author: str) -> str:
-    """OCR text without "Also by ..." lists.
+def _ocr_exact_pos(needle: str, squashed: _Squashed, *, own_line: bool = False, author: str = "") -> int:
+    """Position (in the page's readable text) of ``needle`` standing alone on the page, else -1.
 
-    A same-author list names other books beside the author's name; read as a title page it would
-    "identify" a book the file is not. The heading's block and the list blocks after it are
-    dropped, up to the next block that names the author (the real title page). Dropping text can
-    only remove evidence, never add it."""
-    blocks = re.split(r"\n\s*\n", text or "")
-    squashed_author = _squash(author)
-    kept: list[str] = []
-    dropping = 0
-    for block in blocks:
-        if _LIST_HEADING.match(block.strip()):
-            dropping = OCR_MAX_LIST_BLOCKS
-            continue
-        if dropping and not (squashed_author and squashed_author in _squash(block)):
-            dropping -= 1
-            continue
-        dropping = 0
-        kept.append(block)
-    return "\n\n".join(kept)
-
-
-def _ocr_exact_pos(needle: str, squashed: _Squashed) -> int:
-    """Position (in the readable text) of ``needle`` standing alone in the OCR text, else -1."""
-    if not needle:
+    Standing alone means whole words: nothing alphanumeric touches either end. With ``own_line``
+    (titles) the match must also fill its lines, bar a leading "The" and a tail that is a generic
+    descriptor, "by ...", or the (squashed) ``author``'s name."""
+    if not needle or needle in _OCR_GENERIC_TITLES:
         return -1
+    readable = squashed.readable
     start = 0
     for _ in range(OCR_MAX_EXACT_HITS):
         hit = squashed.text.find(needle, start)
         if hit < 0:
             return -1
         first, last = squashed.origin[hit], squashed.origin[hit + len(needle) - 1]
-        before = squashed.readable[first - 1] if first > 0 else " "
-        after = squashed.readable[last + 1] if last + 1 < len(squashed.readable) else " "
-        if before == " " and after == " ":
-            return first
+        before = readable[first - 1] if first > 0 else " "
+        after = readable[last + 1] if last + 1 < len(readable) else " "
+        if not before.isalnum() and not after.isalnum():
+            if not own_line:
+                return first
+            line_start = readable.rfind("\n", 0, first) + 1
+            line_end = readable.find("\n", last + 1)
+            tail = readable[last + 1:line_end if line_end >= 0 else len(readable)].strip()
+            if readable[line_start:first].strip() in _OCR_LEADING and (
+                    not tail or _OCR_TITLE_TAIL.fullmatch(tail) or (author and _squash(tail) == author)):
+                return first
         start = hit + 1
     return -1
 
@@ -150,7 +152,8 @@ def _ocr_near_pos(needle: str, squashed: _Squashed, min_length: int) -> int:
 
     Work is bounded whatever the text or the name: the text is indexed once by short fragments,
     the few places where many fragments line up are compared closely (at most
-    ``OCR_MAX_CANDIDATES`` places), and every number in the name must appear intact ("Treehouse 13" is not "26")."""
+    ``OCR_MAX_CANDIDATES`` places), and every number in the name must appear intact
+    ("Treehouse 13" is not "26")."""
     size = len(needle)
     if size < min_length or size > OCR_MAX_NEAR_NEEDLE:
         return -1
@@ -176,8 +179,7 @@ def _ocr_near_pos(needle: str, squashed: _Squashed, min_length: int) -> int:
     for diagonal, _ in ranked[:OCR_MAX_CANDIDATES]:
         for start in range(diagonal - OCR_CANDIDATE_SLACK, diagonal + OCR_CANDIDATE_SLACK + 1):
             window = haystack[start:start + size] if start >= 0 else ""
-            # Every number in the name must stand intact in the passage ("13" is not "26" or "12");
-            # extra digits are fine, since OCR reads a letter as a digit ("SW0RD").
+            # Extra digits are fine, since OCR reads a letter as a digit ("SW0RD").
             if start in tried or len(window) < size or not set(numbers) <= set(re.findall(r"\d+", window)):
                 continue
             tried.add(start)
@@ -194,27 +196,39 @@ def _ocr_identity_signal(title: str, author: str, full_text: str, front_text: st
     "verified" verdicts, the second pass) are exact matches only. ``title_near`` / ``author_near``
     and ``near_identity`` exist so a book OCR may have misread is not rejected or rewritten."""
     first_author = author.split(";")[0]
-    full = _Squashed(_drop_book_lists(full_text, first_author))
-    front = full if front_text == full_text else _Squashed(_drop_book_lists(front_text, first_author))
     squashed_title, squashed_author = _squash(title), _squash(first_author)
-    title_full, author_full = _ocr_exact_pos(squashed_title, full), _ocr_exact_pos(squashed_author, full)
-    title_front = title_full if front is full else _ocr_exact_pos(squashed_title, front)
-    author_front = author_full if front is full else _ocr_exact_pos(squashed_author, front)
-    distance = abs(title_front - author_front) if title_front >= 0 and author_front >= 0 else None
-    proximity = distance is not None and distance <= PROXIMITY_CHARS
+    # OCR text is far shorter than the front-text window, so the two are the same text. Pages that
+    # list other books are already gone when it comes from ocr_probe; doing it again costs nothing
+    # and means no caller can hand this function a list page.
+    pages = [_Squashed(page) for page in without_book_lists(full_text)[0].split(PAGE_BREAK) if page.strip()][:12]
 
-    title_near = title_full >= 0 or _ocr_near_pos(squashed_title, front, OCR_MIN_NEAR) >= 0
-    author_near = author_full >= 0 or _ocr_near_pos(squashed_author, front, OCR_MIN_NEAR) >= 0
+    title_at = author_at = None            # first position of each over all pages
+    tight: int | None = None               # closest title/author pair printed on one page
+    near_title = near_author = False
+    offset = 0
+    for page in pages:
+        t = _ocr_exact_pos(squashed_title, page, own_line=True, author=squashed_author)
+        a = _ocr_exact_pos(squashed_author, page)
+        if t >= 0 and title_at is None:
+            title_at = offset + t
+        if a >= 0 and author_at is None:
+            author_at = offset + a
+        if t >= 0 and a >= 0 and abs(t - a) <= OCR_TITLE_PAGE_CHARS:
+            tight = abs(t - a) if tight is None else min(tight, abs(t - a))
+        near_title = near_title or t >= 0 or _ocr_near_pos(squashed_title, page, OCR_MIN_NEAR) >= 0
+        near_author = near_author or a >= 0 or _ocr_near_pos(squashed_author, page, OCR_MIN_NEAR) >= 0
+        offset += len(page.readable) + 1
+    found_title, found_author = title_at is not None, author_at is not None
     return {
-        "title_found": title_full >= 0, "author_found": author_full >= 0,
-        "title_front_found": title_front >= 0, "author_front_found": author_front >= 0,
-        "front_proximity": proximity, "front_proximity_chars": distance,
-        "strong_identity": proximity,
-        "title_first_position": title_full if title_full >= 0 else None,
-        "author_exact_first_position": author_full if author_full >= 0 else None,
+        "title_found": found_title, "author_found": found_author,
+        "title_front_found": found_title, "author_front_found": found_author,
+        "front_proximity": tight is not None, "front_proximity_chars": tight,
+        "strong_identity": tight is not None,
+        "title_first_position": title_at,
+        "author_exact_first_position": author_at,
         "ocr": True,
-        "title_near": bool(title_near), "author_near": bool(author_near),
-        "near_identity": bool(title_near and author_near),
+        "title_near": near_title, "author_near": near_author,
+        "near_identity": bool(near_title and near_author),
     }
 
 
@@ -401,9 +415,12 @@ def _classify_identity_base(
         )
         return "WRONG_CONTENT", 99, evidence
 
-    # In a scan the page is the only independent witness and its title is what OCR reads best:
-    # the author alone (a different book by the same author) does not support the assignment.
-    content_supports = expected["title_found"] or (expected["author_found"] and not ocr_text)
+    # In a scan the page is the only independent witness: the title alone could be a different
+    # author's book of that name, the author alone a different book by that author.
+    content_supports = (
+        (expected["title_found"] and expected["author_found"]) if ocr_text
+        else (expected["title_found"] or expected["author_found"])
+    )
     if metadata_matches_expected and content_supports:
         evidence["explanation"] = (
             "Metadata matches the expected book, but content evidence is not positioned "

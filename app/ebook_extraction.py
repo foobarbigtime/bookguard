@@ -207,13 +207,14 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
         # A scan has no text layer: read the first pages as images so the title page can be checked.
         found = ocr_probe.ocr_pdf_front(path)
         ocr = {"attempted": True, "pages": int(found.get("pages") or 0), "chars": len(found.get("text") or ""),
-               "error": str(found.get("error") or "")}
+               "error": str(found.get("error") or ""), "setAside": int(found.get("setAside") or 0)}
         if found.get("text"):
             text = found["text"]
             front_text = text[:FRONT_TEXT_CHARS]
             source = "native-pdf+ocr"
             notes.append(f"OCR of the first {ocr['pages']} page(s) supplied the text because the PDF has no "
-                         "text layer. OCR can misread a name, which can only make a match fail, never invent one.")
+                         "text layer. OCR can misread a name, which can only make a match fail, never invent one."
+                         + (f" {ocr['setAside']} page(s) listing other books were set aside." if ocr["setAside"] else ""))
         elif found.get("error"):
             notes.append(str(found["error"]))
 

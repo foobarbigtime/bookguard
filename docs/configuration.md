@@ -100,10 +100,15 @@ and its temporary images are removed immediately.
 | `BOOKGUARD_VERIFICATION_OCR_PAGES` | `3` | How many pages from the front to read (1-6). |
 | `BOOKGUARD_VERIFICATION_OCR_LANGUAGES` | `eng` | Tesseract languages, e.g. `eng+nld`. The matching `tesseract-ocr-<lang>` package must be in the image. |
 
-OCR can misread a name, so scanned text is held to a stricter rule than a text layer. A title or
-author counts as evidence only when it stands alone on the page as whole words (lost spaces and
-punctuation are tolerated; "Volume I" is not "Volume II", and "Anne Rice" is not "JoAnne Rice"). A
-passage that is a letter or two off ("The Lost Colony") is never evidence for a book: it only stops
-BookGuard rejecting or rewriting a book that OCR may have misread. "Also by ..." lists are ignored,
-and for a scan the title, not just the author, must be found. A misread can therefore leave a book
-undecided, but cannot make a different book verify. The image adds about 100 MB for Poppler and Tesseract.
+OCR can misread a name, so a scan is held to a stricter rule than a text layer. A scan counts as the
+assigned book only when its title and its author are both on the same page, close together, and the
+title fills its own line (or lines) as it does on a title page: "Dune" is not "Dune Messiah", and
+"It" is not the word "it" in a paragraph. Lost spaces and punctuation are tolerated; a misread letter
+("The Lost Colony" for "The Last Colony") is never evidence for a book, it only stops BookGuard
+rejecting or rewriting a book that OCR may have misread. Pages that list other books ("Also by ...",
+"Other books", "Praise for", "About the author") are set aside, from the heading to the end of the page,
+because they name other titles beside the author's name. A scan can therefore end up undecided, but
+cannot be confirmed by a list, by the author alone, or by a title that belongs to a different book.
+One limit remains: a title printed over several lines ("DUNE" above "MESSIAH") cannot be told from a
+short title followed by a subtitle without more information, so such a scan should be checked by hand
+or by an ISBN. The image adds about 100 MB for Poppler and Tesseract.

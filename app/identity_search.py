@@ -341,9 +341,15 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
         )
         author_level = author_match_level(author, file_author)
         author_ok = bool(author_level)
-        # In a scan (OCR) the author alone is not enough: it could be another book by that author.
-        in_text = bool(expected_signal.get("title_found")
-                       or (expected_signal.get("author_found") and not expected_signal.get("ocr")))
+        # In a scan (OCR) the title and the author must both be on the page: either alone could be
+        # another book by that author, or another author's book of that name.
+        scan = bool(expected_signal.get("ocr"))
+
+        def in_book(signal: dict[str, Any]) -> bool:
+            title_in, author_in = bool(signal.get("title_found")), bool(signal.get("author_found"))
+            return (title_in and author_in) if scan else (title_in or author_in)
+
+        in_text = in_book(expected_signal)
         # An initial standing in for a name is only the same person if the book itself prints
         # the assigned author's name; an exact match needs nothing more.
         author_backed = author_level == "exact" or bool(expected_signal.get("author_found"))
@@ -360,9 +366,9 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
 
         proof = provenance_proof(
             expected, embedded,
-            {"expectedTitleInText": bool(expected_signal.get("title_found")),
-             "expectedAuthorInText": bool(expected_signal.get("author_found")),
-             "fileTitleInText": bool(embedded_signal.get("title_found"))},
+            {"expectedTitleInText": in_text if scan else bool(expected_signal.get("title_found")),
+             "expectedAuthorInText": in_text if scan else bool(expected_signal.get("author_found")),
+             "fileTitleInText": in_book(embedded_signal) if scan else bool(embedded_signal.get("title_found"))},
             releases, author_match_level,
         )
         tried.append({"check": "provenance", "releases": len(releases), "agreed": bool(proof)})

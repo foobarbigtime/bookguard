@@ -9,6 +9,7 @@ Safety, in the same spirit as ``pdf_probe``: the PDF it is given is the verifier
 snapshot; every child process has a wall-clock timeout, a bounded output, and CPU and
 address-space limits; temporary images live in a private directory that is always removed; the
 number of pages and the amount of text are small; and nothing is written anywhere else.
+Pages stay separated by a form feed, and pages that list other books are set aside.
 OCR can misread a name. That can only make a title or author go unfound (the book stays
 undecided), never match something that is not there.
 """
@@ -25,6 +26,7 @@ from typing import Any
 
 from .config import settings
 from .pdf_probe import _preflight
+from .scan_text import PAGE_BREAK, without_book_lists
 from .subprocess_capture import ProcessOutputLimitExceeded, run_bounded_process
 
 RENDER_DPI = 200
@@ -113,7 +115,13 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
             chunks.append(re.sub(r"[ \t]+", " ", result.stdout.decode("utf-8", errors="replace")).strip())
             if sum(len(c) for c in chunks) >= ENOUGH_TEXT_CHARS:
                 break
-    text = "\n".join(c for c in chunks if c)[:MAX_TEXT_CHARS]
-    if not text.strip():
+    raw = PAGE_BREAK.join(c for c in chunks if c)
+    if not raw.strip():
         return {"error": f"OCR read {read} page image(s) but found no text.", "pages": read}
-    return {"text": text, "pages": read}
+    # Pages that list other books (or praise, or the author's bio) are not the book's title page.
+    text, set_aside = without_book_lists(raw)
+    text = text[:MAX_TEXT_CHARS]
+    if not text.strip():
+        return {"error": f"OCR read {read} page(s), but they only list other books (\"Also by ...\"), so none "
+                         "is a title page.", "pages": read, "setAside": set_aside}
+    return {"text": text, "pages": read, "setAside": set_aside}
