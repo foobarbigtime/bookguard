@@ -32,7 +32,8 @@ def isbn13(raw: Any) -> str | None:
     return None
 
 
-_ISBN_LABELLED = re.compile(r"ISBN(?:[- ]?1[03])?[ \t]*[:#]?[ \t]*([0-9][0-9Xx \t\-\u2013]{8,24})", re.IGNORECASE)
+_ISBN_LABELLED = re.compile(
+    r"ISBN(?:[- ]?(1[03]))?[ \t]*[:#]?[ \t]*([0-9][0-9Xx \t\-\u2013]{8,24})", re.IGNORECASE)
 _ISBN_BARE = re.compile(r"(?<![0-9])(97[89](?:[ \t\-\u2013]?[0-9]){10})(?![0-9])")
 
 
@@ -44,13 +45,18 @@ def text_isbns(text: str, limit: int = 5) -> list[str]:
     the printer's key ("1 3 5 7 9 10 8 6 4 2") that often follows an ISBN does not matter."""
     found: list[str] = []
     for match in _ISBN_LABELLED.finditer(text or ""):
-        digits = re.sub(r"[^0-9Xx]", "", match.group(1)).upper()
-        for length in (13, 10):
-            value = isbn13(digits[:length]) if len(digits) >= length else None
-            if value:
-                if value not in found:
-                    found.append(value)
-                break
+        digits = re.sub(r"[^0-9Xx]", "", match.group(2)).upper()
+        # A number is read as the kind it says it is. One that starts like an ISBN-13 (978/979) is only
+        # ever an ISBN-13: if its checksum fails it is a misread, never "really" a truncated ISBN-10.
+        if match.group(1) == "10":
+            length = 10
+        elif match.group(1) == "13" or digits[:3] in {"978", "979"}:
+            length = 13
+        else:
+            length = 10
+        value = isbn13(digits[:length]) if len(digits) >= length else None
+        if value and value not in found:
+            found.append(value)
     for match in _ISBN_BARE.finditer(text or ""):
         value = isbn13(match.group(1))
         if value and value not in found:

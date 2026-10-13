@@ -859,6 +859,12 @@ def test_isbns_are_read_from_a_copyright_page_and_only_when_the_checksum_holds()
     assert text_isbns("ISBN 978-0-7653-5375-0") == []            # wrong check digit (an OCR misread): lost, not invented
     assert text_isbns("Printed in 2007, 1234567890123 copies, page 12345") == []
     assert text_isbns("") == [] and text_isbns("ISBN") == []
+    # A 13-digit number whose checksum fails is a misread, never "really" a truncated ISBN-10.
+    assert text_isbns("ISBN-13: 9780000003004") == [] and text_isbns("ISBN 9780000003004") == []
+    assert text_isbns("ISBN 978076535375") == []                   # a digit lost: 12 digits is not an ISBN
+    # A labelled ISBN-10 (with its X check character) is read as an ISBN-10.
+    assert text_isbns("ISBN 0-7653-5375-X") == ["9780765353757"] == text_isbns("ISBN-10: 076535375X")
+    assert text_isbns("ISBN-10: 0765353750") == []
 
 
 @pytest.fixture
@@ -928,3 +934,24 @@ def test_a_real_scan_with_noise_pages_then_a_copyright_page_gets_its_isbn_read(t
     assert extracted.source == "native-pdf+ocr"
     assert extracted.identifiers == [f"isbn:{LAST_COLONY_ISBN}"] and extracted.ocr["isbns"] == [LAST_COLONY_ISBN]
     assert extracted.ocr["firstPage"].startswith("WARNING") and extracted.ocr["version"] >= 2
+
+
+def test_a_printed_isbn_plus_the_files_own_matching_title_is_the_two_source_rule_ebooks_already_use(scalzi_editions):
+    """ISBN (content) + the file's own title (metadata): two independent sources, verified at 99 as for an EPUB.
+
+    A sibling's scan prints the sibling's ISBN, which Bindery maps to the sibling, so a cover cannot supply it."""
+    import sqlite3
+    with sqlite3.connect(scalzi_editions) as conn:
+        conn.execute("DELETE FROM history")             # no download record, and the cover is unreadable
+    noise = "- +\nrise\fWARNING\nAmy relakyorwshep bo"
+    result = _isbn_result()([f"isbn:{LAST_COLONY_ISBN}"])
+    verdict, confidence, evidence = classify_identity(
+        result, {"title": "The Last Colony", "author": "John Scalzi"}, noise, [f"isbn:{LAST_COLONY_ISBN}"], [], noise)
+    assert (verdict, confidence) == ("VERIFIED_CORRECT", 99) and "ISBN is one of this book's editions" in evidence["explanation"]
+    # ...while junk details and no other source leave the same scan undecided, and another book's ISBN is no help.
+    verdict, _, _ = classify_identity(result, {"title": "Book to Do 1", "author": "Unknown"}, noise,
+                                      [f"isbn:{LAST_COLONY_ISBN}"], [], noise)
+    assert verdict == "INSUFFICIENT_EVIDENCE"
+    other = _isbn_result()([f"isbn:{OTHER_ISBN}"])
+    assert classify_identity(other, {"title": "The Last Colony", "author": "John Scalzi"}, noise,
+                             [f"isbn:{OTHER_ISBN}"], [], noise)[0] == "INSUFFICIENT_EVIDENCE"
