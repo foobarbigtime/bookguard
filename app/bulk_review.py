@@ -117,8 +117,8 @@ def bulk_preview(group: str, client: BinderyClient | None = None) -> dict[str, A
             except Exception as exc:  # one bad book must not hide the others
                 ok, why, detail = False, f"previewFailed: {exc}"[:200], ""
         if ok and group == "wrong" and item["mixedAudio"]:
-            detail = ("The whole folder (it holds other books too) goes to quarantine, "
-                      "then Bindery searches for a clean copy.")
+            detail = ("The whole folder (it holds other books too) goes to quarantine and cannot be "
+                      "put back from BookGuard, then Bindery searches for a clean copy.")
         books.append({"id": item["id"], "title": item["title"], "author": item["author"],
                       "eligible": ok, "blockers": why, "detail": detail})
     action = BULK_ACTIONS[group]

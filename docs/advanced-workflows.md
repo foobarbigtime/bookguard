@@ -171,7 +171,7 @@ perform no library or Bindery mutation.
 ## Replacing a bad file
 
 BookGuard no longer downloads, stages or publishes replacement files itself.
-**Replace** quarantines the bad file (Put back can undo it), blocklists the
+**Replace** quarantines the bad file (Put back can undo it for a single file, not for a folder), blocklists the
 release it came from in Bindery, keeps the book monitored and runs Bindery's
 Automatic search. Bindery picks, downloads and imports a new copy with your own
 Bindery settings, and BookGuard checks it like any other import.

@@ -92,7 +92,8 @@ def test_wrong_includes_mixed_audio_folders_and_says_the_whole_folder_goes(plan)
     result = bulk_review.bulk_preview("wrong")
     by_id = {b["id"]: b for b in result["books"]}
     assert set(by_id) == {1, 5} and by_id[5]["eligible"]
-    assert "whole folder" in by_id[5]["detail"] and "whole folder" not in by_id[1]["detail"]
+    assert "whole folder" in by_id[5]["detail"] and "cannot be put back" in by_id[5]["detail"]
+    assert "whole folder" not in by_id[1]["detail"]
 
 
 def test_mixed_audio_stays_out_of_move_and_metadata_fixes(plan):

@@ -142,7 +142,7 @@
       const preview = await request(`/api/triage/${item.id}/action-preview?action=quarantine`);
       if (!preview.safe) throw new Error(preview.reason || "The safety check failed.");
       const what = item.mixedAudio
-        ? "This folder holds recordings of other books too. BookGuard moves all of it to quarantine, including any good copy of this book (nothing is deleted; Put back restores it). "
+        ? "This folder holds recordings of other books too. BookGuard moves all of it to quarantine, including any good copy of this book. Nothing is deleted, but Put back does not work on folders: to get it back you would move it out of the quarantine folder yourself. "
         : "BookGuard moves it to quarantine (nothing is deleted). ";
       const text = `Replace this ${item.mixedAudio ? "folder" : "file"}?\n\n${preview.local_path}\n\n${what}` +
         "Bindery then blocklists the download it came from, searches for a new copy and imports it.";
