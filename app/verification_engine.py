@@ -100,6 +100,19 @@ _OCR_TITLE_BY = re.compile(rf"(?:{_OCR_DESCRIPTOR}\s+)?by\s+(.+)")             #
 _OCR_DESCRIPTOR_ONLY = re.compile(_OCR_DESCRIPTOR)                              # ": A Novel"
 _OCR_AUTHOR_LEAD = re.compile(rf"(?:{_OCR_DESCRIPTOR}(?:\s+|$))?(?:written(?:\s+|$))?(?:by)?")
 _OCR_AUTHOR_TAIL = re.compile(r"and\s+\S.*")                                   # a co-author may follow
+# A cover that refers to another work ("author of ...", "sequel to ...", an omnibus, a sampler, a study
+# guide) cannot be read as the title of THIS book, whatever else is printed on it.
+_OCR_REFERENCE = re.compile(
+    r"\b(?:author of|authors of|sequel to|prequel to|companion to|follow up to|follows|continues|excerpts?|"
+    r"sampler|preview|omnibus|collection|box(?:ed)? set|novels? in one|study guide|summary of|summary|analysis|"
+    r"workbook|sparknotes|cliffsnotes|supersummary|includes|including|contains|also in this|also by)\b"
+)
+# A line that ends in one of these before the author's name gives the name a different role.
+_OCR_ROLE_BEFORE = re.compile(
+    r"\b(?:introduction|introduced|foreword|afterword|preface|edited|translated|illustrated|narrated|read|"
+    r"performed|with|and|review|reviewed|praise|quote|says|said|blurb|photographs?)\s*(?:by)?\s*$"
+)
+OCR_MIN_WORDS_ON_A_PAGE = 2   # a page of fewer words (art, a stray mark) is not the opening page
 _OCR_GENERIC_TITLES = frozenset({
     "novel", "anovel", "thenovel", "memoir", "amemoir", "thriller", "athriller", "mystery", "amystery",
     "story", "astory", "stories", "book", "abook", "tale", "atale", "romance", "aromance",
@@ -121,6 +134,12 @@ class _Squashed:
         self.text = "".join(char for char, _ in kept)[:OCR_MAX_CHARS]
         self.origin = [index for _, index in kept][:OCR_MAX_CHARS]
 
+    def opening_text(self, lines: int = OCR_OPENING_LINES) -> str:
+        return "\n".join([line for line in self.readable.split("\n") if line.strip()][:lines])
+
+    def words(self) -> int:
+        return len(re.findall(r"[a-z]{2,}", self.readable))
+
     def opening_end(self, lines: int = OCR_OPENING_LINES) -> int:
         """Where the first ``lines`` non-empty lines of the page end, in the readable text."""
         seen, index = 0, 0
@@ -135,6 +154,21 @@ class _Squashed:
 
 def _squash(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", normalize(value))
+
+
+def _role_on_previous_line(readable: str, line_start: int, lead: str) -> bool:
+    """The author's line is the continuation of a role given on the line above ("INTRODUCTION BY" / name).
+
+    Only a plain "by" / "a novel by" / "written by" above the name is the author's credit."""
+    if lead or line_start == 0:
+        return False
+    previous = [line for line in readable[:line_start - 1].split("\n") if line.strip()]
+    if not previous:
+        return False
+    above = previous[-1].strip()
+    if _OCR_AUTHOR_LEAD.fullmatch(above) or _OCR_DESCRIPTOR_ONLY.fullmatch(above):
+        return False
+    return bool(_OCR_ROLE_BEFORE.search(above))
 
 
 def _title_tail_ok(tail: str, authors: frozenset[str]) -> bool:
@@ -175,7 +209,8 @@ def _ocr_exact_pos(
                     return first
             elif (_OCR_AUTHOR_LEAD.fullmatch(lead)
                   or (after_title and _squash(re.sub(r"\s*\bby$", "", lead)) == after_title)) and (
-                    not tail or _OCR_AUTHOR_TAIL.fullmatch(tail)):
+                    not tail or _OCR_AUTHOR_TAIL.fullmatch(tail)) and not _role_on_previous_line(
+                        readable, line_start, lead):
                 return first
         start = hit + 1
     return -1
@@ -238,6 +273,7 @@ def _ocr_identity_signal(title: str, author: str, full_text: str, front_text: st
     # list other books are already gone when it comes from ocr_probe; doing it again costs nothing
     # and means no caller can hand this function a list page.
     pages = [_Squashed(page) for page in without_book_lists(full_text)[0].split(PAGE_BREAK) if page.strip()][:12]
+    pages = [page for page in pages if page.words() >= OCR_MIN_WORDS_ON_A_PAGE]
 
     def find_author(page: _Squashed) -> int:
         found = [pos for name in squashed_names
@@ -255,7 +291,7 @@ def _ocr_identity_signal(title: str, author: str, full_text: str, front_text: st
     for number, page in enumerate(pages):
         t = _ocr_exact_pos(squashed_title, page, title=True, authors=squashed_names)
         a = find_author(page)
-        if number == 0 and 0 <= t < page.opening_end():
+        if number == 0 and 0 <= t < page.opening_end() and not _OCR_REFERENCE.search(page.opening_text()):
             opening_at = t
         if a >= 0 and author_at is None:
             author_at = offset + a
@@ -440,6 +476,15 @@ def _classify_identity_base(
         and not embedded["strong_identity"]
         and not embedded.get("near_identity")
     ):
+        if ocr_text:
+            # One source (the first page of a scan) saying "the file's details are wrong" is not proof:
+            # a cover can name other books. A second source (Bindery's download record) can settle it.
+            evidence["scanPage"] = {"readsAs": "expected"}
+            evidence["explanation"] = (
+                "The first page of this scan reads as the expected book, but the page alone is not "
+                "accepted as proof for a scan and the file's own details do not confirm it."
+            )
+            return "INSUFFICIENT_EVIDENCE", 70, evidence
         evidence["explanation"] = (
             "Front-of-book content strongly identifies the expected Bindery book, while "
             "the conflicting embedded identity is not strongly supported there."
@@ -465,7 +510,7 @@ def _classify_identity_base(
     # In a scan the page is the only independent witness: the title alone could be a different
     # author's book of that name, the author alone a different book by that author.
     content_supports = (
-        (expected["title_found"] and expected["author_found"]) if ocr_text
+        expected["strong_identity"] if ocr_text
         else (expected["title_found"] or expected["author_found"])
     )
     if metadata_matches_expected and content_supports:

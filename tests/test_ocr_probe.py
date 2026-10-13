@@ -41,7 +41,7 @@ def test_the_title_page_of_an_image_only_pdf_is_read(tmp_path):
 
 
 @NEEDS_TOOLS
-def test_an_image_only_pdf_with_placeholder_metadata_is_now_recognised_as_the_right_book(tmp_path):
+def test_an_image_only_pdf_with_placeholder_metadata_is_read_but_the_page_alone_is_not_proof(tmp_path):
     pdf = title_page_pdf(tmp_path / "scan.pdf", ["HOW TO STEAL A", "DRAGON'S SWORD", "CRESSIDA COWELL"],
                          metadata={"title": "Book to Do 1", "author": "Unknown"})
     extracted = ebook_extraction.extract_ebook_identity(str(pdf))
@@ -51,9 +51,10 @@ def test_an_image_only_pdf_with_placeholder_metadata_is_now_recognised_as_the_ri
               "series": [], "isbn_evidence": {}, "_ocr_text": extracted.source.endswith("+ocr")}
     verdict, _confidence, evidence = classify_identity(
         result, extracted.metadata, extracted.text, extracted.identifiers, extracted.notes, extracted.front_text)
-    # The page itself names the assigned book while the file's own details are junk.
-    assert verdict in {"METADATA_ERROR", "VERIFIED_CORRECT"}, (verdict, evidence.get("explanation"))
-    assert evidence["content"]["expected_signal"]["title_found"] is True
+    # The page itself names the assigned book while the file's own details are junk: that is one source,
+    # and a scan's first page is not accepted as proof by itself (a cover can name other books).
+    assert evidence["content"]["expected_signal"]["strong_identity"] is True
+    assert verdict == "INSUFFICIENT_EVIDENCE" and evidence["scanPage"] == {"readsAs": "expected"}
 
 
 def _classify_scan(path, title, author):
@@ -271,10 +272,11 @@ def test_a_file_whose_own_identity_was_misread_by_ocr_is_not_rewritten_to_anothe
                                  file_title="Old Man's War", file_author="John Scalzi")
     assert evidence["content"]["embedded_signal"]["near_identity"] is True
     assert verdict != "METADATA_ERROR"
-    # With the file's identity absent from the page altogether, the old behaviour is unchanged.
-    verdict, _, _ = _scan("The Last Colony", "John Scalzi", "THE LAST COLONY\nJOHN SCALZI",
-                          file_title="Old Man's War", file_author="John Scalzi")
-    assert verdict == "METADATA_ERROR"
+    # With the file's identity absent from the page altogether the page still reads as the assigned
+    # book, but one source is not enough to call the file's details wrong.
+    verdict, _, evidence = _scan("The Last Colony", "John Scalzi", "THE LAST COLONY\nJOHN SCALZI",
+                                 file_title="Old Man's War", file_author="John Scalzi")
+    assert verdict == "INSUFFICIENT_EVIDENCE" and evidence["scanPage"] == {"readsAs": "expected"}
 
 
 # --- the layouts a second review used to defeat the list rule -----------------------------------
@@ -710,3 +712,120 @@ def test_pages_are_rendered_at_a_bounded_size_whatever_the_page_size(monkeypatch
     command = seen[0]
     assert "-scale-to" in command and command[command.index("-scale-to") + 1] == str(ocr_probe.RENDER_MAX_PIXELS)
     assert "-r" not in command          # an absolute size, not a resolution: a huge page cannot cost more
+
+
+# --- the final attack: two sources, not one cover --------------------------------------------------
+
+CLEAN_COVER = "JOHN SCALZI\nTHE LAST COLONY\nA TOR BOOK"
+
+
+def test_a_scans_first_page_alone_never_calls_its_details_wrong():
+    for metadata in ({"title": "", "author": ""}, {"title": "Book to Do 1", "author": "Unknown"}):
+        verdict, confidence, evidence = _scan("The Last Colony", "John Scalzi", "THE LAST COLONY\nJOHN SCALZI",
+                                              file_title=metadata["title"], file_author=metadata["author"])
+        assert (verdict, confidence) == ("INSUFFICIENT_EVIDENCE", 70) and evidence["scanPage"]["readsAs"] == "expected"
+    # With the file's own details agreeing, page and details are two sources.
+    assert _scan("The Last Colony", "John Scalzi", "THE LAST COLONY\nJOHN SCALZI",
+                 file_title="The Last Colony", file_author="John Scalzi")[:2] == ("VERIFIED_CORRECT", 99)
+
+
+def test_the_download_record_and_the_first_page_are_two_sources_that_verify_a_scan(scalzi_bindery):
+    result = {"title": "The Last Colony", "author": "John Scalzi", "book_id": 3, "series": [], "isbn_evidence": {},
+              "_ocr_text": True}
+    for metadata in ({"title": "", "author": ""}, {"title": "scan0001", "author": "Unknown"}):
+        verdict, confidence, evidence = classify_identity(result, metadata, CLEAN_COVER, [], [], CLEAN_COVER)
+        assert (verdict, confidence) == ("VERIFIED_CORRECT", 90), metadata
+        assert evidence["proof"]["sources"] == ["download name in Bindery's history", "the scan's title page"]
+        assert "Two independent sources" in evidence["explanation"]
+
+
+def test_a_download_record_for_another_book_or_none_at_all_verifies_nothing(scalzi_bindery):
+    # Bindery grabbed a release of THIS book, but the scan opens with another title.
+    result = {"title": "The Last Colony", "author": "John Scalzi", "book_id": 3, "series": [], "isbn_evidence": {},
+              "_ocr_text": True}
+    page = "ZOE'S TALE\nJOHN SCALZI\nA TOR BOOK"
+    assert classify_identity(result, {"title": "", "author": ""}, page, [], [], page)[0] == "INSUFFICIENT_EVIDENCE"
+    # The scan opens with the assigned title, but Bindery has no download record for this book.
+    other = dict(result, book_id=2, title="Old Man's War")
+    page = "OLD MAN'S WAR\nJOHN SCALZI\nA TOR BOOK"
+    verdict, _, evidence = classify_identity(other, {"title": "", "author": ""}, page, [], [], page)
+    assert verdict == "INSUFFICIENT_EVIDENCE" and "proof" not in evidence
+    # A record for the same title by a different author does not count either.
+    wrong = dict(result, author="Eoin Colfer")
+    page = "THE LAST COLONY\nEOIN COLFER"
+    assert classify_identity(wrong, {"title": "", "author": ""}, page, [], [], page)[0] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_a_scan_is_never_moved_to_another_book_without_an_isbn(scalzi_bindery):
+    from app.identity_search import second_pass
+    evidence = {
+        "expected": {"title": "The Ghost Brigades", "author": "John Scalzi"},
+        "embedded": {"title": "Old Man's War", "author": "John Scalzi"},
+        "content": {"expected_signal": {"ocr": True, "title_found": False, "title_near": False, "strong_identity": False},
+                    "embedded_signal": {"ocr": True, "strong_identity": True}},
+    }
+    assert second_pass({"book_id": 4, "series": []}, evidence) is None
+    assert {"check": "scanNeedsIsbnToMove"} in evidence["secondPass"] and "actualBook" not in evidence
+    # The same evidence for a text-layer book is allowed to name the other book (existing behaviour)...
+    evidence = {"expected": evidence["expected"], "embedded": evidence["embedded"],
+                "content": {"expected_signal": {"title_found": False, "title_near": False, "strong_identity": False},
+                            "embedded_signal": {"strong_identity": True}}}
+    assert second_pass({"book_id": 4, "series": []}, evidence) == ("WRONG_CONTENT", 85)
+    # ...and a scan's ISBN naming that same book is the second source that lets it.
+    evidence = {"expected": evidence["expected"], "embedded": evidence["embedded"],
+                "isbn": {"isbns": ["9780316085045"], "expectedMatch": False, "otherOwners": [{"bookId": 2}]},
+                "content": {"expected_signal": {"ocr": True, "title_found": False, "title_near": False,
+                                                "strong_identity": False},
+                            "embedded_signal": {"ocr": True, "strong_identity": True}}}
+    assert second_pass({"book_id": 4, "series": []}, evidence) == ("WRONG_CONTENT", 95)
+
+
+@pytest.mark.parametrize("cover", [
+    "JOHN SCALZI\nZOE'S TALE\n\nNEW YORK TIMES BESTSELLING\nAUTHOR OF\nTHE LAST COLONY",
+    "STEPHENIE MEYER\nNEW MOON\nTHE SEQUEL TO\nTWILIGHT",
+    "CHRISTOPHER PAOLINI\nELDEST\nFROM THE AUTHOR OF\nERAGON",
+    "ZOE'S TALE\nJOHN SCALZI\nTHE COMPANION TO\nTHE LAST COLONY",
+    "READ AN EXCERPT FROM\nTHE LAST COLONY\nBY JOHN SCALZI",
+    "OLD MAN'S WAR\nTHE GHOST BRIGADES\nTHE LAST COLONY\nJOHN SCALZI\nTHREE NOVELS IN ONE",
+    "A TOR BOOKS SAMPLER\nTHE LAST COLONY\nBY JOHN SCALZI",
+    "SUPERSUMMARY\nSTUDY GUIDE\nTHE LAST COLONY\nJOHN SCALZI",
+    "THE LAST COLONY\nA SUMMARY AND ANALYSIS\nJOHN SCALZI",
+    "THE LAST COLONY\nTHE COMPLETE COLLECTION\nJOHN SCALZI",
+])
+def test_a_cover_that_refers_to_another_work_is_not_read_as_this_books_title(cover):
+    assert _signal("The Last Colony", "John Scalzi", cover)["title_found"] is False
+    for metadata in ({"title": "The Last Colony", "author": "John Scalzi"}, {"title": "", "author": ""}):
+        verdict, _, _ = _scan("The Last Colony", "John Scalzi", cover,
+                              file_title=metadata["title"], file_author=metadata["author"])
+        assert verdict not in ("VERIFIED_CORRECT", "METADATA_ERROR"), (cover, metadata, verdict)
+
+
+@pytest.mark.parametrize("credit", [
+    "THE LAST COLONY\nA NOVEL\nBY JANE DOE\n\nINTRODUCTION BY\nJOHN SCALZI",
+    "THE LAST COLONY\nJANE DOE\nEDITED BY\nJOHN SCALZI",
+    "THE LAST COLONY\nJANE DOE\nFOREWORD BY\nJOHN SCALZI",
+    "THE LAST COLONY\nJANE DOE\nTRANSLATED BY\nJOHN SCALZI",
+    "THE LAST COLONY\nJANE DOE\nREAD BY\nJOHN SCALZI",
+])
+def test_a_role_given_on_the_line_above_the_name_is_not_the_authors_credit(credit):
+    assert _signal("The Last Colony", "John Scalzi", credit)["author_found"] is False
+    # ...while "by" or "a novel by" on its own line above the name still is the credit.
+    assert _signal("The Last Colony", "John Scalzi", "THE LAST COLONY\nA NOVEL BY\nJOHN SCALZI")["author_found"]
+    assert _signal("The Last Colony", "John Scalzi", "THE LAST COLONY\nBY\nJOHN SCALZI")["author_found"]
+
+
+def test_the_title_and_author_must_be_on_one_page_even_to_get_the_lower_confidences(scalzi_bindery):
+    """A half-title of this book followed by another book's title page (a merged PDF) verifies nothing."""
+    pages = "THE LAST COLONY\fZOE'S TALE\nJOHN SCALZI\nA TOR BOOK\fFor my family"
+    result = {"title": "The Last Colony", "author": "John Scalzi", "book_id": 3, "series": [], "isbn_evidence": {},
+              "_ocr_text": True}
+    for metadata in ({"title": "The Last Colony", "author": "John Scalzi"}, {"title": "The Last Colony", "author": "J. Scalzi"},
+                     {"title": "The Last Colony - John Scalzi", "author": "John Scalzi"}, {"title": "", "author": ""}):
+        verdict, confidence, _ = classify_identity(result, metadata, pages, [], [], pages)
+        assert verdict == "INSUFFICIENT_EVIDENCE", (metadata, verdict, confidence)
+
+
+def test_a_first_page_with_next_to_no_words_is_skipped_not_taken_as_the_opening():
+    for noise in ("wo", "~", "i", "|  .", "—"):
+        pages = f"{noise}\fTHE LAST COLONY\nJOHN SCALZI\nA TOR BOOK"
+        assert _signal("The Last Colony", "John Scalzi", pages)["strong_identity"], noise

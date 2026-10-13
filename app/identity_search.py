@@ -24,7 +24,7 @@ from typing import Any
 
 from .db import bindery_conn
 from .matcher import author_match_strict
-from .provenance import provenance_proof, releases_for_book
+from .provenance import provenance_proof, releases_for_book, scan_provenance_proof
 from .series_titles import ebook_title_conflict, expected_title_variants
 from .title_matching import (
     canon_tokens, clip, designations, edition_markers, meaningful_words, normalize, titles_equal,
@@ -316,6 +316,10 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
     title, author = str(expected.get("title") or ""), str(expected.get("author") or "")
     file_title, file_author = str(embedded.get("title") or ""), str(embedded.get("author") or "")
     series = [str(n) for n in (result.get("series") or [])]
+    # A scan's text is OCR of its first pages. Its page alone is one source, not two, and covers can
+    # name other books, so it counts only as a whole (opening title + author on one page, see
+    # verification_engine) and never moves a file to another book without an ISBN.
+    scan = bool(expected_signal.get("ocr"))
     tried: list[dict[str, Any]] = []
     evidence["secondPass"] = tried
     evidence["secondPassVersion"] = SECOND_PASS_VERSION
@@ -329,6 +333,18 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
             "notABook": [release.raw for release in releases if release.kind == "music"][:3],
         }
 
+    if scan and expected_signal.get("strong_identity") and releases and not (
+            embedded_signal.get("strong_identity") and not soft_title_match(title, file_title, series)):
+        proof = scan_provenance_proof(expected, releases, author_match_level)
+        tried.append({"check": "scanProvenance", "releases": len(releases), "agreed": bool(proof)})
+        if proof:
+            evidence["proof"] = proof
+            evidence["explanation"] = (
+                "Two independent sources name the same book: " + "; ".join(proof["sources"])
+                + f" (Bindery downloaded it as “{proof['release']}”)."
+            )
+            return "VERIFIED_CORRECT", PROVENANCE_CONFIDENCE
+
     if file_title and file_author:
         isbn_is_assigned_book = bool((evidence.get("isbn") or {}).get("expectedMatch"))
         # An unnumbered label on Bindery's title is accepted when the file's ISBN is one of the
@@ -341,13 +357,12 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
         )
         author_level = author_match_level(author, file_author)
         author_ok = bool(author_level)
-        # In a scan (OCR) the title and the author must both be on the page: either alone could be
-        # another book by that author, or another author's book of that name.
-        scan = bool(expected_signal.get("ocr"))
-
+        # In a scan (OCR) the book opens with the title and credits the author on that page: either
+        # alone could be another book by that author, or another author's book of that name.
         def in_book(signal: dict[str, Any]) -> bool:
-            title_in, author_in = bool(signal.get("title_found")), bool(signal.get("author_found"))
-            return (title_in and author_in) if scan else (title_in or author_in)
+            if scan:
+                return bool(signal.get("strong_identity"))
+            return bool(signal.get("title_found")) or bool(signal.get("author_found"))
 
         in_text = in_book(expected_signal)
         # An initial standing in for a name is only the same person if the book itself prints
@@ -405,6 +420,8 @@ def second_pass(result: dict, evidence: dict) -> tuple[str, int] | None:
                 target = candidates[0]
                 if isbn_owners and target["bookId"] not in isbn_owners:
                     tried.append({"check": "isbnNamesAnotherBook"})
+                elif scan and target["bookId"] not in isbn_owners:
+                    tried.append({"check": "scanNeedsIsbnToMove"})       # a cover alone never names another book
                 else:
                     corroborated = target["bookId"] in isbn_owners
                     evidence["actualBook"] = target

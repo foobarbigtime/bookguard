@@ -178,3 +178,36 @@ def test_breakdown_counts_unverified_and_scanner_outage_items_too():
              {"group": "undecided", "whyKind": "", "scannerOutage": True}]
     labels = dict(undecided_breakdown(items))
     assert labels == {"DRM-protected": 1, "Not verified yet": 1, "Virus scan gave no result": 1}
+
+
+def scan_why(*, extra=None, **kwargs):
+    ocr = {"attempted": True, "pages": 3, "chars": 400, "error": "", "setAside": 1}
+    item = review_item(dict(ROW), evidence(extra={"ocr": ocr, **(extra or {})}, **kwargs))
+    return item["whyKind"], item["whyUndecided"]
+
+
+def test_a_scan_whose_first_page_agrees_says_why_that_is_not_enough():
+    kind, text = scan_why(extra={"scanPage": {"readsAs": "expected"}, "secondPass": [
+        {"check": "scanProvenance", "releases": 0, "agreed": False}]})
+    assert kind == "scan_page_only"
+    assert "read the first 3 pages of this scan with OCR, setting aside 1 page that list other books" in text
+    assert "reads as “How to Steal a Dragon's Sword” by Cressida Cowell" in text
+    assert "only one source" in text and "carries no title or author" in text
+    assert "Bindery has no download record for this book" in text
+    _, text = scan_why(file_title="scan0001", file_author="Unknown",
+                       extra={"scanPage": {"readsAs": "expected"}, "secondPass": [
+                           {"check": "scanProvenance", "releases": 2, "agreed": False}]})
+    assert "look like placeholders" in text and "does not name this exact title and author" in text
+
+
+def test_a_scan_that_does_not_open_with_the_book_says_what_was_and_was_not_found():
+    kind, text = scan_why(file_title="Zoe's Tale", file_author="John Scalzi")
+    assert kind == "scan_not_opening" and "does not open with “How to Steal a Dragon's Sword”" in text
+    kind, text = scan_why(extra={"content": {
+        "text_characters_examined": 400, "expected_signal": {"title_found": False, "title_near": True},
+        "embedded_signal": {}}})
+    assert kind == "scan_not_opening" and "may be an OCR misreading" in text
+    kind, text = scan_why(extra={"content": {
+        "text_characters_examined": 400, "expected_signal": {"title_found": True, "author_found": False},
+        "embedded_signal": {}}})
+    assert "author “Cressida Cowell” is not credited beside it" in text
