@@ -152,6 +152,27 @@ def test_failed_ocr_is_retried_when_the_dependency_recovers(env, snapshot_calls,
     assert len(snapshot_calls) == 2
 
 
+@pytest.mark.parametrize("error_code", ["preflight_error", "render_error"])
+def test_unchanged_unreadable_pdf_reuses_failed_ocr_result(env, snapshot_calls, monkeypatch, error_code):
+    result = _ocr_pdf(env, monkeypatch, error="Damaged or protected PDF.", error_code=error_code)
+    first = verifier.verify_result(result)
+    second = verifier.verify_result(result)
+    assert first["verdict"] == "INSUFFICIENT_EVIDENCE"
+    assert second["cached"] is True
+    assert len(snapshot_calls) == 1
+    monkeypatch.setattr(settings, "verification_ocr_pages", 6)
+    assert verifier.verify_result(result)["cached"] is False
+    assert len(snapshot_calls) == 2
+
+
+@pytest.mark.parametrize("error_code", ["dependency_unavailable", "render_timeout", "render_process_error", "render_output_limit", "ocr_error"])
+def test_transient_ocr_errors_remain_retryable(env, snapshot_calls, monkeypatch, error_code):
+    result = _ocr_pdf(env, monkeypatch, error="Temporary OCR failure.", error_code=error_code)
+    verifier.verify_result(result)
+    assert verifier.verify_result(result)["cached"] is False
+    assert len(snapshot_calls) == 2
+
+
 def test_successful_ocr_with_no_text_is_cached_until_the_page_policy_changes(env, snapshot_calls, monkeypatch):
     result = _ocr_pdf(env, monkeypatch, error="OCR found no text.", error_code="no_text")
     verifier.verify_result(result)
