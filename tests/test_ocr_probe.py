@@ -169,7 +169,8 @@ def test_permanent_ocr_failures_remain_cached(monkeypatch, error_code):
     policy = ocr_probe.ocr_policy()
     saved = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
              "evidence": {"ocr": {"attempted": True, "error": "Failed", "errorCode": error_code,
-                                  "policy": policy, "attemptedAt": time.time() - 86400}}}
+                                  "version": verifier.OCR_VERSION, "policy": policy,
+                                  "attemptedAt": time.time() - 86400}}}
     assert not predates_ocr(saved)
 
 
