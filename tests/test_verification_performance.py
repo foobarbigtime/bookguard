@@ -80,7 +80,7 @@ def test_permanently_unreadable_ocr_result_skips_a_second_snapshot(env, snapshot
 
     result, source = env
     pdf = source.with_suffix(".pdf")
-    pdf.write_bytes(b"%PDF-1.4\\n%%EOF\\n")
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
     result = {**result, "local_path": str(pdf)}
     monkeypatch.setattr(settings, "verification_ocr", True)
     verifier._save_verification(
@@ -96,7 +96,7 @@ def test_permanently_unreadable_ocr_result_skips_a_second_snapshot(env, snapshot
     assert snapshot_calls == []
 
     # A changed file fingerprint must invalidate the cached failure.
-    pdf.write_bytes(b"%PDF-1.4\\nreplaced\\n%%EOF\\n")
+    pdf.write_bytes(b"%PDF-1.4\nreplaced\n%%EOF\n")
     assert verifier.verification_for_result(result) is None
 
 
@@ -105,7 +105,7 @@ def test_cached_ocr_error_can_be_forced_to_recheck(env, snapshot_calls, monkeypa
 
     result, source = env
     pdf = source.with_suffix(".pdf")
-    pdf.write_bytes(b"%PDF-1.4\\n%%EOF\\n")
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
     result = {**result, "local_path": str(pdf)}
     monkeypatch.setattr(settings, "verification_ocr", True)
     verifier._save_verification(
