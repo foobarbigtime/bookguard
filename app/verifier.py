@@ -255,7 +255,8 @@ def predates_ocr(item: dict) -> bool:
         # old failure and preserve the earlier version-based undecided refresh.
         return bool(attempt.get("error")) or int(attempt.get("version") or 1) < OCR_VERSION
     if not attempt.get("error"):
-        return False
+        # A newer title-page reader still revisits earlier undecided scans once.
+        return int(attempt.get("version") or 1) < OCR_VERSION
     if attempt.get("errorCode") in {"invalid_pdf", "password_protected", "no_text", "no_title_page"}:
         return False
 
