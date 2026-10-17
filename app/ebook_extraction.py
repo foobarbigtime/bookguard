@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import html
 from pathlib import Path
+import time
 import re
 import xml.etree.ElementTree as ET
 import zipfile
@@ -211,8 +212,9 @@ def extract_ebook_identity(path: str) -> ExtractedEbookIdentity:
         # A scan has no text layer: read the first pages as images so the title page can be checked.
         found = ocr_probe.ocr_pdf_front(path)
         ocr = {"attempted": True, "pages": int(found.get("pages") or 0), "chars": len(found.get("text") or ""),
-               "error": str(found.get("error") or ""), "setAside": int(found.get("setAside") or 0),
-               "version": OCR_VERSION}
+               "error": str(found.get("error") or ""), "errorCode": str(found.get("error_code") or ""),
+               "setAside": int(found.get("setAside") or 0), "version": OCR_VERSION,
+               "policy": found.get("policy") or ocr_probe.ocr_policy(), "attemptedAt": time.time()}
         if found.get("text"):
             text = found["text"]
             front_text = text[:FRONT_TEXT_CHARS]
