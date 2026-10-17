@@ -234,14 +234,28 @@ def test_no_title_page_rechecks_only_after_ocr_reader_upgrade(monkeypatch):
 
 
 
-def test_ocr_cache_rechecks_when_disabled_without_repeating(monkeypatch):
+@pytest.mark.parametrize("verdict", ["VERIFIED_CORRECT", "INSUFFICIENT_EVIDENCE", "METADATA_ERROR"])
+def test_disabling_ocr_preserves_existing_pdf_evidence(monkeypatch, verdict):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    saved = {"source": "native-pdf+ocr", "verdict": verdict,
+             "evidence": {"ocr": {"attempted": True, "version": verifier.OCR_VERSION,
+                                  "policy": ocr_probe.ocr_policy()}}}
+    assert not predates_ocr(saved)
     monkeypatch.setattr(settings, "verification_ocr", False)
-    assert predates_ocr({"source": "native-pdf+ocr", "verdict": "VERIFIED_CORRECT",
-                         "evidence": {"ocr": {"attempted": True}}})
-    after_disabling = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
-                       "evidence": {"content": {"text_characters_examined": 0}}}
-    assert not predates_ocr(after_disabling)
-    assert not predates_ocr(after_disabling)  # a second listing must not invalidate it again
+    assert not predates_ocr(saved)
+    assert not predates_ocr(saved)    # no repeated invalidation on routine scans
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    assert not predates_ocr(saved)    # no unnecessary bulk OCR reprocessing on re-enable
+
+
+def test_reenabling_ocr_rechecks_a_pdf_not_previously_read_by_ocr(monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", False)
+    no_ocr = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+              "evidence": {"content": {"text_characters_examined": 0}}}
+    assert not predates_ocr(no_ocr)
+    assert not predates_ocr(no_ocr)
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    assert predates_ocr(no_ocr)
 
 
 def test_preflight_distinguishes_invalid_content_from_io_failure(tmp_path, monkeypatch):
