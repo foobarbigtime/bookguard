@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 import shutil
 import time
@@ -236,28 +235,18 @@ def test_pdf_render_exit_code_is_classified_conservatively(tmp_path, monkeypatch
 
 @NEEDS_TOOLS
 def test_real_password_protected_pdf_is_a_permanent_error(tmp_path, monkeypatch):
-    # Synthetic one-page encrypted PDF fixture, generated offline; no pypdf dependency at test time.
+    from pypdf import PdfWriter
+
     monkeypatch.setattr(settings, "verification_ocr", True)
     encrypted = tmp_path / "encrypted.pdf"
-    encrypted.write_bytes(base64.b64decode(
-        "JVBERi0xLjMKJeLjz9MKMSAwIG9iago8PAovUHJvZHVjZXIgPDU5NTgyMzk2NDA+Cj4+CmVuZG9iagoyIDAgb2"
-        "JqCjw8Ci9UeXBlIC9QYWdlcwovQ291bnQgMQovS2lkcyBbIDQgMCBSIF0KPj4KZW5kb2JqCjMgMCBvYmoKPDwK"
-        "L1R5cGUgL0NhdGFsb2cKL1BhZ2VzIDIgMCBSCj4KZW5kb2JqCjQgMCBvYmoKPDwKL1R5cGUgL1BhZ2UKL1Jlc2"
-        "91cmNlcyA8PD4+Ci9NZWRpYUJveCBbIDAuMCAwLjAgMjAwIDIwMCBdCi9QYXJlbnQgMiAwIFIKPj4KZW5kb2Jq"
-        "CjUgMCBvYmoKPDwKL1YgMgovUiAzCi9MZW5ndGggMTI4Ci9QIDQyOTQ5NjcyOQovRmlsdGVyIC9TdGFuZGFyZA"
-        "ovTyA8ZmIwNDU1MjgxZDIyOWQ3ZTZhNmYxOTFjMzc4YjViOWY3ZmQ2YmEwYmJiNzRlNDhkMmYwNzU1NTFmYzcw"
-        "MmYyNT4KL1UgPDVlMzcwNDZhZjk1YmI0MGQyMzVlNGYyMjFhMjRiNzlhMjhiZjRlNWU0ZTc1OGE0MTY0MDA0ZT"
-        "U2ZmZmYTAxMDg+Cj4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAw"
-        "MDAgbiAKMDAwMDAwMDA1OSAwMDAwMCBuIAowMDAwMDAwMTE4IDAwMDAwIG4gCjAwMDAwMDAxNjcgMDAwMDAgbi"
-        "AKMDAwMDAwMDI2MSAwMDAwMCBuIAp0cmFpbGVyCjw8Ci9TaXplIDYKL1Jvb3QgMyAwIFIKL0luZm8gMSAwIFIK"
-        "L0lEIFsgPDM1Mzk2MzMyMzA2MjYyNjE2NTYzMzgzMjY1MzE2MjM1NjMzNjMzNjM2MTYyNjU2NjM1NjE2NjYxNj"
-        "U2NjMxMzE+IDwzNTM5NjMzMjMwNjI2MjYxNjU2MzM4MzI2NTMxNjIzNTYzMzYzMzYzNjE2MjY1NjYzNTYxNjY2"
-        "MTY1NjYzMTMxPiBdCi9FbmNyeXB0IDUgMCBSCj4+CnN0YXJ0eHJlZgo0NzYKJSVFT0YK"
-    ))
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.encrypt("bookguard-test-password")
+    with encrypted.open("wb") as handle:
+        writer.write(handle)
     outcome = ocr_probe.ocr_pdf_front(encrypted)
     assert outcome["error_code"] == "password_protected"
     assert "password" in outcome["error"].lower()
-
 
 def test_one_ocr_attempt_uses_one_captured_page_and_language_policy(tmp_path, monkeypatch):
     from app.subprocess_capture import BoundedProcessResult
