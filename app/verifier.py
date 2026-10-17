@@ -14,6 +14,7 @@ from .audiobook_evidence import build_audiobook_evidence
 from .catalogue_relationship import classify_relationship, latest_ebook_scan_status
 from .config import settings
 from .verification_constants import OCR_ONLY_BELOW_CHARS, OCR_VERSION
+from .ocr_probe import ocr_policy
 from .db import (
     create_metadata_repair,
     finish_metadata_repair,
@@ -50,6 +51,7 @@ from .verification_engine import classify_identity
 
 
 VERIFIER_VERSION = "28"
+OCR_TRANSIENT_RETRY_SECONDS = 60 * 60  # Never repeat an ambiguous OCR failure on each library check.
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -223,20 +225,47 @@ def _verification_for_fingerprint(
 
 
 def predates_ocr(item: dict) -> bool:
-    """A PDF verified with no text before OCR existed (or with OCR switched off), now that OCR is on."""
+    """Refresh only affected PDF evidence, without repeatedly processing a permanently bad scan.
+
+    PDF content fingerprints still invalidate the cache when file bytes change.
+    A manual Verify again (force=True) always bypasses this cache.
+    """
+    source = str(item.get("source") or "")
+    if not source.startswith("native-pdf"):
+        return False
     evidence = item.get("evidence") or {}
     content = evidence.get("content") or {}
-    if not settings.verification_ocr or "text_characters_examined" not in content:
-        return False
-    ocr = evidence.get("ocr")
-    if ocr:
-        # Read by an older version of the reader (fewer pages, no ISBN): once more, if still undecided.
-        return (str(item.get("verdict") or "") == "INSUFFICIENT_EVIDENCE"
-                and int(ocr.get("version") or 1) < OCR_VERSION and not ocr.get("error"))
-    if int(content.get("text_characters_examined") or 0) >= OCR_ONLY_BELOW_CHARS:
-        return False
-    return str(item.get("source") or "").startswith("native-pdf")
+    attempt = evidence.get("ocr") or {}
+    policy = ocr_policy()
+    if not policy["enabled"]:
+        # Do not reuse OCR-derived proof when OCR is intentionally switched off.
+        return source.endswith("+ocr")
+    if not attempt:
+        # Pre-OCR scan with no useful native text: one recheck on enabling OCR.
+        return ("text_characters_examined" in content
+                and int(content.get("text_characters_examined") or 0) < OCR_ONLY_BELOW_CHARS)
 
+    saved_policy = attempt.get("policy")
+    if saved_policy is not None and saved_policy != policy:
+        return True
+    if str(item.get("verdict") or "") != "INSUFFICIENT_EVIDENCE":
+        return False
+    if saved_policy is None:
+        # Existing installations have no policy or error category. Reattempt one
+        # old failure and preserve the earlier version-based undecided refresh.
+        return bool(attempt.get("error")) or int(attempt.get("version") or 1) < OCR_VERSION
+    if not attempt.get("error"):
+        return False
+    if attempt.get("errorCode") in {"invalid_pdf", "password_protected", "no_text", "no_title_page"}:
+        return False
+
+    # Unknown rendering errors may be transient. Keep their original attempt
+    # timestamp even when a later library scan reuses the cached record.
+    try:
+        attempted_at = float(attempt.get("attemptedAt"))
+    except (TypeError, ValueError):
+        return True
+    return time.time() - attempted_at >= OCR_TRANSIENT_RETRY_SECONDS
 
 def predates_second_pass(item: dict) -> bool:
     """A stored ebook identity verdict that the current second pass should look at again.
