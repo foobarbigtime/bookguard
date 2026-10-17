@@ -113,7 +113,7 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
         if rendered.returncode != 0 or not images:
             stderr = rendered.stderr.decode("utf-8", errors="replace").lower()
             # Only explicit Poppler password diagnostics are known to be persistent.
-            protected = any(message in stderr for message in ("incorrect password", "password required"))
+            protected = "incorrect password" in stderr
             return {"error": "OCR skipped: the PDF requires a password." if protected
                     else "OCR skipped: the first pages could not be rendered.",
                     "error_code": "password_protected" if protected else "render_error", "policy": policy}
