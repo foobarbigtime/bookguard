@@ -75,6 +75,54 @@ def test_unchanged_book_is_answered_from_cache_without_a_snapshot(env, snapshot_
     assert len(snapshot_calls) == 1
 
 
+def test_permanently_unreadable_ocr_result_skips_a_second_snapshot(env, snapshot_calls, monkeypatch):
+    from app import ocr_probe
+
+    result, source = env
+    pdf = source.with_suffix(".pdf")
+    pdf.write_bytes(b"%PDF-1.4\\n%%EOF\\n")
+    result = {**result, "local_path": str(pdf)}
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(verifier, "predates_second_pass", lambda _item: False)
+    verifier._save_verification(
+        result, str(pdf), verifier._file_fingerprint(str(pdf)),
+        "INSUFFICIENT_EVIDENCE", 0, "native-pdf",
+        {"content": {"text_characters_examined": 0},
+         "ocr": {"attempted": True, "error": "Invalid PDF", "errorCode": "invalid_pdf",
+                 "policy": ocr_probe.ocr_policy(), "attemptedAt": time.time()}},
+    )
+    assert verifier.verify_result(result)["cached"] is True
+    assert verifier.verify_result(result)["cached"] is True
+    assert snapshot_calls == []
+
+    # A changed file fingerprint must invalidate the cached failure.
+    pdf.write_bytes(b"%PDF-1.4\\nreplaced\\n%%EOF\\n")
+    assert verifier.verification_for_result(result) is None
+
+
+def test_cached_ocr_error_can_be_forced_to_recheck(env, snapshot_calls, monkeypatch):
+    from app import ocr_probe
+
+    result, source = env
+    pdf = source.with_suffix(".pdf")
+    pdf.write_bytes(b"%PDF-1.4\\n%%EOF\\n")
+    result = {**result, "local_path": str(pdf)}
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(verifier, "predates_second_pass", lambda _item: False)
+    verifier._save_verification(
+        result, str(pdf), verifier._file_fingerprint(str(pdf)),
+        "INSUFFICIENT_EVIDENCE", 0, "native-pdf",
+        {"content": {"text_characters_examined": 0},
+         "ocr": {"attempted": True, "error": "Password required", "errorCode": "password_protected",
+                 "policy": ocr_probe.ocr_policy(), "attemptedAt": time.time()}},
+    )
+    assert verifier.verify_result(result)["cached"] is True
+    assert not snapshot_calls
+    checked = verifier.verify_result(result, force=True)
+    assert checked["cached"] is False
+    assert len(snapshot_calls) == 1
+
+
 def test_changed_book_is_checked_again(env, snapshot_calls):
     result, source = env
 
