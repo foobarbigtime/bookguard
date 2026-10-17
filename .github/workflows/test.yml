@@ -15,7 +15,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt pytest httpx ruff==0.12.11
+      - name: Install OCR integration tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr
+      - run: pip install -r requirements.txt pytest httpx "Pillow>=10.1" ruff==0.12.11
+      - name: Require real OCR integration dependencies
+        run: python -c 'import PIL, shutil; assert shutil.which("tesseract") and shutil.which("pdftoppm")'
       - run: ruff check .
       - run: PYTHONPATH=. pytest -q
       - run: bash -n scripts/acceptance/run scripts/acceptance/lib/common.sh scripts/acceptance/scenarios/*.sh
