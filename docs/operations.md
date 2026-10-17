@@ -89,8 +89,10 @@ bash scripts/bookguard-backup.sh restore-validate \
 ```
 
 Restore validation mounts the backup read-only, copies its database into a
-disposable 512 MiB container tmpfs, and runs BookGuard's current startup
-database initialization against that copy. The one-shot container has no
+disposable container tmpfs sized for the backup database plus headroom for SQLite
+startup and migrations (at least 512 MiB; twice the database size plus 256 MiB
+for larger backups). This is a maximum, not preallocated RAM. The helper then
+runs BookGuard's current startup database initialization against that copy. The one-shot container has no
 network, the image root remains read-only, and no production config or media
 path is writable. The disposable restore copy disappears when the command
 exits.
