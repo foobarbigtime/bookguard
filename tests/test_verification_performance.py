@@ -83,11 +83,11 @@ def test_permanently_unreadable_ocr_result_skips_a_second_snapshot(env, snapshot
     pdf.write_bytes(b"%PDF-1.4\\n%%EOF\\n")
     result = {**result, "local_path": str(pdf)}
     monkeypatch.setattr(settings, "verification_ocr", True)
-    monkeypatch.setattr(verifier, "predates_second_pass", lambda _item: False)
     verifier._save_verification(
         result, str(pdf), verifier._file_fingerprint(str(pdf)),
         "INSUFFICIENT_EVIDENCE", 0, "native-pdf",
-        {"content": {"text_characters_examined": 0},
+        {"content": {"text_characters_examined": 0, "expected_signal": {}},
+         "secondPass": [], "secondPassVersion": verifier.SECOND_PASS_VERSION,
          "ocr": {"attempted": True, "error": "Invalid PDF", "errorCode": "invalid_pdf",
                  "policy": ocr_probe.ocr_policy(), "attemptedAt": time.time()}},
     )
@@ -108,11 +108,11 @@ def test_cached_ocr_error_can_be_forced_to_recheck(env, snapshot_calls, monkeypa
     pdf.write_bytes(b"%PDF-1.4\\n%%EOF\\n")
     result = {**result, "local_path": str(pdf)}
     monkeypatch.setattr(settings, "verification_ocr", True)
-    monkeypatch.setattr(verifier, "predates_second_pass", lambda _item: False)
     verifier._save_verification(
         result, str(pdf), verifier._file_fingerprint(str(pdf)),
         "INSUFFICIENT_EVIDENCE", 0, "native-pdf",
-        {"content": {"text_characters_examined": 0},
+        {"content": {"text_characters_examined": 0, "expected_signal": {}},
+         "secondPass": [], "secondPassVersion": verifier.SECOND_PASS_VERSION,
          "ocr": {"attempted": True, "error": "Password required", "errorCode": "password_protected",
                  "policy": ocr_probe.ocr_policy(), "attemptedAt": time.time()}},
     )
