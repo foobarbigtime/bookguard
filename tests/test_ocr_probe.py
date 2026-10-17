@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 
 import pytest
 
@@ -152,13 +153,82 @@ def test_image_only_pdfs_verified_before_ocr_are_looked_at_again_once(monkeypatc
     assert not predates_ocr(current)                                                                # already tried
     assert predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True}}})       # an older reader
     assert predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True, "version": 1}}})
-    assert not predates_ocr({**current, "evidence": {**current["evidence"], "ocr": {"attempted": True, "error": "x"}}})
+    assert predates_ocr({**current, "evidence": {**current["evidence"], "ocr": {"attempted": True, "error": "x"}}})  # legacy OCR outage gets one retry
     assert not predates_ocr({**old, "verdict": "VERIFIED_CORRECT",
                              "evidence": {**old["evidence"], "ocr": {"attempted": True, "version": 1}}})
     assert not predates_ocr({**old, "evidence": {"content": {"text_characters_examined": 90000}}})  # has text
     assert not predates_ocr({**old, "source": "native-epub"})
     monkeypatch.setattr(settings, "verification_ocr", False)
     assert not predates_ocr(old)
+
+
+@pytest.mark.parametrize("error_code", ["invalid_pdf", "password_protected", "no_text", "no_title_page"])
+def test_permanent_ocr_failures_remain_cached(monkeypatch, error_code):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    policy = ocr_probe.ocr_policy()
+    saved = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+             "evidence": {"ocr": {"attempted": True, "error": "Failed", "errorCode": error_code,
+                                  "policy": policy, "attemptedAt": time.time() - 86400}}}
+    assert not predates_ocr(saved)
+
+
+@pytest.mark.parametrize("error_code", [
+    "dependency_unavailable", "preflight_io_error", "render_timeout",
+    "render_output_limit", "render_execution_error", "render_error", "ocr_execution_error",
+])
+def test_transient_ocr_failures_have_a_cooldown(monkeypatch, error_code):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    from app.verifier import OCR_TRANSIENT_RETRY_SECONDS
+    saved = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+             "evidence": {"ocr": {"attempted": True, "error": "Temporary error", "errorCode": error_code,
+                                  "policy": ocr_probe.ocr_policy(), "attemptedAt": time.time()}}}
+    assert not predates_ocr(saved)
+    saved["evidence"]["ocr"]["attemptedAt"] -= OCR_TRANSIENT_RETRY_SECONDS + 2
+    assert predates_ocr(saved)
+    # Changing settings must not wait for the cooldown.
+    saved["evidence"]["ocr"]["attemptedAt"] = time.time()
+    monkeypatch.setattr(settings, "verification_ocr_pages", int(settings.verification_ocr_pages) + 1)
+    assert predates_ocr(saved)
+
+
+def test_ocr_cache_rechecks_when_disabled_without_repeating(monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", False)
+    assert predates_ocr({"source": "native-pdf+ocr", "verdict": "VERIFIED_CORRECT",
+                         "evidence": {"ocr": {"attempted": True}}})
+    assert not predates_ocr({"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+                             "evidence": {"content": {"text_characters_examined": 0}}})
+
+
+def test_preflight_distinguishes_invalid_content_from_io_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(ocr_probe.shutil, "which", lambda name: "/usr/bin/" + name)
+    bad = tmp_path / "invalid.pdf"
+    bad.write_bytes(b"not a PDF")
+    assert ocr_probe.ocr_pdf_front(bad)["error_code"] == "invalid_pdf"
+
+    def unavailable(_path):
+        raise OSError("Temporary I/O failure")
+
+    monkeypatch.setattr(ocr_probe, "_preflight", unavailable)
+    assert ocr_probe.ocr_pdf_front(bad)["error_code"] == "preflight_io_error"
+
+
+@pytest.mark.parametrize("diagnostic, expected", [
+    (b"Command Line Error: Incorrect password", "password_protected"),
+    (b"Error: resource temporarily unavailable", "render_error"),
+])
+def test_pdf_render_exit_code_is_classified_conservatively(tmp_path, monkeypatch, diagnostic, expected):
+    from app.subprocess_capture import BoundedProcessResult
+
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(ocr_probe.shutil, "which", lambda name: "/usr/bin/" + name)
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\\n%%EOF\\n")
+    monkeypatch.setattr(ocr_probe, "run_bounded_process",
+                        lambda *_args, **_kwargs: BoundedProcessResult(1, b"", diagnostic))
+    outcome = ocr_probe.ocr_pdf_front(pdf)
+    assert outcome["error_code"] == expected
+    assert outcome["policy"] == ocr_probe.ocr_policy()
 
 
 # --- OCR-tolerant matching: lost spaces and a misread letter, never a different book -----------
