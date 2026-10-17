@@ -267,7 +267,7 @@ def test_one_ocr_attempt_uses_one_captured_page_and_language_policy(tmp_path, mo
     monkeypatch.setattr(settings, "verification_ocr_languages", "eng")
     monkeypatch.setattr(ocr_probe.shutil, "which", lambda name: "/usr/bin/" + name)
     pdf = tmp_path / "scan.pdf"
-    pdf.write_bytes(b"%PDF-1.4\\n%%EOF\\n")
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
     used_languages = []
 
     def run(command, **_kwargs):
@@ -277,7 +277,7 @@ def test_one_ocr_attempt_uses_one_captured_page_and_language_policy(tmp_path, mo
             monkeypatch.setattr(settings, "verification_ocr_languages", "fra")
             return BoundedProcessResult(0, b"", b"")
         used_languages.append(command[command.index("-l") + 1])
-        return BoundedProcessResult(0, b"BEL CANTO\\nANN PATCHETT", b"")
+        return BoundedProcessResult(0, b"BEL CANTO\nANN PATCHETT", b"")
 
     monkeypatch.setattr(ocr_probe, "run_bounded_process", run)
     outcome = ocr_probe.ocr_pdf_front(pdf)
