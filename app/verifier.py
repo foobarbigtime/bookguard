@@ -238,7 +238,11 @@ def predates_ocr(item: dict) -> bool:
     if attempt:
         if not policy["enabled"]:
             return str(item.get("source") or "").endswith("+ocr")
-        if attempt.get("error") and attempt.get("errorCode") != "no_text":
+        # Permanent failures cannot recover while the source fingerprint and OCR policy are unchanged.
+        # Missing dependencies, timeouts, and execution failures may recover without changing the PDF.
+        if attempt.get("error") and attempt.get("errorCode") not in {
+            "no_text", "preflight_error", "render_error",
+        }:
             return True
         return evidence.get("ocrPolicy") != policy
     if not policy["enabled"] or "text_characters_examined" not in content:
