@@ -99,9 +99,12 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
         except subprocess.TimeoutExpired:
             return {"error": "OCR skipped: rendering the first pages timed out.",
                     "error_code": "render_timeout", "policy": policy}
-        except (ProcessOutputLimitExceeded, OSError):
-            return {"error": "OCR skipped: rendering the first pages failed.",
-                    "error_code": "render_error", "policy": policy}
+        except ProcessOutputLimitExceeded:
+            return {"error": "OCR skipped: rendering exceeded the output limit.",
+                    "error_code": "render_output_limit", "policy": policy}
+        except OSError:
+            return {"error": "OCR skipped: the rendering process could not start.",
+                    "error_code": "render_process_error", "policy": policy}
         images = sorted(Path(work).glob("pg-*.png"))[:pages]
         if rendered.returncode != 0 or not images:
             return {"error": "OCR skipped: the first pages could not be rendered (damaged or protected PDF).",
