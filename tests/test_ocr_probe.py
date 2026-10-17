@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from app import ebook_extraction, ocr_probe
+from app import ebook_extraction, ocr_probe, verifier
 from app.config import settings
 from app.verification_engine import classify_identity
 from app.verifier import predates_ocr
@@ -177,27 +177,70 @@ def test_permanent_ocr_failures_remain_cached(monkeypatch, error_code):
     "dependency_unavailable", "preflight_io_error", "render_timeout",
     "render_output_limit", "render_execution_error", "render_error", "ocr_execution_error",
 ])
-def test_transient_ocr_failures_have_a_cooldown(monkeypatch, error_code):
+@pytest.mark.parametrize("attempts, delay", [
+    (1, 3600), (2, 21600), (3, 86400), (4, 604800),
+])
+def test_transient_ocr_retry_exponential_backoff(monkeypatch, error_code, attempts, delay):
     monkeypatch.setattr(settings, "verification_ocr", True)
-    from app.verifier import OCR_TRANSIENT_RETRY_SECONDS
+    now = time.time()
     saved = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
              "evidence": {"ocr": {"attempted": True, "error": "Temporary error", "errorCode": error_code,
-                                  "policy": ocr_probe.ocr_policy(), "attemptedAt": time.time()}}}
+                                  "policy": ocr_probe.ocr_policy(), "attemptedAt": now, "attempts": attempts}}}
+    monkeypatch.setattr(verifier.time, "time", lambda: now + delay - 1)
     assert not predates_ocr(saved)
-    saved["evidence"]["ocr"]["attemptedAt"] -= OCR_TRANSIENT_RETRY_SECONDS + 2
+    monkeypatch.setattr(verifier.time, "time", lambda: now + delay)
     assert predates_ocr(saved)
-    # Changing settings must not wait for the cooldown.
-    saved["evidence"]["ocr"]["attemptedAt"] = time.time()
+    monkeypatch.setattr(verifier.time, "time", lambda: now)
     monkeypatch.setattr(settings, "verification_ocr_pages", int(settings.verification_ocr_pages) + 1)
     assert predates_ocr(saved)
+
+
+def test_ocr_retry_cap_stops_automatic_reprocessing(monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    saved = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+             "evidence": {"ocr": {"attempted": True, "error": "OCR timeout", "errorCode": "render_timeout",
+                                  "policy": ocr_probe.ocr_policy(), "attemptedAt": time.time() - 90 * 86400,
+                                  "attempts": verifier.OCR_MAX_TRANSIENT_ATTEMPTS}}}
+    assert not predates_ocr(saved)
+    monkeypatch.setattr(settings, "verification_ocr_languages", "fra")
+    assert predates_ocr(saved)
+
+
+def test_ocr_setting_changes_only_recheck_affected_verdicts(monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    base = {"source": "native-pdf+ocr", "verdict": "VERIFIED_CORRECT",
+            "evidence": {"ocr": {"attempted": True, "version": verifier.OCR_VERSION,
+                                 "policy": ocr_probe.ocr_policy()}}}
+    monkeypatch.setattr(settings, "verification_ocr_pages", int(settings.verification_ocr_pages) + 1)
+    assert not predates_ocr(base)
+    assert predates_ocr({**base, "verdict": "INSUFFICIENT_EVIDENCE"})
+    monkeypatch.setattr(settings, "verification_ocr_languages", "fra")
+    assert predates_ocr(base)
+    assert not predates_ocr({**base, "source": "native-pdf"})
+
+
+def test_no_title_page_rechecks_only_after_ocr_reader_upgrade(monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    current = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+               "evidence": {"ocr": {"attempted": True, "error": "Only other titles",
+                                    "errorCode": "no_title_page",
+                                    "version": verifier.OCR_VERSION,
+                                    "policy": ocr_probe.ocr_policy(), "attempts": 5,
+                                    "attemptedAt": 0}}}
+    assert not predates_ocr(current)
+    current["evidence"]["ocr"]["version"] = verifier.OCR_VERSION - 1
+    assert predates_ocr(current)
+
 
 
 def test_ocr_cache_rechecks_when_disabled_without_repeating(monkeypatch):
     monkeypatch.setattr(settings, "verification_ocr", False)
     assert predates_ocr({"source": "native-pdf+ocr", "verdict": "VERIFIED_CORRECT",
                          "evidence": {"ocr": {"attempted": True}}})
-    assert not predates_ocr({"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
-                             "evidence": {"content": {"text_characters_examined": 0}}})
+    after_disabling = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+                       "evidence": {"content": {"text_characters_examined": 0}}}
+    assert not predates_ocr(after_disabling)
+    assert not predates_ocr(after_disabling)  # a second listing must not invalidate it again
 
 
 def test_preflight_distinguishes_invalid_content_from_io_failure(tmp_path, monkeypatch):
@@ -224,13 +267,12 @@ def test_pdf_render_exit_code_is_classified_conservatively(tmp_path, monkeypatch
     monkeypatch.setattr(settings, "verification_ocr", True)
     monkeypatch.setattr(ocr_probe.shutil, "which", lambda name: "/usr/bin/" + name)
     pdf = tmp_path / "scan.pdf"
-    pdf.write_bytes(b"%PDF-1.4\\n%%EOF\\n")
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
     monkeypatch.setattr(ocr_probe, "run_bounded_process",
                         lambda *_args, **_kwargs: BoundedProcessResult(1, b"", diagnostic))
     outcome = ocr_probe.ocr_pdf_front(pdf)
     assert outcome["error_code"] == expected
     assert outcome["policy"] == ocr_probe.ocr_policy()
-
 
 
 @NEEDS_TOOLS
@@ -247,6 +289,7 @@ def test_real_password_protected_pdf_is_a_permanent_error(tmp_path, monkeypatch)
     outcome = ocr_probe.ocr_pdf_front(encrypted)
     assert outcome["error_code"] == "password_protected"
     assert "password" in outcome["error"].lower()
+
 
 def test_one_ocr_attempt_uses_one_captured_page_and_language_policy(tmp_path, monkeypatch):
     from app.subprocess_capture import BoundedProcessResult
