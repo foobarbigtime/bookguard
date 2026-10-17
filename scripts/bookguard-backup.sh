@@ -129,8 +129,28 @@ case "$command_name" in
     parent="$(dirname "$bundle")"
     name="$(basename "$bundle")"
 
+    # SQLite may need extra scratch space during startup migrations. A fixed
+    # 512 MiB mount rejects healthy backups as soon as the database grows.
+    # The tmpfs size is a maximum, not an up-front RAM allocation.
+    database_file="$bundle/bookguard.db"
+    if [[ ! -f "$database_file" || -L "$database_file" ]]; then
+      echo "Restore validation requires a regular bookguard.db in $bundle." >&2
+      exit 1
+    fi
+    database_bytes="$(stat -c '%s' -- "$database_file")"
+    if [[ ! "$database_bytes" =~ ^[0-9]+$ || "$database_bytes" -eq 0 ]]; then
+      echo "Unable to determine a positive database size for restore validation." >&2
+      exit 1
+    fi
+    database_mib=$(( (database_bytes + 1048575) / 1048576 ))
+    restore_tmpfs_mib=$(( database_mib * 2 + 256 ))
+    if (( restore_tmpfs_mib < 512 )); then
+      restore_tmpfs_mib=512
+    fi
+    echo "Disposable restore tmpfs limit: ${restore_tmpfs_mib} MiB for ${database_bytes} database bytes."
+
     docker run "${common_args[@]}" \
-      --tmpfs "/restore:rw,nosuid,nodev,noexec,size=512m,uid=$runtime_uid,gid=$runtime_gid,mode=0700" \
+      --tmpfs "/restore:rw,nosuid,nodev,noexec,size=${restore_tmpfs_mib}m,uid=$runtime_uid,gid=$runtime_gid,mode=0700" \
       -v "$parent:/backup-parent:ro" \
       "$image_id" \
       python -m tools.bookguard_backup restore-validate \
