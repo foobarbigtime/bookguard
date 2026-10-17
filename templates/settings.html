@@ -108,7 +108,7 @@
           <div class="field checks-stack span-2 option-panel">
             <span>Scanned PDFs (OCR)</span>
             <label class="check-field"><input name="verification_ocr" type="checkbox" {% if settings.verification_ocr %}checked{% endif %}><span>Read the first pages of a PDF that has no text layer, so its title page can be checked</span></label>
-            <small>Runs only for a PDF that yields almost no text, in bounded helper processes. OCR can misread a name; that can only make a match fail, never invent one. Languages are deployment-only: <code>{{ settings.verification_ocr_languages }}</code> (set <code>BOOKGUARD_VERIFICATION_OCR_LANGUAGES</code> to change).</small>
+            <small>Runs only for a PDF that yields almost no text, in bounded helper processes. Turning OCR off skips new OCR attempts but keeps existing results for unchanged PDFs; manually forced checks use the current setting. OCR can misread a name; that can only make a match fail, never invent one. Languages are deployment-only: <code>{{ settings.verification_ocr_languages }}</code> (set <code>BOOKGUARD_VERIFICATION_OCR_LANGUAGES</code> to change).</small>
           </div>
           <label class="field"><span>OCR pages read</span><input name="verification_ocr_pages" type="number" min="1" max="12" value="{{ settings.verification_ocr_pages }}"><small>From the front of the PDF. Illustrated books can put the title page at page 7 or later, so the default is 8 (up to 12); reading stops early once enough text is read.</small></label>
         </div>

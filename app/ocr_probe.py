@@ -29,6 +29,7 @@ from .pdf_probe import _preflight
 from .scan_text import PAGE_BREAK, without_book_lists
 from .subprocess_capture import ProcessOutputLimitExceeded, run_bounded_process
 
+OCR_POLICY_VERSION = 1             # Version of captured OCR settings, independent of evidence-reader rules.
 RENDER_MAX_PIXELS = 2400           # longest side of a rendered page: bounds the work whatever the page size
 RENDER_TIMEOUT_SECONDS = 45
 PAGE_OCR_TIMEOUT_SECONDS = 60
@@ -61,6 +62,12 @@ def _languages() -> str:
     return value if _LANGUAGES.fullmatch(value) else "eng"
 
 
+def ocr_policy() -> dict[str, Any]:
+    """OCR settings captured for one attempt; unlike general verification settings they do not rekey all ebooks."""
+    return {"version": OCR_POLICY_VERSION, "enabled": bool(settings.verification_ocr),
+            "pages": int(settings.verification_ocr_pages), "languages": _languages()}
+
+
 def _child_env(home: str) -> dict[str, str]:
     return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "OMP_THREAD_LIMIT": "1",
             "LC_ALL": "C", "HOME": home}
@@ -68,19 +75,23 @@ def _child_env(home: str) -> dict[str, str]:
 
 def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
     """OCR text of the first pages: {"text", "pages"} on success, {"error"} or {"disabled"} otherwise."""
-    if not settings.verification_ocr:
+    policy = ocr_policy()
+    if not policy["enabled"]:
         return {"disabled": True}
     pdftoppm, tesseract = shutil.which("pdftoppm"), shutil.which("tesseract")
     if not pdftoppm or not tesseract:
-        return {"error": "OCR is not available in this build (Poppler or Tesseract is not installed)."}
+        return {"error": "OCR is not available in this build (Poppler or Tesseract is not installed).",
+                "error_code": "dependency_unavailable", "policy": policy}
     target = Path(path)
     try:
         _preflight(target)
         source = str(target.resolve(strict=True))
-    except (OSError, ValueError) as exc:
-        return {"error": f"OCR skipped: {str(exc)[:200]}"}
+    except ValueError as exc:
+        return {"error": f"OCR skipped: {str(exc)[:200]}", "error_code": "invalid_pdf", "policy": policy}
+    except OSError as exc:
+        return {"error": f"OCR skipped: {str(exc)[:200]}", "error_code": "preflight_io_error", "policy": policy}
 
-    pages = int(settings.verification_ocr_pages)
+    pages = policy["pages"]
     with tempfile.TemporaryDirectory(prefix="bookguard-ocr-") as work:
         try:
             rendered = run_bounded_process(
@@ -90,26 +101,39 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
                 env=_child_env(work),
             )
         except subprocess.TimeoutExpired:
-            return {"error": "OCR skipped: rendering the first pages timed out."}
-        except (ProcessOutputLimitExceeded, OSError):
-            return {"error": "OCR skipped: rendering the first pages failed."}
+            return {"error": "OCR skipped: rendering the first pages timed out.",
+                    "error_code": "render_timeout", "policy": policy}
+        except ProcessOutputLimitExceeded:
+            return {"error": "OCR skipped: rendering exceeded its output limit.",
+                    "error_code": "render_output_limit", "policy": policy}
+        except OSError:
+            return {"error": "OCR skipped: the rendering process could not start.",
+                    "error_code": "render_execution_error", "policy": policy}
         images = sorted(Path(work).glob("pg-*.png"))[:pages]
         if rendered.returncode != 0 or not images:
-            return {"error": "OCR skipped: the first pages could not be rendered (damaged or protected PDF)."}
+            stderr = rendered.stderr.decode("utf-8", errors="replace").lower()
+            # Only explicit Poppler password diagnostics are known to be persistent.
+            protected = "incorrect password" in stderr
+            return {"error": "OCR skipped: the PDF requires a password." if protected
+                    else "OCR skipped: the first pages could not be rendered.",
+                    "error_code": "password_protected" if protected else "render_error", "policy": policy}
 
         chunks: list[str] = []
         read = 0
+        failed = 0
         for image in images:
             try:
                 result = run_bounded_process(
-                    _limited([tesseract, str(image), "stdout", "-l", _languages(), "--psm", "3"],
+                    _limited([tesseract, str(image), "stdout", "-l", policy["languages"], "--psm", "3"],
                              OCR_CPU_SECONDS, OCR_ADDRESS_SPACE_BYTES),
                     timeout=PAGE_OCR_TIMEOUT_SECONDS, stdout_limit=MAX_PAGE_TEXT_BYTES, stderr_limit=64 * 1024,
                     env=_child_env(work),
                 )
             except (subprocess.TimeoutExpired, ProcessOutputLimitExceeded, OSError):
+                failed += 1
                 continue
             if result.returncode != 0:
+                failed += 1
                 continue
             read += 1
             chunks.append(re.sub(r"[ \t]+", " ", result.stdout.decode("utf-8", errors="replace")).strip())
@@ -118,11 +142,17 @@ def ocr_pdf_front(path: str | Path) -> dict[str, Any]:
                 break
     raw = PAGE_BREAK.join(c for c in chunks if c)
     if not raw.strip():
-        return {"error": f"OCR read {read} page image(s) but found no text.", "pages": read}
+        return {"error": f"OCR read {read} page image(s) but found no text.", "pages": read,
+                "error_code": "ocr_execution_error" if failed else "no_text", "policy": policy}
     # Pages that list other books (or praise, or the author's bio) are not the book's title page.
     text, set_aside = without_book_lists(raw)
     text = text[:MAX_TEXT_CHARS]
     if not text.strip():
         return {"error": f"OCR read {read} page(s), but they only list other books (\"Also by ...\"), so none "
-                         "is a title page.", "pages": read, "setAside": set_aside}
-    return {"text": text, "pages": read, "setAside": set_aside}
+                         "is a title page.", "pages": read, "setAside": set_aside,
+                "error_code": "ocr_execution_error" if failed else "no_title_page", "policy": policy}
+    found = {"text": text, "pages": read, "setAside": set_aside, "policy": policy}
+    if failed:
+        found.update(error="OCR could not read every rendered page image.",
+                     error_code="ocr_execution_error")
+    return found

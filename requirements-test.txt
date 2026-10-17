@@ -1,0 +1,6 @@
+# Test and lint dependencies shared by local development and GitHub Actions.
+-r requirements.txt
+pytest
+httpx
+Pillow>=10.1
+ruff==0.12.11

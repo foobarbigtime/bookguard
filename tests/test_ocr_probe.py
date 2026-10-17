@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import shutil
+import time
 
 import pytest
 
-from app import ebook_extraction, ocr_probe
+from app import ebook_extraction, ocr_probe, verifier
 from app.config import settings
 from app.verification_engine import classify_identity
 from app.verifier import predates_ocr
@@ -152,13 +154,183 @@ def test_image_only_pdfs_verified_before_ocr_are_looked_at_again_once(monkeypatc
     assert not predates_ocr(current)                                                                # already tried
     assert predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True}}})       # an older reader
     assert predates_ocr({**old, "evidence": {**old["evidence"], "ocr": {"attempted": True, "version": 1}}})
-    assert not predates_ocr({**current, "evidence": {**current["evidence"], "ocr": {"attempted": True, "error": "x"}}})
+    assert predates_ocr({**current, "evidence": {**current["evidence"], "ocr": {"attempted": True, "error": "x"}}})  # legacy OCR outage gets one retry
     assert not predates_ocr({**old, "verdict": "VERIFIED_CORRECT",
                              "evidence": {**old["evidence"], "ocr": {"attempted": True, "version": 1}}})
     assert not predates_ocr({**old, "evidence": {"content": {"text_characters_examined": 90000}}})  # has text
     assert not predates_ocr({**old, "source": "native-epub"})
     monkeypatch.setattr(settings, "verification_ocr", False)
     assert not predates_ocr(old)
+
+
+@pytest.mark.parametrize("error_code", ["invalid_pdf", "password_protected", "no_text", "no_title_page"])
+def test_permanent_ocr_failures_remain_cached(monkeypatch, error_code):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    policy = ocr_probe.ocr_policy()
+    saved = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+             "evidence": {"ocr": {"attempted": True, "error": "Failed", "errorCode": error_code,
+                                  "version": verifier.OCR_VERSION, "policy": policy,
+                                  "attemptedAt": time.time() - 86400}}}
+    assert not predates_ocr(saved)
+
+
+@pytest.mark.parametrize("error_code", [
+    "dependency_unavailable", "preflight_io_error", "render_timeout",
+    "render_output_limit", "render_execution_error", "render_error", "ocr_execution_error",
+])
+@pytest.mark.parametrize("attempts, delay", [
+    (1, 3600), (2, 21600), (3, 86400), (4, 604800),
+])
+def test_transient_ocr_retry_exponential_backoff(monkeypatch, error_code, attempts, delay):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    now = time.time()
+    saved = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+             "evidence": {"ocr": {"attempted": True, "error": "Temporary error", "errorCode": error_code,
+                                  "policy": ocr_probe.ocr_policy(), "attemptedAt": now, "attempts": attempts}}}
+    monkeypatch.setattr(verifier.time, "time", lambda: now + delay - 1)
+    assert not predates_ocr(saved)
+    monkeypatch.setattr(verifier.time, "time", lambda: now + delay)
+    assert predates_ocr(saved)
+    monkeypatch.setattr(verifier.time, "time", lambda: now)
+    monkeypatch.setattr(settings, "verification_ocr_pages", int(settings.verification_ocr_pages) + 1)
+    assert predates_ocr(saved)
+
+
+def test_ocr_retry_cap_stops_automatic_reprocessing(monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    saved = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+             "evidence": {"ocr": {"attempted": True, "error": "OCR timeout", "errorCode": "render_timeout",
+                                  "policy": ocr_probe.ocr_policy(), "attemptedAt": time.time() - 90 * 86400,
+                                  "attempts": verifier.OCR_MAX_TRANSIENT_ATTEMPTS}}}
+    assert not predates_ocr(saved)
+    monkeypatch.setattr(settings, "verification_ocr_languages", "fra")
+    assert predates_ocr(saved)
+
+
+def test_ocr_setting_changes_only_recheck_affected_verdicts(monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    base = {"source": "native-pdf+ocr", "verdict": "VERIFIED_CORRECT",
+            "evidence": {"ocr": {"attempted": True, "version": verifier.OCR_VERSION,
+                                 "policy": ocr_probe.ocr_policy()}}}
+    monkeypatch.setattr(settings, "verification_ocr_pages", int(settings.verification_ocr_pages) + 1)
+    assert not predates_ocr(base)
+    assert predates_ocr({**base, "verdict": "INSUFFICIENT_EVIDENCE"})
+    monkeypatch.setattr(settings, "verification_ocr_languages", "fra")
+    assert predates_ocr(base)
+    assert not predates_ocr({**base, "source": "native-pdf"})
+
+
+def test_no_title_page_rechecks_only_after_ocr_reader_upgrade(monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    current = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+               "evidence": {"ocr": {"attempted": True, "error": "Only other titles",
+                                    "errorCode": "no_title_page",
+                                    "version": verifier.OCR_VERSION,
+                                    "policy": ocr_probe.ocr_policy(), "attempts": 5,
+                                    "attemptedAt": 0}}}
+    assert not predates_ocr(current)
+    current["evidence"]["ocr"]["version"] = verifier.OCR_VERSION - 1
+    assert predates_ocr(current)
+
+
+
+@pytest.mark.parametrize("verdict", ["VERIFIED_CORRECT", "INSUFFICIENT_EVIDENCE", "METADATA_ERROR"])
+def test_disabling_ocr_preserves_existing_pdf_evidence(monkeypatch, verdict):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    saved = {"source": "native-pdf+ocr", "verdict": verdict,
+             "evidence": {"ocr": {"attempted": True, "version": verifier.OCR_VERSION,
+                                  "policy": ocr_probe.ocr_policy()}}}
+    assert not predates_ocr(saved)
+    monkeypatch.setattr(settings, "verification_ocr", False)
+    assert not predates_ocr(saved)
+    assert not predates_ocr(saved)    # no repeated invalidation on routine scans
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    assert not predates_ocr(saved)    # no unnecessary bulk OCR reprocessing on re-enable
+
+
+def test_reenabling_ocr_rechecks_a_pdf_not_previously_read_by_ocr(monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", False)
+    no_ocr = {"source": "native-pdf", "verdict": "INSUFFICIENT_EVIDENCE",
+              "evidence": {"content": {"text_characters_examined": 0}}}
+    assert not predates_ocr(no_ocr)
+    assert not predates_ocr(no_ocr)
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    assert predates_ocr(no_ocr)
+
+
+def test_preflight_distinguishes_invalid_content_from_io_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(ocr_probe.shutil, "which", lambda name: "/usr/bin/" + name)
+    bad = tmp_path / "invalid.pdf"
+    bad.write_bytes(b"not a PDF")
+    assert ocr_probe.ocr_pdf_front(bad)["error_code"] == "invalid_pdf"
+
+    def unavailable(_path):
+        raise OSError("Temporary I/O failure")
+
+    monkeypatch.setattr(ocr_probe, "_preflight", unavailable)
+    assert ocr_probe.ocr_pdf_front(bad)["error_code"] == "preflight_io_error"
+
+
+@pytest.mark.parametrize("diagnostic, expected", [
+    (b"Command Line Error: Incorrect password", "password_protected"),
+    (b"Error: resource temporarily unavailable", "render_error"),
+])
+def test_pdf_render_exit_code_is_classified_conservatively(tmp_path, monkeypatch, diagnostic, expected):
+    from app.subprocess_capture import BoundedProcessResult
+
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(ocr_probe.shutil, "which", lambda name: "/usr/bin/" + name)
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    monkeypatch.setattr(ocr_probe, "run_bounded_process",
+                        lambda *_args, **_kwargs: BoundedProcessResult(1, b"", diagnostic))
+    outcome = ocr_probe.ocr_pdf_front(pdf)
+    assert outcome["error_code"] == expected
+    assert outcome["policy"] == ocr_probe.ocr_policy()
+
+
+@NEEDS_TOOLS
+def test_real_password_protected_pdf_is_a_permanent_error(tmp_path, monkeypatch):
+    from pypdf import PdfWriter
+
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    encrypted = tmp_path / "encrypted.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.encrypt("bookguard-test-password")
+    with encrypted.open("wb") as handle:
+        writer.write(handle)
+    outcome = ocr_probe.ocr_pdf_front(encrypted)
+    assert outcome["error_code"] == "password_protected"
+    assert "password" in outcome["error"].lower()
+
+
+def test_one_ocr_attempt_uses_one_captured_page_and_language_policy(tmp_path, monkeypatch):
+    from app.subprocess_capture import BoundedProcessResult
+
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(settings, "verification_ocr_pages", 3)
+    monkeypatch.setattr(settings, "verification_ocr_languages", "eng")
+    monkeypatch.setattr(ocr_probe.shutil, "which", lambda name: "/usr/bin/" + name)
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    used_languages = []
+
+    def run(command, **_kwargs):
+        if any(Path(part).name == "pdftoppm" for part in command):
+            Path(command[-1] + "-1.png").write_bytes(b"image")
+            monkeypatch.setattr(settings, "verification_ocr_pages", 6)
+            monkeypatch.setattr(settings, "verification_ocr_languages", "fra")
+            return BoundedProcessResult(0, b"", b"")
+        used_languages.append(command[command.index("-l") + 1])
+        return BoundedProcessResult(0, b"BEL CANTO\nANN PATCHETT", b"")
+
+    monkeypatch.setattr(ocr_probe, "run_bounded_process", run)
+    outcome = ocr_probe.ocr_pdf_front(pdf)
+    assert outcome["policy"]["pages"] == 3
+    assert outcome["policy"]["languages"] == "eng"
+    assert used_languages == ["eng"]
 
 
 # --- OCR-tolerant matching: lost spaces and a misread letter, never a different book -----------

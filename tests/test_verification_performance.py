@@ -24,6 +24,7 @@ class _Extracted:
     notes: list
     front_text: str
     source: str
+    ocr: dict | None = None
 
 
 @pytest.fixture
@@ -73,6 +74,184 @@ def test_unchanged_book_is_answered_from_cache_without_a_snapshot(env, snapshot_
     assert second["cached"] is True
     assert second["verdict"] == first["verdict"]
     assert len(snapshot_calls) == 1
+
+
+def test_permanently_unreadable_ocr_result_skips_a_second_snapshot(env, snapshot_calls, monkeypatch):
+    from app import ocr_probe
+
+    result, source = env
+    pdf = source.with_suffix(".pdf")
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    result = {**result, "local_path": str(pdf)}
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    verifier._save_verification(
+        result, str(pdf), verifier._file_fingerprint(str(pdf)),
+        "INSUFFICIENT_EVIDENCE", 0, "native-pdf",
+        {"content": {"text_characters_examined": 0, "expected_signal": {}},
+         "secondPass": [], "secondPassVersion": verifier.SECOND_PASS_VERSION,
+         "ocr": {"attempted": True, "error": "Invalid PDF", "errorCode": "invalid_pdf",
+                 "policy": ocr_probe.ocr_policy(), "attemptedAt": time.time()}},
+    )
+    assert verifier.verify_result(result)["cached"] is True
+    assert verifier.verify_result(result)["cached"] is True
+    assert snapshot_calls == []
+
+    # A changed file fingerprint must invalidate the cached failure.
+    pdf.write_bytes(b"%PDF-1.4\nreplaced\n%%EOF\n")
+    assert verifier.verification_for_result(result) is None
+
+
+def test_cached_ocr_error_can_be_forced_to_recheck(env, snapshot_calls, monkeypatch):
+    from app import ocr_probe
+
+    result, source = env
+    pdf = source.with_suffix(".pdf")
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    result = {**result, "local_path": str(pdf)}
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    verifier._save_verification(
+        result, str(pdf), verifier._file_fingerprint(str(pdf)),
+        "INSUFFICIENT_EVIDENCE", 0, "native-pdf",
+        {"content": {"text_characters_examined": 0, "expected_signal": {}},
+         "secondPass": [], "secondPassVersion": verifier.SECOND_PASS_VERSION,
+         "ocr": {"attempted": True, "error": "Password required", "errorCode": "password_protected",
+                 "policy": ocr_probe.ocr_policy(), "attemptedAt": time.time()}},
+    )
+    assert verifier.verify_result(result)["cached"] is True
+    assert not snapshot_calls
+    checked = verifier.verify_result(result, force=True)
+    assert checked["cached"] is False
+    assert len(snapshot_calls) == 1
+
+
+def test_disabling_ocr_preserves_saved_verified_result_without_rerendering(
+    env, snapshot_calls, monkeypatch,
+):
+    from app import ocr_probe
+
+    result, original = env
+    pdf = original.with_suffix(".pdf")
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    result = {**result, "local_path": str(pdf)}
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    recorded = verifier._save_verification(
+        result, str(pdf), verifier._file_fingerprint(str(pdf)),
+        "VERIFIED_CORRECT", 99, "native-pdf+ocr",
+        {"content": {"text_characters_examined": 85, "expected_signal": {}},
+         "ocr": {"attempted": True, "version": verifier.OCR_VERSION,
+                 "policy": ocr_probe.ocr_policy(), "error": ""},
+         "secondPass": [], "secondPassVersion": verifier.SECOND_PASS_VERSION},
+    )
+
+    for enabled in (True, False, False, True):
+        monkeypatch.setattr(settings, "verification_ocr", enabled)
+        listed = verifier.verification_for_result(result)
+        checked = verifier.verify_result(result)
+        assert listed is not None and listed["verdict"] == "VERIFIED_CORRECT"
+        assert listed["id"] == checked["id"] == recorded["id"]
+        assert checked["cached"] is True
+    assert snapshot_calls == []
+
+
+def _retryable_ocr_pdf(env, monkeypatch, *, second_pass_incomplete=False):
+    from app import ocr_probe
+
+    result, original = env
+    pdf = original.with_suffix(".pdf")
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    result = {**result, "local_path": str(pdf)}
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    monkeypatch.setattr(settings, "verification_ocr_pages", 3)
+    monkeypatch.setattr(settings, "verification_ocr_languages", "eng")
+    clock = [time.time()]
+    monkeypatch.setattr(verifier.time, "time", lambda: clock[0])
+    calls = []
+
+    def extract(_path):
+        calls.append(clock[0])
+        return _Extracted(
+            {"title": "Bel Canto", "author": "Ann Patchett"}, "", [], [], "", "native-pdf",
+            {"attempted": True, "pages": 0, "chars": 0, "error": "render timed out",
+             "errorCode": "render_timeout", "policy": ocr_probe.ocr_policy(),
+             "version": verifier.OCR_VERSION, "attemptedAt": clock[0]},
+        )
+
+    def classify(*_args):
+        evidence = {"content": {"text_characters_examined": 0, "expected_signal": {}},
+                    "secondPass": [], "secondPassVersion": verifier.SECOND_PASS_VERSION}
+        if second_pass_incomplete:
+            evidence["secondPassIncomplete"] = True
+        return "INSUFFICIENT_EVIDENCE", 0, evidence
+
+    monkeypatch.setattr(verifier, "extract_ebook_identity", extract)
+    monkeypatch.setattr(verifier, "classify_identity", classify)
+    return result, pdf, clock, calls
+
+
+def test_scheduled_ocr_retries_exhaust_their_budget_and_survive_receipts(
+    env, snapshot_calls, monkeypatch,
+):
+    result, _pdf, clock, calls = _retryable_ocr_pdf(
+        env, monkeypatch, second_pass_incomplete=True,
+    )
+    first = verifier.verify_result(result)
+    assert first["evidence"]["ocr"]["attempts"] == 1
+    assert len(calls) == len(snapshot_calls) == 1
+
+    # A new scan gets a receipt, but does not increase or erase the attempt count.
+    next_scan = {**result, "id": 2, "scan_id": "scan-2"}
+    reused = verifier.verify_result(next_scan)
+    assert reused["cached"] and reused["evidence"]["ocr"]["attempts"] == 1
+    assert len(calls) == len(snapshot_calls) == 1
+
+    for n, delay in enumerate(verifier.OCR_TRANSIENT_RETRY_DELAYS, start=2):
+        clock[0] += delay - 1
+        assert verifier.verify_result(next_scan)["cached"]
+        clock[0] += 1
+        refreshed = verifier.verify_result(next_scan)
+        assert not refreshed["cached"]
+        assert refreshed["evidence"]["ocr"]["attempts"] == n
+        assert len(calls) == len(snapshot_calls) == n
+
+    clock[0] += 90 * 86400
+    exhausted = verifier.verify_result(next_scan)
+    assert exhausted["cached"]
+    assert exhausted["evidence"]["ocr"]["attempts"] == verifier.OCR_MAX_TRANSIENT_ATTEMPTS
+    assert len(calls) == len(snapshot_calls) == verifier.OCR_MAX_TRANSIENT_ATTEMPTS
+
+
+def test_ocr_retry_count_resets_on_policy_or_fingerprint_change(
+    env, snapshot_calls, monkeypatch,
+):
+    result, pdf, clock, calls = _retryable_ocr_pdf(env, monkeypatch)
+    verifier.verify_result(result)
+    clock[0] += verifier.OCR_TRANSIENT_RETRY_DELAYS[0]
+    assert verifier.verify_result(result)["evidence"]["ocr"]["attempts"] == 2
+
+    monkeypatch.setattr(settings, "verification_ocr_pages", 4)
+    by_policy = verifier.verify_result(result)
+    assert not by_policy["cached"] and by_policy["evidence"]["ocr"]["attempts"] == 1
+    clock[0] += verifier.OCR_TRANSIENT_RETRY_DELAYS[0]
+    assert verifier.verify_result(result)["evidence"]["ocr"]["attempts"] == 2
+
+    pdf.write_bytes(b"%PDF-1.4\nreplacement\n%%EOF\n")
+    by_fingerprint = verifier.verify_result(result)
+    assert not by_fingerprint["cached"] and by_fingerprint["evidence"]["ocr"]["attempts"] == 1
+    assert len(calls) == len(snapshot_calls) == 5
+
+
+def test_listing_preserves_last_ocr_verification_when_retry_is_due(
+    env, snapshot_calls, monkeypatch,
+):
+    result, _pdf, clock, calls = _retryable_ocr_pdf(env, monkeypatch)
+    verifier.verify_result(result)
+    clock[0] += verifier.OCR_TRANSIENT_RETRY_DELAYS[0]
+    listed = verifier.verification_for_result(result)
+    assert listed is not None and listed["evidence"]["ocr"]["attempts"] == 1
+    assert len(calls) == len(snapshot_calls) == 1
+    renewed = verifier.verify_result(result)
+    assert renewed["evidence"]["ocr"]["attempts"] == 2
+    assert len(calls) == len(snapshot_calls) == 2
 
 
 def test_changed_book_is_checked_again(env, snapshot_calls):
