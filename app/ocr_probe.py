@@ -25,11 +25,11 @@ import tempfile
 from typing import Any
 
 from .config import settings
-from .verification_constants import OCR_VERSION
 from .pdf_probe import _preflight
 from .scan_text import PAGE_BREAK, without_book_lists
 from .subprocess_capture import ProcessOutputLimitExceeded, run_bounded_process
 
+OCR_POLICY_VERSION = 1             # Version of captured OCR settings, independent of evidence-reader rules.
 RENDER_MAX_PIXELS = 2400           # longest side of a rendered page: bounds the work whatever the page size
 RENDER_TIMEOUT_SECONDS = 45
 PAGE_OCR_TIMEOUT_SECONDS = 60
@@ -64,7 +64,7 @@ def _languages() -> str:
 
 def ocr_policy() -> dict[str, Any]:
     """OCR settings captured for one attempt; unlike general verification settings they do not rekey all ebooks."""
-    return {"version": OCR_VERSION, "enabled": bool(settings.verification_ocr),
+    return {"version": OCR_POLICY_VERSION, "enabled": bool(settings.verification_ocr),
             "pages": int(settings.verification_ocr_pages), "languages": _languages()}
 
 
