@@ -224,8 +224,15 @@ def _verification_for_fingerprint(
         return None
     # An undecided ebook verdict reached before the second evidence pass existed
     # is not final: look at the file again with the new evidence.
-    if predates_second_pass(item) or predates_ocr(item, allow_transient_retry=allow_transient_retry):
+    if predates_ocr(item, allow_transient_retry=allow_transient_retry):
         return None
+    if predates_second_pass(item):
+        # An incomplete second pass must not override the OCR retry backoff or cap.
+        # Successful OCR and unrelated catalogue failures retain their own retry rules.
+        ocr = (item.get("evidence") or {}).get("ocr") or {}
+        if not (item.get("verdict") == "INSUFFICIENT_EVIDENCE"
+                and ocr.get("error") and ocr.get("policy") == ocr_policy()):
+            return None
     return item
 
 
