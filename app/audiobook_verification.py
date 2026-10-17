@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
+import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 from typing import Any
 
@@ -16,6 +18,7 @@ MIN_REASONABLE_AUDIO_BYTES = 4096
 FFPROBE_TIMEOUT_SECONDS = 60
 FFPROBE_STDOUT_LIMIT_BYTES = 1024 * 1024
 FFPROBE_STDERR_LIMIT_BYTES = 64 * 1024
+FFMPEG_MP3_DECODE_TIMEOUT_SECONDS = 120
 DISC_TRACK_SUFFIX = re.compile(
     r"^(?P<prefix>.*?)(?P<disc>\d{1,3})[-_](?P<track>\d{2,3})$",
     flags=re.IGNORECASE,
@@ -49,6 +52,71 @@ def _normalized_tags(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
     return {str(key).lower(): item for key, item in value.items()}
+
+
+
+def _has_id3_mp3_header(path: Path) -> bool:
+    """Only trust a real regular .mp3 with an ID3 header for forced-demux recovery."""
+    if path.suffix.lower() != ".mp3" or not hasattr(os, "O_NOFOLLOW"):
+        return False
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return False
+            return handle.read(3) == b"ID3"
+    except OSError:
+        return False
+
+
+def _recover_misdetected_mp3(
+    path: Path,
+    ffprobe_cmd: list[str],
+    cancel_check: CancelCheck | None,
+) -> dict[str, Any] | None:
+    """Trust a forced MP3 probe only after bounded full-file decode succeeds."""
+    forced_cmd = [*ffprobe_cmd[:3], "-f", "mp3", *ffprobe_cmd[3:]]
+    try:
+        forced = run_bounded_process(
+            forced_cmd,
+            timeout=FFPROBE_TIMEOUT_SECONDS,
+            stdout_limit=FFPROBE_STDOUT_LIMIT_BYTES,
+            stderr_limit=FFPROBE_STDERR_LIMIT_BYTES,
+            cancel_check=cancel_check,
+        )
+        if forced.returncode != 0:
+            return None
+        payload = json.loads(forced.stdout.decode("utf-8", errors="replace") or "{}")
+        fmt = payload.get("format") or {}
+        streams = payload.get("streams") or []
+        if not isinstance(fmt, dict) or not isinstance(streams, list):
+            return None
+        duration = _number(fmt.get("duration"))
+        if not duration or not any(
+            isinstance(stream, dict)
+            and stream.get("codec_type") == "audio"
+            and stream.get("codec_name") == "mp3"
+            for stream in streams
+        ):
+            return None
+        decoded = run_bounded_process(
+            [
+                "ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-xerror",
+                "-f", "mp3", "-i", str(path), "-map", "0:a:0", "-f", "null", "-",
+            ],
+            timeout=FFMPEG_MP3_DECODE_TIMEOUT_SECONDS,
+            stdout_limit=0,
+            stderr_limit=FFPROBE_STDERR_LIMIT_BYTES,
+            cancel_check=cancel_check,
+        )
+        return payload if decoded.returncode == 0 else None
+    except ProcessCancelled as exc:
+        raise AudiobookVerificationCancelled("Audiobook verification stopped by user.") from exc
+    except (
+        subprocess.TimeoutExpired, ProcessOutputLimitExceeded, OSError,
+        ValueError, TypeError,
+    ):
+        return None
 
 
 def probe_audio_file(
@@ -118,6 +186,17 @@ def probe_audio_file(
 
     fmt = payload.get("format") if isinstance(payload.get("format"), dict) else {}
     streams = payload.get("streams") if isinstance(payload.get("streams"), list) else []
+    mp3_fallback_checked = False
+    mp3_fallback_verified = False
+    if not any(isinstance(stream, dict) and stream.get("codec_type") == "audio" for stream in streams):
+        if _has_id3_mp3_header(source):
+            mp3_fallback_checked = True
+            recovered = _recover_misdetected_mp3(source, cmd, cancel_check)
+            if recovered is not None:
+                payload = recovered
+                fmt = payload.get("format") or {}
+                streams = payload.get("streams") or []
+                mp3_fallback_verified = True
     chapters = payload.get("chapters") if isinstance(payload.get("chapters"), list) else []
     audio_streams = [
         stream for stream in streams
@@ -139,6 +218,8 @@ def probe_audio_file(
         "path": path,
         "size_bytes": size,
         "modified_ns": stat.st_mtime_ns,
+        "mp3_fallback_checked": mp3_fallback_checked,
+        "mp3_fallback_verified": mp3_fallback_verified,
         "format_name": str(fmt.get("format_name") or ""),
         "duration_seconds": duration,
         "duration": str(duration) if duration is not None else "",
@@ -176,8 +257,16 @@ def cached_or_probe_audio_file(
 
     cached = cached_probe(path, stat.st_size, stat.st_mtime_ns)
     if cached is not None:
-        cached["cache_hit"] = True
-        return cached, True
+        # Older cached zero-audio MP3 probes may be FFprobe video false positives.
+        # Retry these once, without invalidating thousands of healthy probes.
+        stale_id3_probe = (
+            not cached.get("mp3_fallback_checked")
+            and int(cached.get("audio_stream_count") or 0) == 0
+            and _has_id3_mp3_header(source)
+        )
+        if not stale_id3_probe:
+            cached["cache_hit"] = True
+            return cached, True
 
     probe = probe_audio_file(path, cancel_check=cancel_check)
     probe["cache_hit"] = False
