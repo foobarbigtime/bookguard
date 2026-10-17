@@ -198,6 +198,7 @@ def build_audiobook_evidence(result: dict[str, Any], path: str) -> dict[str, Any
         base_evidence["expected"]["titleAsTagged"] = expected_title
     evidence = {
         **base_evidence,
+        "audiobookProbeRecoveryVersion": 1,
         "technical": technical_summary,
         "identity": {
             "classification": identity_classification,
