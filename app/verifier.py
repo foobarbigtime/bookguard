@@ -51,7 +51,10 @@ from .verification_engine import classify_identity
 
 
 VERIFIER_VERSION = "28"
-OCR_TRANSIENT_RETRY_SECONDS = 60 * 60  # Never repeat an ambiguous OCR failure on each library check.
+# Retry delays after the 1st through 4th failed attempts. The 5th failure
+# exhausts automatic retries until the file fingerprint or OCR policy changes.
+OCR_TRANSIENT_RETRY_DELAYS = (60 * 60, 6 * 60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60)
+OCR_MAX_TRANSIENT_ATTEMPTS = len(OCR_TRANSIENT_RETRY_DELAYS) + 1
 VERDICTS = {
     "VERIFIED_CORRECT",
     "METADATA_ERROR",
@@ -200,6 +203,8 @@ def _verification_for_fingerprint(
     result: dict,
     target: str,
     fingerprint: str,
+    *,
+    allow_transient_retry: bool = True,
 ) -> dict | None:
     init_verification_db()
     signature = _verification_signature(result, target, fingerprint)
@@ -219,16 +224,16 @@ def _verification_for_fingerprint(
         return None
     # An undecided ebook verdict reached before the second evidence pass existed
     # is not final: look at the file again with the new evidence.
-    if predates_second_pass(item) or predates_ocr(item):
+    if predates_second_pass(item) or predates_ocr(item, allow_transient_retry=allow_transient_retry):
         return None
     return item
 
 
-def predates_ocr(item: dict) -> bool:
-    """Refresh only affected PDF evidence, without repeatedly processing a permanently bad scan.
+def predates_ocr(item: dict, *, allow_transient_retry: bool = True) -> bool:
+    """Invalidate PDF evidence for changed OCR policy or an eligible retry.
 
-    PDF content fingerprints still invalidate the cache when file bytes change.
-    A manual Verify again (force=True) always bypasses this cache.
+    Routine listing reads show the last known evidence even when a retry is due.
+    The verifier, not the listing, decides when to perform an expensive retry.
     """
     source = str(item.get("source") or "")
     if not source.startswith("native-pdf"):
@@ -238,35 +243,78 @@ def predates_ocr(item: dict) -> bool:
     attempt = evidence.get("ocr") or {}
     policy = ocr_policy()
     if not policy["enabled"]:
-        # Do not reuse OCR-derived proof when OCR is intentionally switched off.
+        # Existing PR behaviour pending explicit owner decision; do not change here.
         return source.endswith("+ocr")
     if not attempt:
-        # Pre-OCR scan with no useful native text: one recheck on enabling OCR.
         return ("text_characters_examined" in content
                 and int(content.get("text_characters_examined") or 0) < OCR_ONLY_BELOW_CHARS)
 
+    verdict = str(item.get("verdict") or "")
     saved_policy = attempt.get("policy")
     if saved_policy is not None and saved_policy != policy:
-        return True
-    if str(item.get("verdict") or "") != "INSUFFICIENT_EVIDENCE":
+        # A different language may alter any OCR-derived verdict. Changing the
+        # page count or OCR policy version only reopens undecided evidence.
+        if saved_policy.get("languages") != policy["languages"]:
+            return source.endswith("+ocr") or verdict == "INSUFFICIENT_EVIDENCE"
+        return verdict == "INSUFFICIENT_EVIDENCE"
+    if verdict != "INSUFFICIENT_EVIDENCE":
         return False
     if saved_policy is None:
-        # Existing installations have no policy or error category. Reattempt one
-        # old failure and preserve the earlier version-based undecided refresh.
+        # Existing installations have no policy or error category. One refresh
+        # adds structured OCR evidence and an attempt count.
         return bool(attempt.get("error")) or int(attempt.get("version") or 1) < OCR_VERSION
     if not attempt.get("error"):
-        # A newer title-page reader still revisits earlier undecided scans once.
         return int(attempt.get("version") or 1) < OCR_VERSION
-    if attempt.get("errorCode") in {"invalid_pdf", "password_protected", "no_text", "no_title_page"}:
+
+    code = str(attempt.get("errorCode") or "")
+    if code == "no_title_page":
+        # without_book_lists is versioned with the OCR reader.
+        return int(attempt.get("version") or 1) < OCR_VERSION
+    if code in {"invalid_pdf", "password_protected", "no_text"}:
+        return False
+    if not allow_transient_retry:
         return False
 
-    # Unknown rendering errors may be transient. Keep their original attempt
-    # timestamp even when a later library scan reuses the cached record.
+    try:
+        attempts = max(1, int(attempt.get("attempts") or 1))
+    except (TypeError, ValueError):
+        attempts = 1
+    if attempts > len(OCR_TRANSIENT_RETRY_DELAYS):
+        return False                 # terminal failure until fingerprint / OCR policy changes
     try:
         attempted_at = float(attempt.get("attemptedAt"))
     except (TypeError, ValueError):
-        return True
-    return time.time() - attempted_at >= OCR_TRANSIENT_RETRY_SECONDS
+        return True                  # old OCR evidence without a timestamp needs one recheck
+    return time.time() - attempted_at >= OCR_TRANSIENT_RETRY_DELAYS[attempts - 1]
+
+
+def _carry_ocr_attempts(result: dict, target: str, fingerprint: str, attempt: dict) -> None:
+    """Carry failed attempt count across re-verifications of the same fingerprint and policy.
+
+    Called only after a real extraction, never when creating a cache-reuse receipt.
+    """
+    attempt["attempts"] = 1
+    if not attempt.get("error"):
+        return
+    signature = _verification_signature(result, target, fingerprint)
+    with local_conn() as conn:
+        row = conn.execute(
+            """SELECT evidence_json FROM content_verifications
+               WHERE signature=? OR signature GLOB ?
+               ORDER BY updated_at DESC, id DESC LIMIT 1""",
+            (signature, signature + ":*"),
+        ).fetchone()
+    if row is None:
+        return
+    old_ocr = (json.loads(row["evidence_json"]).get("ocr") or {})
+    if not old_ocr.get("error") or old_ocr.get("policy") != attempt.get("policy"):
+        return
+    try:
+        previous = max(1, int(old_ocr.get("attempts") or 1))
+    except (TypeError, ValueError):
+        previous = 1
+    attempt["attempts"] = min(OCR_MAX_TRANSIENT_ATTEMPTS, previous + 1)
+
 
 def predates_second_pass(item: dict) -> bool:
     """A stored ebook identity verdict that the current second pass should look at again.
@@ -314,7 +362,7 @@ def verification_for_result(result: dict) -> dict | None:
         else:
             target = resolve_ebook_target(result.get("local_path") or "")
             fingerprint = _file_fingerprint(target)
-    return _verification_for_fingerprint(result, target, fingerprint)
+    return _verification_for_fingerprint(result, target, fingerprint, allow_transient_retry=False)
 
 
 def _save_verification(
@@ -676,6 +724,7 @@ def verify_result(result: dict, force: bool = False) -> dict:
             evidence["security"] = security
             ocr = getattr(extracted, "ocr", None)
             if ocr:
+                _carry_ocr_attempts(result, target, fingerprint, ocr)
                 evidence["ocr"] = ocr
             identity_done = time.monotonic()
             evidence["timings"] = {
