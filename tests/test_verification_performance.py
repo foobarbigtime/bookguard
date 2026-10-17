@@ -124,6 +124,35 @@ def test_cached_ocr_error_can_be_forced_to_recheck(env, snapshot_calls, monkeypa
     assert len(snapshot_calls) == 1
 
 
+def test_disabling_ocr_preserves_saved_verified_result_without_rerendering(
+    env, snapshot_calls, monkeypatch,
+):
+    from app import ocr_probe
+
+    result, original = env
+    pdf = original.with_suffix(".pdf")
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    result = {**result, "local_path": str(pdf)}
+    monkeypatch.setattr(settings, "verification_ocr", True)
+    recorded = verifier._save_verification(
+        result, str(pdf), verifier._file_fingerprint(str(pdf)),
+        "VERIFIED_CORRECT", 99, "native-pdf+ocr",
+        {"content": {"text_characters_examined": 85, "expected_signal": {}},
+         "ocr": {"attempted": True, "version": verifier.OCR_VERSION,
+                 "policy": ocr_probe.ocr_policy(), "error": ""},
+         "secondPass": [], "secondPassVersion": verifier.SECOND_PASS_VERSION},
+    )
+
+    for enabled in (True, False, False, True):
+        monkeypatch.setattr(settings, "verification_ocr", enabled)
+        listed = verifier.verification_for_result(result)
+        checked = verifier.verify_result(result)
+        assert listed is not None and listed["verdict"] == "VERIFIED_CORRECT"
+        assert listed["id"] == checked["id"] == recorded["id"]
+        assert checked["cached"] is True
+    assert snapshot_calls == []
+
+
 def _retryable_ocr_pdf(env, monkeypatch, *, second_pass_incomplete=False):
     from app import ocr_probe
 
