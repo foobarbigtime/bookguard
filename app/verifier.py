@@ -250,8 +250,9 @@ def predates_ocr(item: dict, *, allow_transient_retry: bool = True) -> bool:
     attempt = evidence.get("ocr") or {}
     policy = ocr_policy()
     if not policy["enabled"]:
-        # Existing PR behaviour pending explicit owner decision; do not change here.
-        return source.endswith("+ocr")
+        # Turning OCR off affects future extraction, not historical proof. Preserve
+        # cached verdicts for unchanged files, as on main; force=True can reverify.
+        return False
     if not attempt:
         return ("text_characters_examined" in content
                 and int(content.get("text_characters_examined") or 0) < OCR_ONLY_BELOW_CHARS)
