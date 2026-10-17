@@ -9,12 +9,14 @@ the module responsible for the behavior you want to change.
 ```bash
 python3.12 -m venv .venv
 . .venv/bin/activate
-python -m pip install -r requirements.txt pytest httpx ruff==0.12.11
+python -m pip install -r requirements-test.txt
 ```
 
-`httpx` is required by the application tests that use FastAPI/Starlette's
-TestClient. The runtime dependencies stay in `requirements.txt`; the additional
-test and lint tools match [CI](../.github/workflows/test.yml).
+`requirements-test.txt` includes `httpx`, Pillow (for generated PDF/OCR fixtures),
+pytest, and Ruff alongside the runtime dependencies. The runtime dependencies
+stay in `requirements.txt`; test and lint tools match [CI](../.github/workflows/test.yml).
+Install Poppler (`pdftoppm`) and Tesseract with English language data before
+running OCR integration tests locally. The CI workflow installs both explicitly.
 
 Install FFmpeg, including `ffprobe`, for local audio inspection. Docker provides
 it through the [Dockerfile](../Dockerfile). Docker and Compose are needed for
