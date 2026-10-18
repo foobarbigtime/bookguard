@@ -62,6 +62,29 @@
     {% endif %}
   </section>
 
+  {% set ownership = home.ownershipAudit %}
+  <p class="muted" data-ownership-audit-status role="status">
+    <strong>Ownership audit:</strong>
+    {% if ownership.status == 'completed' %}
+      {% if ownership.conflictCount == 0 %}
+        No ownership conflicts detected.
+      {% else %}
+        {{ ownership.conflictCount }} ownership
+        {{ 'conflict' if ownership.conflictCount == 1 else 'conflicts' }}
+        detected. Review required.
+        <a href="/review/ownership-conflicts">View ownership conflicts</a>
+      {% endif %}
+    {% elif ownership.status == 'running' %}
+      Audit in progress.
+    {% elif ownership.status == 'failed' %}
+      Audit failed. Ownership safety is unknown.
+    {% elif ownership.status == 'not_audited' %}
+      Not audited. Ownership safety has not been checked.
+    {% else %}
+      Audit status unavailable.
+    {% endif %}
+  </p>
+
   <div class="home-grid">
     <div class="home-col">
       <section class="card home-card" aria-labelledby="attentionHeading">

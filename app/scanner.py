@@ -226,6 +226,43 @@ def _mark_cancelled(scan_id: str, *, status: str, phase: str, message: str) -> N
     )
 
 
+
+def _run_ownership_audit(scan_id: str) -> None:
+    """Audit Bindery ownership without changing the library scan status."""
+    from .db import (
+        complete_ownership_audit,
+        fail_ownership_audit,
+        start_ownership_audit,
+    )
+    from .ownership_audit import audit_ownership
+
+    try:
+        start_ownership_audit(scan_id)
+    except Exception:
+        # A persistence failure must not change the completed library scan.
+        # Surface the failure to application logs.
+        import logging
+        logging.getLogger(__name__).exception(
+            "Could not start ownership audit for scan %s", scan_id
+        )
+        return
+
+    try:
+        conflicts = audit_ownership()
+        complete_ownership_audit(scan_id, conflicts)
+    except Exception as exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Ownership audit failed for scan %s", scan_id)
+        try:
+            fail_ownership_audit(scan_id, str(exc))
+        except Exception:
+            logger.exception(
+                "Could not persist ownership audit failure for scan %s",
+                scan_id,
+            )
+
+
 def run_scan(scan_id: str, rows: list[dict]) -> None:
     try:
         total = len(rows)
@@ -316,6 +353,14 @@ def run_scan(scan_id: str, rows: list[dict]) -> None:
             cancel_mode=None,
             message="Scan completed.",
         )
+        try:
+            _run_ownership_audit(scan_id)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Unexpected ownership audit error for completed scan %s",
+                scan_id,
+            )
     except AudiobookVerificationCancelled:
         _mark_cancelled(
             scan_id,

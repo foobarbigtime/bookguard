@@ -25,6 +25,8 @@ from ..db import (
     latest_reason_counts,
     latest_results,
     latest_scan,
+    ownership_audit_summary,
+    ownership_audit_conflicts,
     recent_cleanup_actions,
     recent_metadata_repairs,
 )
@@ -55,6 +57,51 @@ def home_page(request: Request):
         request=request,
         name="home.html",
         context={"home": home_summary(), "version": __version__},
+    )
+
+
+
+@router.get("/review/ownership-conflicts", response_class=HTMLResponse)
+def ownership_conflicts_page(request: Request):
+    """Display saved ownership conflicts without running an audit."""
+    try:
+        scan = latest_scan()
+
+        if scan is None:
+            audit = {
+                "status": "not_audited",
+                "conflict_count": None,
+            }
+            conflicts = []
+        else:
+            audit = ownership_audit_summary(scan["id"])
+            conflicts = (
+                ownership_audit_conflicts(scan["id"])
+                if audit["status"] == "completed"
+                else []
+            )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Could not load ownership conflict review page"
+        )
+        scan = None
+        audit = {
+            "status": "unavailable",
+            "conflict_count": None,
+        }
+        conflicts = []
+
+    return templates.TemplateResponse(
+        request=request,
+        name="ownership_conflicts.html",
+        context={
+            "scan": scan,
+            "audit": audit,
+            "conflicts": conflicts,
+            "version": __version__,
+        },
     )
 
 

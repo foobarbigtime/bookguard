@@ -22,6 +22,7 @@ EXPECTED_ROUTES = {
     ("GET", "/review/unmatched"),
     ("POST", "/api/unmatched/check"),
     ("POST", "/api/unmatched/{row_id}/attach"),
+    ("GET", "/review/ownership-conflicts"),
     ("GET", "/review/duplicates"),
     ("POST", "/api/duplicates/fix"),
     ("GET", "/activity"),
