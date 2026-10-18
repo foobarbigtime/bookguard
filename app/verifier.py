@@ -218,6 +218,26 @@ def _verification_for_fingerprint(
     if not row:
         return None
     item = _decode_row(row)
+    # Interrupted MP3 recovery is not file damage. Keep historical audit
+    # evidence readable, but retry the media on the next active verification.
+    if (result.get("format") == "audiobook" and allow_transient_retry
+            and (item.get("evidence") or {}).get("audiobookProbeInconclusive") is True):
+        return None
+    # Older audiobook proofs can reflect FFprobe interpreting an ID3 MP3 as
+    # video. Recheck affected technical failures once under the corrected probe
+    # policy; do not invalidate unrelated audiobook or ebook verification proof.
+    if result.get("format") == "audiobook" and allow_transient_retry:
+        evidence = item.get("evidence") or {}
+        technical = evidence.get("technical") or {}
+        if (
+            item.get("source") == "audiobook-technical"
+            and int(evidence.get("audiobookProbeRecoveryVersion") or 0) < 1
+            and any(
+                "container has no audio stream" in str(reason)
+                for reason in technical.get("reasons") or []
+            )
+        ):
+            return None
     # A scanner outage is not a finding about the file: never reuse it, so the
     # next verification scans again instead of repeating the outage.
     if verification_is_inconclusive(item.get("verdict"), item.get("evidence")):

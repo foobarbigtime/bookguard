@@ -37,6 +37,30 @@ Scheduled scans and the raw dashboard's scan-only control remain scan-only.
 Bulk MISSING cleanup is refused while Check library runs; if another task
 prevents its validation scan, the result says so.
 
+## MP3 format-detection recovery
+
+Some ID3-tagged MP3 recordings may be misidentified as VVC video by FFprobe's
+automatic demuxer detection. When a regular `.mp3` begins with `ID3` but the
+automatic probe detects no audio, BookGuard retries with the MP3 demuxer.
+The fallback only accepts an MP3 audio stream with positive duration **after**
+the entire recording decodes successfully with FFmpeg's `-xerror`. Both
+subprocesses retain bounded execution time and output; a completed but failed
+full decode still leaves the recording technically failed. A timeout, unavailable
+decoder, or probe resource-limit error is **inconclusive**, not proof of damage:
+BookGuard does not save the interrupted probe as a valid cache result, records an
+`INSUFFICIENT_EVIDENCE` receipt, and retries on the next active verification.
+Read-only audit pages retain the saved inconclusive receipt. A failed decode
+itself can still be cached because it is deterministic.
+
+Old zero-audio cache entries for ID3 MP3s are refreshed once and the correction
+is saved. Old `audiobook-technical` verification proofs specifically citing
+`container has no audio stream` are reconsidered on the next verification,
+without invalidating all other verified books or changing past audit history.
+A technical repair does not resolve a separate mixed-volume identity warning.
+Symlinks and non-regular media are not eligible for the MP3 fallback: the
+header check deliberately refuses to follow symlinks. No media are rewritten
+or quarantined by this check.
+
 ## Backup and validation
 
 BookGuard's persistent application state lives in `/config/bookguard.db`. The
