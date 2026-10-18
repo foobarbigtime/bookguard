@@ -50,6 +50,7 @@ def test_triage_preview_separates_detach_and_quarantine(monkeypatch):
     item = sample_result()
     monkeypatch.setattr(triage, "_require_current_triage_result", lambda result: None)
     monkeypatch.setattr(triage, "_exact_bindery_match", lambda result: True)
+    monkeypatch.setattr(triage, "foreign_ancestor_associations", lambda path, book_id: [])
     monkeypatch.setattr(triage.os.path, "exists", lambda path: True)
     monkeypatch.setattr(
         triage,
