@@ -11,6 +11,8 @@ from app.db import foreign_ancestor_associations
 
 PARENT = "/data/media/audiobooks/Example Author/Collected Audio"
 CHILD = PARENT + "/Disc 1/Track 01.mp3"
+LEGACY_PARENT = "/data/media/audiobooks/Example Author/Café Stories/"
+LEGACY_CHILD = LEGACY_PARENT + "Disc 1/Track 02.mp3"
 
 
 @pytest.fixture
@@ -33,6 +35,7 @@ def nested_ownership(tmp_path, monkeypatch):
                 (1, 10, "audiobook", PARENT),
                 (2, 20, "audiobook", CHILD),
                 (3, 30, "audiobook", PARENT + " 2/Disc 1/Track 01.mp3"),
+                (4, 30, "audiobook", LEGACY_PARENT),
             ],
         )
     monkeypatch.setattr(settings, "bindery_db", str(database))
@@ -52,6 +55,14 @@ def test_foreign_ancestor_detects_other_book_across_nested_directories(nested_ow
 def test_foreign_ancestor_does_not_match_sibling_prefix_or_same_book(nested_ownership):
     assert foreign_ancestor_associations(PARENT + " 2/Disc 1/Track 01.mp3", 30) == []
     assert foreign_ancestor_associations(CHILD, 10) == []
+
+
+def test_foreign_ancestor_detects_legacy_trailing_slash_unicode_parent(nested_ownership):
+    owners = foreign_ancestor_associations(LEGACY_CHILD, 20)
+    assert len(owners) == 1
+    assert owners[0]["file_id"] == 4
+    assert owners[0]["book_id"] == 30
+    assert owners[0]["stored_path"] == LEGACY_PARENT
 
 
 def test_foreign_ancestor_rejects_nonabsolute_or_traversal_paths(nested_ownership):
