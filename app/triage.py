@@ -14,6 +14,7 @@ from .db import (
     bindery_file_by_id,
     create_cleanup_action,
     finish_cleanup_action,
+    foreign_ancestor_associations,
     latest_results,
     latest_scan,
     local_conn,
@@ -304,6 +305,14 @@ def triage_action_preview(result: dict, action: str) -> dict:
     elif action == "quarantine":
         ebook_action = None
         writable_source = True
+        foreign_owners = []
+        ownership_check_failed = False
+        try:
+            foreign_owners = foreign_ancestor_associations(
+                str(result["stored_path"]), int(result["book_id"])
+            )
+        except Exception:
+            ownership_check_failed = True
         if str(result.get("format") or "").lower() == "ebook" and physical_exists:
             ebook_action = ebook_action_preview(
                 str(result.get("local_path") or ""),
@@ -313,9 +322,20 @@ def triage_action_preview(result: dict, action: str) -> dict:
         elif physical_exists:
             writable_source = mount_is_writable(str(result.get("local_path") or ""))
 
-        safe = exact and physical_exists and writable_source
+        safe = (
+            exact and physical_exists and writable_source
+            and not foreign_owners and not ownership_check_failed
+        )
         if not exact:
             reason = "The Bindery association changed since the scan. Refresh before quarantine."
+        elif ownership_check_failed:
+            reason = "Cannot verify parent-directory ownership. Quarantine blocked."
+        elif foreign_owners:
+            owner = foreign_owners[0]
+            reason = (
+                f"File is inside a directory tracked by book "
+                f"{owner['book_id']} ({owner['title']}). Quarantine blocked."
+            )
         elif not physical_exists:
             reason = "The physical path is no longer present. Quarantine is not appropriate."
         elif ebook_action and not ebook_action["ready"]:

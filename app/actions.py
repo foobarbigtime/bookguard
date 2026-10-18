@@ -12,6 +12,7 @@ from .db import (
     bindery_file_by_id,
     create_cleanup_action,
     finish_cleanup_action,
+    foreign_ancestor_associations,
     latest_scan,
 )
 from .file_safety import allocate_unique_destination, is_within, roots_overlap
@@ -188,6 +189,21 @@ def quarantine_file(book_id: int, stored_path: str, local_path: str) -> tuple[st
     if len(linked) != 1:
         raise ActionError(
             f"Refusing to move a shared path: Bindery has {len(linked)} associations inside it."
+        )
+
+    # An individually tracked chapter can live inside another book's
+    # directory-backed audiobook. Refuse to move it out of that collection.
+    try:
+        foreign_owners = foreign_ancestor_associations(stored_path, book_id)
+    except Exception as exc:
+        raise ActionError(
+            "Refusing to quarantine: cannot verify parent-directory ownership."
+        ) from exc
+    if foreign_owners:
+        owner = foreign_owners[0]
+        raise ActionError(
+            f"Refusing to quarantine: parent directory is tracked by "
+            f"book {owner['book_id']} ({owner['title']})."
         )
 
     destination = _safe_quarantine_destination(local_path)
