@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 import json
 import os
 import sqlite3
@@ -135,8 +136,6 @@ def foreign_ancestor_associations(stored_path: str, book_id: int) -> list[dict]:
     registered to another book. Use path-component ancestors (not LIKE-prefix
     matching), including nested disc/volume layouts. This is a read-only query.
     """
-    from pathlib import PurePosixPath
-
     path = PurePosixPath(stored_path)
     if not path.is_absolute() or ".." in stored_path.split("/"):
         raise ValueError("A normalized absolute Bindery path is required.")
