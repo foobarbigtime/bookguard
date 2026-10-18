@@ -57,7 +57,9 @@ is saved. Old `audiobook-technical` verification proofs specifically citing
 `container has no audio stream` are reconsidered on the next verification,
 without invalidating all other verified books or changing past audit history.
 A technical repair does not resolve a separate mixed-volume identity warning.
-Symlinks and non-regular media are not eligible for the MP3 fallback: the\nheader check deliberately refuses to follow symlinks. No media are rewritten\nor quarantined by this check.
+Symlinks and non-regular media are not eligible for the MP3 fallback: the
+header check deliberately refuses to follow symlinks. No media are rewritten
+or quarantined by this check.
 
 ## Backup and validation
 
