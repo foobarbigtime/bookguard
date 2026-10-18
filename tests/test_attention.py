@@ -101,6 +101,7 @@ def test_home_renders_every_attention_item_with_its_guidance():
 def _minimal_home(attention_groups):
     return {
         "health": {"level": "ok", "title": "BookGuard is healthy", "problems": []},
+        "ownershipAudit": {"status": "not_audited", "conflictCount": None},
         "decisions": len(attention_groups),
         "library": {"checked": 0, "passed": 0, "verified": 0, "wrongFile": 0, "damaged": 0, "details": 0, "undecided": 0},
         "attention": attention_groups,
