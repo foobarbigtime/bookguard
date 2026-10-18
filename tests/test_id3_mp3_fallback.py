@@ -29,7 +29,7 @@ MP3 = {
 
 def _id3_mp3(tmp_path, *, name="chapter.mp3"):
     path = tmp_path / name
-    path.write_bytes(b"ID3\\x04\\x00\\x00\\x00\\x00\\x00\\x00" + b"x" * 5000)
+    path.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00" + b"x" * 5000)
     return path
 
 
@@ -224,3 +224,160 @@ def test_ordinary_audiobook_proof_not_invalidated(monkeypatch):
     assert verifier._verification_for_fingerprint(
         {"format": "audiobook"}, "path", "fingerprint"
     ) is not None
+
+def test_fallback_timeout_is_retryable_and_does_not_replace_cached_probe(tmp_path, monkeypatch):
+    path = _id3_mp3(tmp_path)
+    original_cache = {"path": str(path), "format_name": "vvc", "audio_stream_count": 0}
+    saved = []
+    commands = []
+    fail_once = [True]
+
+    monkeypatch.setattr(audio, "cached_probe", lambda *args: saved[-1] if saved else dict(original_cache))
+    monkeypatch.setattr(audio, "save_probe", lambda *args: saved.append(dict(args[-1])) or True)
+
+    def runner(cmd, **kwargs):
+        commands.append(list(cmd))
+        if cmd[0] == "ffmpeg":
+            if fail_once[0]:
+                fail_once[0] = False
+                raise __import__("subprocess").TimeoutExpired(cmd, 120)
+            return BoundedProcessResult(0, b"", b"")
+        return _response(MP3 if "-f" in cmd else VIDEO)
+
+    monkeypatch.setattr(audio, "run_bounded_process", runner)
+    failed, hit = audio.cached_or_probe_audio_file(str(path))
+    assert hit is False
+    assert failed["transient_probe_failure"] is True
+    assert "TimeoutExpired" in failed["probe_error"]
+    assert saved == []
+    assert audio.summarize_audiobook_verification([failed])["verdict"] == "INCONCLUSIVE"
+    assert audio.summarize_audiobook_verification([failed])["reason_code"] == "AUDIO_PROBE_TRANSIENT_FAILURE"
+
+    good, hit = audio.cached_or_probe_audio_file(str(path))
+    assert hit is False
+    assert good["audio_stream_count"] == 1
+    assert good["mp3_fallback_verified"] is True
+    assert len(saved) == 1
+    assert audio.cached_or_probe_audio_file(str(path))[1] is True
+
+
+def test_ffmpeg_tool_outage_does_not_cache_or_prove_unsafe_file(tmp_path, monkeypatch):
+    path = _id3_mp3(tmp_path)
+    saved = []
+    monkeypatch.setattr(audio, "cached_probe", lambda *args: None)
+    monkeypatch.setattr(audio, "save_probe", lambda *args: saved.append(args) or True)
+
+    def runner(cmd, **kwargs):
+        if cmd[0] == "ffmpeg":
+            raise FileNotFoundError("ffmpeg temporarily unavailable")
+        return _response(MP3 if "-f" in cmd else VIDEO)
+
+    monkeypatch.setattr(audio, "run_bounded_process", runner)
+    failed, hit = audio.cached_or_probe_audio_file(str(path))
+    assert hit is False
+    assert failed["transient_probe_failure"] is True
+    assert "FileNotFoundError" in failed["probe_error"]
+    assert not saved
+
+    # A genuine bad MP3 decode (nonzero subprocess return) is still definitive.
+    monkeypatch.setattr(audio, "run_bounded_process", lambda cmd, **kw: (
+        BoundedProcessResult(1, b"", b"bad audio") if cmd[0] == "ffmpeg"
+        else _response(MP3 if "-f" in cmd else VIDEO)
+    ))
+    permanently_bad, _ = audio.cached_or_probe_audio_file(str(path))
+    assert permanently_bad.get("transient_probe_failure") is not True
+    assert permanently_bad["mp3_fallback_checked"] is True
+    assert permanently_bad["audio_stream_count"] == 0
+    assert len(saved) == 1
+
+
+def test_inconclusive_audiobook_evidence_does_not_claim_unsafe(tmp_path, monkeypatch):
+    import app.audiobook_evidence as evidence_module
+
+    path = _id3_mp3(tmp_path)
+    monkeypatch.setattr(evidence_module, "inspect_media_path", lambda _path: {
+        "candidateCount": 1, "counts": {"unknown": 1},
+        "items": [{"path": str(path), "kind": "unknown", "detectedFormat": "vvc"}],
+    })
+    monkeypatch.setattr(evidence_module, "verify_audio_files", lambda paths: (
+        audio.summarize_audiobook_verification([{
+            "path": str(path),
+            "size_bytes": path.stat().st_size,
+            "probe_error": "MP3 recovery could not complete (TimeoutExpired)",
+            "transient_probe_failure": True,
+        }])
+    ))
+    monkeypatch.setattr(evidence_module, "analyze_audio_identity_set", lambda *args: {})
+    monkeypatch.setattr(evidence_module, "_filename_identity_support", lambda *args: {})
+    monkeypatch.setattr(evidence_module, "representative_items", lambda probes, count: [])
+    monkeypatch.setattr(evidence_module, "classify_audio", lambda *args: (
+        "REVIEW", 40, "NO_TAGS", []
+    ))
+    monkeypatch.setattr(evidence_module, "audio_metadata_summary", lambda *args: {})
+    result = evidence_module.build_audiobook_evidence(
+        {"title": "A Book", "author": "A Writer"}, str(path.parent)
+    )
+    assert result["verdict"] == "INSUFFICIENT_EVIDENCE"
+    assert result["confidence"] == 0
+    assert result["source"] == "audiobook-technical-inconclusive"
+    assert result["evidence"]["audiobookProbeInconclusive"] is True
+    assert result["evidence"]["technical"]["transient_file_count"] == 1
+
+
+def test_transient_saved_audiobook_verification_retries_but_history_is_readable(monkeypatch):
+    row = {
+        "id": 5, "source": "audiobook-technical-inconclusive",
+        "verdict": "INSUFFICIENT_EVIDENCE",
+        "evidence_json": json.dumps({
+            "audiobookProbeInconclusive": True,
+            "audiobookProbeRecoveryVersion": 1,
+            "technical": {"reason_code": "AUDIO_PROBE_TRANSIENT_FAILURE"},
+        }),
+    }
+    class Conn:
+        def execute(self, *args):
+            return self
+        def fetchone(self):
+            return row
+
+    @contextmanager
+    def fake_conn():
+        yield Conn()
+
+    monkeypatch.setattr(verifier, "init_verification_db", lambda: None)
+    monkeypatch.setattr(verifier, "local_conn", fake_conn)
+    monkeypatch.setattr(verifier, "_verification_signature", lambda *args: "sig")
+    result = {"format": "audiobook"}
+    assert verifier._verification_for_fingerprint(result, "path", "fingerprint") is None
+    historical = verifier._verification_for_fingerprint(
+        result, "path", "fingerprint", allow_transient_retry=False
+    )
+    assert historical["verdict"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_real_generated_id3_mp3_recovery_when_ffmpeg_available(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("ffmpeg/ffprobe not installed")
+    path = tmp_path / "short.mp3"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+         "-i", "anullsrc=r=44100:cl=mono", "-t", "0.3",
+         "-c:a", "libmp3lame", "-id3v2_version", "4", "-y", str(path)],
+        check=True, capture_output=True, timeout=30,
+    )
+    assert path.read_bytes()[:3] == b"ID3"
+    original_runner = audio.run_bounded_process
+
+    def fake_misdetection(cmd, **kwargs):
+        if cmd[0] == "ffprobe" and "-f" not in cmd:
+            return _response(VIDEO)
+        return original_runner(cmd, **kwargs)
+
+    monkeypatch.setattr(audio, "run_bounded_process", fake_misdetection)
+    result = audio.probe_audio_file(str(path))
+    assert result["audio_stream_count"] == 1
+    assert result["codec"] == "mp3"
+    assert result["mp3_fallback_verified"] is True
