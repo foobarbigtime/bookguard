@@ -32,6 +32,10 @@ class AudiobookVerificationCancelled(RuntimeError):
     """Raised when an in-progress audiobook verification is stopped by the user."""
 
 
+class AudioProbeTransientFailure(RuntimeError):
+    """The MP3 fallback was interrupted; this is not evidence of damaged audio."""
+
+
 def _number(value: Any) -> float | None:
     try:
         parsed = float(value)
@@ -74,7 +78,12 @@ def _recover_misdetected_mp3(
     ffprobe_cmd: list[str],
     cancel_check: CancelCheck | None,
 ) -> dict[str, Any] | None:
-    """Trust a forced MP3 probe only after bounded full-file decode succeeds."""
+    """Trust a forced MP3 probe only after bounded full-file decode succeeds.
+
+    A timeout, resource limit, or tool/IO outage must not be mistaken for a bad
+    audio stream. Those conditions are reported separately so neither probe
+    nor verification caches can turn them into a permanent unsafe verdict.
+    """
     forced_cmd = [*ffprobe_cmd[:3], "-f", "mp3", *ffprobe_cmd[3:]]
     try:
         forced = run_bounded_process(
@@ -112,11 +121,10 @@ def _recover_misdetected_mp3(
         return payload if decoded.returncode == 0 else None
     except ProcessCancelled as exc:
         raise AudiobookVerificationCancelled("Audiobook verification stopped by user.") from exc
-    except (
-        subprocess.TimeoutExpired, ProcessOutputLimitExceeded, OSError,
-        ValueError, TypeError,
-    ):
-        return None
+    except (subprocess.TimeoutExpired, ProcessOutputLimitExceeded, OSError, ValueError, TypeError) as exc:
+        raise AudioProbeTransientFailure(
+            f"MP3 recovery could not complete ({type(exc).__name__}); retry when available."
+        ) from exc
 
 
 def probe_audio_file(
@@ -191,7 +199,16 @@ def probe_audio_file(
     if not any(isinstance(stream, dict) and stream.get("codec_type") == "audio" for stream in streams):
         if _has_id3_mp3_header(source):
             mp3_fallback_checked = True
-            recovered = _recover_misdetected_mp3(source, cmd, cancel_check)
+            try:
+                recovered = _recover_misdetected_mp3(source, cmd, cancel_check)
+            except AudioProbeTransientFailure as exc:
+                return {
+                    "path": path,
+                    "size_bytes": size,
+                    "modified_ns": stat.st_mtime_ns,
+                    "probe_error": str(exc),
+                    "transient_probe_failure": True,
+                }
             if recovered is not None:
                 payload = recovered
                 fmt = payload.get("format") or {}
@@ -372,6 +389,7 @@ def summarize_audiobook_verification(probes: list[dict[str, Any]]) -> dict[str, 
         }
 
     failures: list[str] = []
+    transient_failures: list[str] = []
     warnings: list[str] = []
     readable: list[dict[str, Any]] = []
 
@@ -384,6 +402,9 @@ def summarize_audiobook_verification(probes: list[dict[str, Any]]) -> dict[str, 
         elif isinstance(size, int) and 0 < size < MIN_REASONABLE_AUDIO_BYTES:
             warnings.append(f"{name}: file is unusually small ({size} bytes).")
 
+        if probe.get("transient_probe_failure"):
+            transient_failures.append(f"{name}: {probe.get('probe_error') or 'temporary probe error'}.")
+            continue
         if probe.get("probe_error"):
             failures.append(f"{name}: ffprobe could not read the file ({probe['probe_error']}).")
             continue
@@ -427,7 +448,13 @@ def summarize_audiobook_verification(probes: list[dict[str, Any]]) -> dict[str, 
         for probe in readable
     )
 
-    if failures:
+    if transient_failures:
+        # Even if other files have known defects, incomplete probing must not
+        # authorize a quarantine-first decision for the entire media set.
+        verdict = "INCONCLUSIVE"
+        reason_code = "AUDIO_PROBE_TRANSIENT_FAILURE"
+        reasons = failures + transient_failures + warnings
+    elif failures:
         verdict = "FAIL"
         reason_code = "AUDIO_INTEGRITY_FAILED"
         reasons = failures + warnings
@@ -447,6 +474,7 @@ def summarize_audiobook_verification(probes: list[dict[str, Any]]) -> dict[str, 
         "reasons": reasons,
         "file_count": len(probes),
         "readable_file_count": len(readable),
+        "transient_file_count": len(transient_failures),
         "total_duration_seconds": round(total_duration, 3),
         "codecs": _distinct([probe.get("codec") for probe in readable]),
         "sample_rates": _distinct([probe.get("sample_rate") for probe in readable]),
