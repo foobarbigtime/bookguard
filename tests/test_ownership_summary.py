@@ -63,9 +63,6 @@ def test_missing_audit_is_not_clean(audit_db):
 def test_summary_does_not_modify_database(audit_db):
     audit_db.create_scan("read-only", 0)
 
-    with audit_db.local_conn() as conn:
-        before = conn.total_changes
-
     audit_db.ownership_audit_summary("read-only")
 
     with audit_db.local_conn() as conn:
