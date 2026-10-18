@@ -9,10 +9,10 @@ from .bindery_client import BinderyClient, BinderyClientError, discover_api_key
 from .config import settings
 from .db import (
     associations_inside_path,
-    foreign_ancestor_associations,
     bindery_file_by_id,
     create_cleanup_action,
     finish_cleanup_action,
+    foreign_ancestor_associations,
     latest_scan,
 )
 from .file_safety import allocate_unique_destination, is_within, roots_overlap
