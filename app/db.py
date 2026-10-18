@@ -128,6 +128,41 @@ def associations_inside_path(stored_path: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def foreign_ancestor_associations(stored_path: str, book_id: int) -> list[dict]:
+    """Return other books whose tracked path contains this file or directory.
+
+    An exact-path-only lookup misses a track within a directory-backed audiobook
+    registered to another book. Use path-component ancestors (not LIKE-prefix
+    matching), including nested disc/volume layouts. This is a read-only query.
+    """
+    from pathlib import PurePosixPath
+
+    path = PurePosixPath(stored_path)
+    if not path.is_absolute() or ".." in stored_path.split("/"):
+        raise ValueError("A normalized absolute Bindery path is required.")
+
+    ancestors = [str(parent) for parent in path.parents if str(parent) != "/"]
+    if not ancestors:
+        return []
+
+    # Handle legacy entries that end in a separator without doing a prefix match.
+    candidates = sorted({value for p in ancestors for value in (p, p + "/")})
+    placeholders = ", ".join("?" for _ in candidates)
+    with bindery_conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT bf.id AS file_id, bf.book_id, bf.format,
+                   bf.path AS stored_path, b.title
+            FROM book_files bf
+            JOIN books b ON b.id = bf.book_id
+            WHERE bf.path IN ({placeholders}) AND bf.book_id != ?
+            ORDER BY bf.id
+            """,
+            (*candidates, int(book_id)),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def local_db_path() -> str:
     os.makedirs(settings.config_dir, exist_ok=True)
     return os.path.join(settings.config_dir, "bookguard.db")
