@@ -9,14 +9,17 @@ from .db import bindery_conn
 
 def _ancestors(path: str) -> tuple[str, ...]:
     """Return component-aware ancestors of an absolute stored path."""
+    # Bindery may store legacy directory paths with one trailing slash.
+    # Remove it for validation without changing the original stored path.
+    validated = path[:-1] if path.endswith("/") and path != "/" else path
     if (
-        not path.startswith("/")
-        or path.startswith("//")
-        or any(part in ("", ".", "..") for part in path.split("/")[1:])
+        not validated.startswith("/")
+        or validated.startswith("//")
+        or any(part in ("", ".", "..") for part in validated.split("/")[1:])
     ):
         raise ValueError(f"Invalid Bindery path: {path!r}")
 
-    parsed = PurePosixPath(normalize("NFC", path))
+    parsed = PurePosixPath(normalize("NFC", validated))
     return tuple(
         str(parent)
         for parent in parsed.parents

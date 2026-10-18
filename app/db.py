@@ -612,6 +612,32 @@ def clear_persisted_settings() -> None:
 
 
 
+def recover_interrupted_ownership_audits() -> int:
+    """Fail ownership audits abandoned by an interrupted application process."""
+    with local_conn() as conn:
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE ownership_audits
+                SET status='failed',
+                    finished_at=?,
+                    conflict_count=NULL,
+                    error=?
+                WHERE status='running'
+                """,
+                (
+                    utc_now(),
+                    "Ownership audit interrupted by application restart; "
+                    "results are incomplete.",
+                ),
+            )
+            conn.commit()
+            return cursor.rowcount
+        except Exception:
+            conn.rollback()
+            raise
+
+
 def start_ownership_audit(scan_id: str) -> None:
     """Record an ownership audit as running."""
     with local_conn() as conn:

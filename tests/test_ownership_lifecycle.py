@@ -82,3 +82,95 @@ def test_failed_scan_skips_audit(tmp_path, monkeypatch):
 
     audit.assert_not_called()
     assert _scan_status("failed") == "failed"
+
+
+def test_restart_recovers_abandoned_ownership_audit(tmp_path, monkeypatch):
+    from app.db import (
+        recover_interrupted_ownership_audits,
+        start_ownership_audit,
+    )
+
+    _setup(tmp_path, monkeypatch, "interrupted")
+    create_scan("completed-history", 0)
+    start_ownership_audit("interrupted")
+    start_ownership_audit("completed-history")
+
+    with local_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ownership_audits
+            SET status='completed', finished_at='2026-01-01T00:00:00',
+                conflict_count=0
+            WHERE scan_id='completed-history'
+            """
+        )
+        conn.commit()
+
+    recover_interrupted_ownership_audits()
+
+    with local_conn() as conn:
+        interrupted = conn.execute(
+            "SELECT * FROM ownership_audits WHERE scan_id='interrupted'"
+        ).fetchone()
+        completed = conn.execute(
+            "SELECT * FROM ownership_audits WHERE scan_id='completed-history'"
+        ).fetchone()
+
+    assert interrupted["status"] == "failed"
+    assert interrupted["finished_at"] is not None
+    assert interrupted["conflict_count"] is None
+    assert "interrupt" in interrupted["error"].lower()
+    assert completed["status"] == "completed"
+    assert completed["conflict_count"] == 0
+    assert completed["finished_at"] == "2026-01-01T00:00:00"
+
+    recover_interrupted_ownership_audits()
+
+    with local_conn() as conn:
+        recovered_again = conn.execute(
+            "SELECT * FROM ownership_audits WHERE scan_id='interrupted'"
+        ).fetchone()
+
+    assert dict(recovered_again) == dict(interrupted)
+    assert _scan_status("interrupted") == "running"
+
+
+def test_application_startup_recovers_interrupted_audit(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app import main
+    from app.db import start_ownership_audit
+
+    _setup(tmp_path, monkeypatch, "startup-interrupted")
+    start_ownership_audit("startup-interrupted")
+
+    monkeypatch.setattr(settings, "scan_on_start", False)
+    monkeypatch.setattr(main, "record_app_start", lambda: None)
+    monkeypatch.setattr(main, "init_triage_db", lambda: None)
+    monkeypatch.setattr(main, "init_verification_db", lambda: None)
+    monkeypatch.setattr(main, "init_import_watch_db", lambda: None)
+    monkeypatch.setattr(main, "init_scheduler_db", lambda: None)
+    monkeypatch.setattr(main.import_watcher, "start", lambda: None)
+    monkeypatch.setattr(main.import_watcher, "stop", lambda: None)
+    monkeypatch.setattr(main.scheduler, "start", lambda: None)
+    monkeypatch.setattr(main.scheduler, "stop", lambda: None)
+    monkeypatch.setattr(
+        main,
+        "load_persisted_settings",
+        lambda: {},
+    )
+
+    with TestClient(main.app):
+        with local_conn() as conn:
+            audit = conn.execute(
+                """
+                SELECT status, finished_at, conflict_count, error
+                FROM ownership_audits
+                WHERE scan_id='startup-interrupted'
+                """
+            ).fetchone()
+
+        assert audit["status"] == "failed"
+        assert audit["finished_at"] is not None
+        assert audit["conflict_count"] is None
+        assert "interrupt" in audit["error"].lower()

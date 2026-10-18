@@ -130,3 +130,37 @@ def test_malformed_parent_record_fails_audit(ownership_db):
 
     with pytest.raises(ValueError, match="Invalid Bindery path"):
         audit_ownership()
+
+
+def test_legacy_trailing_separator_is_accepted():
+    from app.ownership_audit import _ancestors
+
+    assert _ancestors("/audiobooks/Book/") == ("/audiobooks",)
+
+
+def test_multiple_trailing_separators_are_rejected():
+    from app.ownership_audit import _ancestors
+
+    with pytest.raises(ValueError):
+        _ancestors("/audiobooks/Book//")
+
+
+def test_legacy_parent_trailing_separator_detects_conflict(ownership_db):
+    """Legacy directory paths retain their original spelling in results."""
+    with sqlite3.connect(ownership_db) as conn:
+        conn.execute(
+            "UPDATE book_files SET path = ? WHERE id = 1",
+            ("/audiobooks/Collected/",),
+        )
+
+    conflicts = audit_ownership()
+
+    assert len(conflicts) == 1
+    assert conflicts[0]["parent_file_id"] == 1
+    assert conflicts[0]["parent_book_id"] == 10
+    assert conflicts[0]["parent_path"] == "/audiobooks/Collected/"
+    assert conflicts[0]["child_file_id"] == 2
+    assert conflicts[0]["child_book_id"] == 20
+    assert conflicts[0]["child_path"] == (
+        "/audiobooks/Collected/Disc 1/Track.mp3"
+    )

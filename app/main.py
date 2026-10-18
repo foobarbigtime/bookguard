@@ -9,7 +9,11 @@ from .static_assets import RevalidatedStaticFiles
 from .auth import BasicAuthMiddleware
 from .config import settings
 from .request_origin import SameOriginMiddleware
-from .db import init_local_db, load_persisted_settings
+from .db import (
+    init_local_db,
+    load_persisted_settings,
+    recover_interrupted_ownership_audits,
+)
 from .routes.automatic import router as automatic_router
 from .routes.hardlink_conflicts import router as hardlink_router
 from .routes.pages import router as pages_router
@@ -28,6 +32,7 @@ from .verifier import init_verification_db
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_local_db()
+    recover_interrupted_ownership_audits()
     init_triage_db()
     init_verification_db()
     record_app_start()
