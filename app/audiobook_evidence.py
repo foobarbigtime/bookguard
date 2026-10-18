@@ -231,6 +231,21 @@ def build_audiobook_evidence(result: dict[str, Any], path: str) -> dict[str, Any
         ],
     }
 
+    if str(technical.get("verdict") or "") == "INCONCLUSIVE":
+        evidence["reasonCode"] = "AUDIO_PROBE_TRANSIENT_FAILURE"
+        evidence["audiobookProbeInconclusive"] = True
+        evidence["explanation"] = (
+            "An audio probe or MP3 recovery could not finish because of a "
+            "temporary tool, resource, or I/O failure. The media is not "
+            "confirmed unsafe; retry verification when the issue is resolved."
+        )
+        return {
+            "verdict": "INSUFFICIENT_EVIDENCE",
+            "confidence": 0,
+            "source": "audiobook-technical-inconclusive",
+            "evidence": evidence,
+        }
+
     if str(technical.get("verdict") or "") == "FAIL":
         evidence["reasonCode"] = str(
             technical.get("reason_code") or "AUDIO_INTEGRITY_FAILED"
