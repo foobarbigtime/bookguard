@@ -12,9 +12,9 @@ from .bindery_client import BinderyClient, BinderyClientError
 from .config import settings
 from .db import (
     bindery_file_by_id,
-    foreign_ancestor_associations,
     create_cleanup_action,
     finish_cleanup_action,
+    foreign_ancestor_associations,
     latest_results,
     latest_scan,
     local_conn,
