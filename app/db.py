@@ -170,6 +170,7 @@ def local_db_path() -> str:
 @contextmanager
 def local_conn():
     conn = sqlite3.connect(local_db_path(), check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -189,6 +190,33 @@ def init_local_db() -> None:
                 total INTEGER NOT NULL DEFAULT 0,
                 processed INTEGER NOT NULL DEFAULT 0,
                 error TEXT
+            );
+
+
+            CREATE TABLE IF NOT EXISTS ownership_audits (
+                scan_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL
+                    CHECK(status IN ('running', 'completed', 'failed')),
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                conflict_count INTEGER,
+                error TEXT,
+                FOREIGN KEY(scan_id) REFERENCES scans(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS ownership_conflicts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id TEXT NOT NULL,
+                parent_file_id INTEGER NOT NULL,
+                parent_book_id INTEGER NOT NULL,
+                parent_title TEXT,
+                parent_path TEXT NOT NULL,
+                child_file_id INTEGER NOT NULL,
+                child_book_id INTEGER NOT NULL,
+                child_title TEXT,
+                child_path TEXT NOT NULL,
+                FOREIGN KEY(scan_id) REFERENCES ownership_audits(scan_id),
+                UNIQUE(scan_id, parent_file_id, child_file_id)
             );
 
             CREATE TABLE IF NOT EXISTS scan_results (
@@ -581,6 +609,106 @@ def clear_persisted_settings() -> None:
     with local_conn() as conn:
         conn.execute("DELETE FROM app_settings")
         conn.commit()
+
+
+
+def start_ownership_audit(scan_id: str) -> None:
+    """Record an ownership audit as running."""
+    with local_conn() as conn:
+        try:
+            conn.execute(
+                """
+                INSERT INTO ownership_audits(
+                    scan_id, status, started_at, conflict_count, error
+                ) VALUES (?, 'running', ?, NULL, NULL)
+                """,
+                (scan_id, utc_now()),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def complete_ownership_audit(scan_id: str, conflicts: list[dict]) -> None:
+    """Atomically save ownership conflicts and mark the audit complete."""
+    with local_conn() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+
+            audit = conn.execute(
+                "SELECT status FROM ownership_audits WHERE scan_id=?",
+                (scan_id,),
+            ).fetchone()
+
+            if audit is None or audit["status"] != "running":
+                raise ValueError("Ownership audit is not running")
+
+            for conflict in conflicts:
+                conn.execute(
+                    """
+                    INSERT INTO ownership_conflicts(
+                        scan_id,
+                        parent_file_id, parent_book_id,
+                        parent_title, parent_path,
+                        child_file_id, child_book_id,
+                        child_title, child_path
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        scan_id,
+                        conflict["parent_file_id"],
+                        conflict["parent_book_id"],
+                        conflict["parent_title"],
+                        conflict["parent_path"],
+                        conflict["child_file_id"],
+                        conflict["child_book_id"],
+                        conflict["child_title"],
+                        conflict["child_path"],
+                    ),
+                )
+
+            conn.execute(
+                """
+                UPDATE ownership_audits
+                SET status='completed',
+                    finished_at=?,
+                    conflict_count=?,
+                    error=NULL
+                WHERE scan_id=?
+                """,
+                (utc_now(), len(conflicts), scan_id),
+            )
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def fail_ownership_audit(scan_id: str, error: str) -> None:
+    """Record an unsuccessful audit without claiming zero conflicts."""
+    with local_conn() as conn:
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE ownership_audits
+                SET status='failed',
+                    finished_at=?,
+                    conflict_count=NULL,
+                    error=?
+                WHERE scan_id=? AND status='running'
+                """,
+                (utc_now(), str(error)[:1000], scan_id),
+            )
+
+            if cursor.rowcount != 1:
+                raise ValueError("Ownership audit is not running")
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def create_scan(scan_id: str, total: int) -> None:
@@ -1235,3 +1363,65 @@ def recent_metadata_repairs(limit: int = 100) -> list[dict]:
             "SELECT * FROM metadata_repairs ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
     return [_decode_repair(row) for row in rows]
+
+
+def ownership_audit_summary(scan_id: str) -> dict:
+    """Read the saved ownership audit for one scan; never run an audit."""
+    with local_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT status, conflict_count, error, started_at, finished_at
+            FROM ownership_audits
+            WHERE scan_id = ?
+            """,
+            (scan_id,),
+        ).fetchone()
+
+    if row is None:
+        return {
+            "status": "not_audited",
+            "conflict_count": None,
+            "error": None,
+            "started_at": None,
+            "finished_at": None,
+        }
+
+    result = dict(row)
+
+    # An incomplete or failed audit must never imply zero conflicts.
+    if result["status"] != "completed":
+        result["conflict_count"] = None
+
+    return result
+
+
+
+def ownership_audit_conflicts(scan_id: str) -> list[dict]:
+    """Read saved conflicts for a completed audit only."""
+    with local_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                c.parent_file_id,
+                c.parent_book_id,
+                c.parent_title,
+                c.parent_path,
+                c.child_file_id,
+                c.child_book_id,
+                c.child_title,
+                c.child_path
+            FROM ownership_conflicts AS c
+            JOIN ownership_audits AS a
+              ON a.scan_id = c.scan_id
+            WHERE c.scan_id = ?
+              AND a.status = 'completed'
+            ORDER BY
+                c.parent_path,
+                c.child_path,
+                c.parent_file_id,
+                c.child_file_id
+            """,
+            (scan_id,),
+        ).fetchall()
+
+    return [dict(row) for row in rows]

@@ -18,7 +18,7 @@ from . import __version__
 from .activity import activity_events
 from .attention import attention_snapshot
 from .config import ConfigurationError, load_automation_settings, settings
-from .db import latest_counts, latest_scan, local_conn
+from .db import latest_counts, latest_scan, local_conn, ownership_audit_summary
 from .diagnostics import _malware_report
 from .health import health_checks
 from .scanner import scan_is_running
@@ -365,6 +365,34 @@ def _safely(load, fallback, failures: list[str], what: str):
         return fallback
 
 
+def _ownership_attention(audit: dict) -> list[dict[str, Any]]:
+    """Show saved ownership conflicts without querying Bindery."""
+    if audit["status"] != "completed":
+        return []
+
+    count = int(audit["conflict_count"] or 0)
+    if count == 0:
+        return []
+
+    return [{
+        "key": "ownership",
+        "tone": "amber",
+        "count": count,
+        "title": f"{count} ownership conflicts detected",
+        "why": (
+            "Bindery associates files beneath another book's stored path. "
+            "These associations need review before any cleanup."
+        ),
+        "done": "BookGuard recorded the conflicts without changing any files.",
+        "actions": [{
+            "label": "View ownership conflicts",
+            "href": "/review/ownership-conflicts",
+            "primary": False,
+        }],
+        "items": [],
+    }]
+
+
 def home_now() -> dict[str, Any]:
     """Just the "Right now" card, cheap enough to poll every few seconds."""
     return _now(latest_scan())
@@ -373,8 +401,21 @@ def home_now() -> dict[str, Any]:
 def home_summary() -> dict[str, Any]:
     scan = latest_scan()
     failures: list[str] = []
-    items = _safely(open_review_items, [], failures, "the review list")
-    review_available = not failures
+    audit = (
+        _safely(
+            lambda: ownership_audit_summary(scan["id"]),
+            {"status": "unavailable", "conflict_count": None},
+            failures,
+            "the ownership audit",
+        )
+        if scan else {"status": "not_audited", "conflict_count": None}
+    )
+    review_failures: list[str] = []
+    items = _safely(
+        open_review_items, [], review_failures, "the review list"
+    )
+    review_available = not review_failures
+    failures.extend(review_failures)
     counts = group_counts(items)
     unverified = sum(1 for item in items if not item["verified"])
     outages = sum(1 for item in items if item.get("scannerOutage"))
@@ -384,11 +425,21 @@ def home_summary() -> dict[str, Any]:
         _verification_groups(items)
         + _workflow_groups(_safely(attention_snapshot, {"items": []}, failures, "the attention queue"))
         + _missing_group()
+        + _ownership_attention(audit)
         + _undecided_group(counts, unverified, outages)
     )
     recent = _safely(_recent, {"days": RECENT_DAYS, "totals": {"imports": 0, "quarantined": 0, "duplicates": 0}, "events": []},
                      failures, "the activity history")
     health = _health(scan, malware, automation_error)
+    if audit["status"] == "failed":
+        health["problems"].append({
+            "level": "warn",
+            "text": "The ownership audit failed; ownership safety is unknown.",
+            "href": "",
+        })
+        if health["level"] == "ok":
+            health["level"] = "warn"
+            health["title"] = "BookGuard needs attention"
     if failures:
         health["problems"].extend({"level": "error", "text": text, "href": "/system"} for text in failures)
         health["level"] = "error"
@@ -398,6 +449,10 @@ def home_summary() -> dict[str, Any]:
     return {
         "health": health,
         "decisions": decisions,
+        "ownershipAudit": {
+            "status": audit["status"],
+            "conflictCount": audit.get("conflict_count"),
+        },
         "library": {
             "available": review_available,
             "checked": len(items),

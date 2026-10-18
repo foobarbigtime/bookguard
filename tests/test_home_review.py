@@ -402,3 +402,188 @@ def test_right_now_reports_a_running_verification_job(monkeypatch):
     now = home._now(None)
     assert now["active"] and now["label"] == "Checking library files"
     assert (now["processed"], now["total"], now["current"]) == (7, 299, "Abby's Book")
+
+
+def test_home_displays_saved_ownership_conflicts(library):
+    with local_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO ownership_audits
+                (scan_id, status, started_at, finished_at, conflict_count)
+            VALUES (?, 'completed', ?, ?, ?)
+            """,
+            (
+                SCAN,
+                "2026-10-18T12:00:00+00:00",
+                "2026-10-18T12:01:00+00:00",
+                19,
+            ),
+        )
+        conn.commit()
+
+    summary = home.home_summary()
+    groups = [
+        group for group in summary["attention"]
+        if group["key"] == "ownership"
+    ]
+
+    assert len(groups) == 1
+    assert groups[0]["count"] == 19
+    assert groups[0]["tone"] == "amber"
+    assert "19 ownership conflicts" in groups[0]["title"]
+
+    app = FastAPI()
+    app.include_router(pages_router)
+
+    with TestClient(app) as client:
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "19 ownership conflicts detected" in response.text
+
+
+def test_home_failed_ownership_audit_updates_health(library):
+    with local_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO ownership_audits
+                (scan_id, status, started_at, finished_at, error)
+            VALUES (?, 'failed', ?, ?, ?)
+            """,
+            (
+                SCAN,
+                "2026-10-18T12:00:00+00:00",
+                "2026-10-18T12:01:00+00:00",
+                "Test audit failure",
+            ),
+        )
+        conn.commit()
+
+    summary = home.home_summary()
+
+    assert summary["health"]["level"] == "warn"
+    assert summary["health"]["title"] == "BookGuard needs attention"
+    assert any(
+        "ownership audit failed" in problem["text"]
+        for problem in summary["health"]["problems"]
+    )
+    assert not any(
+        group["key"] == "ownership"
+        for group in summary["attention"]
+    )
+
+
+def test_home_ownership_read_error_preserves_review(library, monkeypatch):
+    def broken_audit(_scan_id):
+        raise RuntimeError("ownership database unavailable")
+
+    monkeypatch.setattr(home, "ownership_audit_summary", broken_audit)
+
+    summary = home.home_summary()
+
+    assert summary["health"]["level"] == "error"
+    assert summary["library"]["available"] is True
+    assert summary["library"]["checked"] == 9
+    assert any(
+        "ownership database unavailable" in problem["text"]
+        for problem in summary["health"]["problems"]
+    )
+
+
+def test_home_missing_ownership_audit_is_not_clean(library):
+    summary = home.home_summary()
+
+    assert not any(
+        group["key"] == "ownership"
+        for group in summary["attention"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "count", "expected"),
+    [
+        ("not_audited", None, "Not audited."),
+        ("running", None, "Audit in progress."),
+        ("failed", None, "Audit failed."),
+        ("completed", 0, "No ownership conflicts detected."),
+        ("completed", 1, "1 ownership conflict"),
+        ("completed", 19, "19 ownership"),
+        ("unavailable", None, "Audit status unavailable."),
+    ],
+)
+def test_home_renders_ownership_audit_status(
+    library, monkeypatch, status, count, expected
+):
+    monkeypatch.setattr(
+        home,
+        "ownership_audit_summary",
+        lambda _scan_id: {
+            "status": status,
+            "conflict_count": count,
+        },
+    )
+
+    app = FastAPI()
+    app.include_router(pages_router)
+
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert expected in " ".join(response.text.split())
+
+    if status != "completed":
+        assert "No ownership conflicts detected." not in response.text
+
+
+def test_home_ownership_conflict_navigation(library, monkeypatch):
+    """Only completed audits with conflicts expose review links."""
+    app = FastAPI()
+    app.include_router(pages_router)
+
+    cases = [
+        ("completed", 19, True),
+        ("completed", 0, False),
+        ("running", None, False),
+        ("failed", None, False),
+        ("not_audited", None, False),
+    ]
+
+    for status, count, expected_link in cases:
+        monkeypatch.setattr(
+            home,
+            "ownership_audit_summary",
+            lambda _scan_id, s=status, n=count: {
+                "status": s,
+                "conflict_count": n,
+                "error": None,
+            },
+        )
+
+        summary = home.home_summary()
+        ownership_groups = [
+            group for group in summary["attention"]
+            if group["key"] == "ownership"
+        ]
+
+        if expected_link:
+            assert len(ownership_groups) == 1
+            assert ownership_groups[0]["actions"] == [{
+                "label": "View ownership conflicts",
+                "href": "/review/ownership-conflicts",
+                "primary": False,
+            }]
+        else:
+            assert ownership_groups == []
+
+        with TestClient(app) as client:
+            response = client.get("/")
+
+        assert response.status_code == 200
+
+        link = 'href="/review/ownership-conflicts"'
+        assert (link in response.text) is expected_link
+
+        print(
+            f"PASS: {status}, conflicts={count}, "
+            f"review_link={expected_link}"
+        )

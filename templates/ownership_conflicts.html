@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BookGuard Ownership Conflicts</title>
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
+</head>
+<body>
+{% from "_layout.html" import site_header %}
+{{ site_header("review", "", version) }}
+
+<main class="unmatched-main">
+  <div class="unmatched-header">
+    <div>
+      <h1>Ownership conflicts</h1>
+      <p class="muted">
+        Read-only findings from the latest library scan.
+        A conflict means a stored parent path contains a file
+        assigned to a different Bindery book.
+        BookGuard does not change these associations here.
+      </p>
+      <p><a href="/">← Back to Home</a></p>
+    </div>
+  </div>
+
+  <section class="table-card unmatched-group"
+           data-ownership-audit-status="{{ audit.status|e }}">
+    <div class="section-title">
+      <h2>Ownership audit status</h2>
+    </div>
+
+    {% if scan %}
+      <p class="muted">Scan ID: <code>{{ scan.id|e }}</code></p>
+    {% endif %}
+
+    {% if audit.status == 'completed' %}
+      {% if audit.conflict_count == 0 %}
+        <p>No ownership conflicts detected in this audit.</p>
+      {% else %}
+        <p>
+          <strong>{{ audit.conflict_count }} ownership
+          {{ 'conflict' if audit.conflict_count == 1 else 'conflicts' }}
+          detected.</strong>
+          Manual review is required before changing affected associations.
+        </p>
+      {% endif %}
+    {% elif audit.status == 'running' %}
+      <p>Ownership audit in progress. Findings are not yet verified.</p>
+    {% elif audit.status == 'failed' %}
+      <p>Ownership audit failed. Ownership safety is unknown.</p>
+      {% if audit.error %}
+        <p class="muted">Error: {{ audit.error|e }}</p>
+      {% endif %}
+    {% elif audit.status == 'not_audited' %}
+      <p>
+        This scan has not been ownership-audited.
+        Ownership safety has not been checked.
+      </p>
+    {% else %}
+      <p>Ownership audit status unavailable.</p>
+    {% endif %}
+  </section>
+
+  {% if audit.status == 'completed' and conflicts %}
+    <section class="table-card unmatched-group">
+      <div class="section-title">
+        <h2>Conflicting associations
+          <span class="muted">{{ conflicts|length }}</span>
+        </h2>
+      </div>
+
+      {% for conflict in conflicts %}
+        <article class="unmatched-item" data-ownership-conflict>
+          <div class="unmatched-item-head">
+            <strong>
+              {{ conflict.parent_title or 'Untitled parent book' }}
+            </strong>
+          </div>
+
+          <ul class="unmatched-evidence">
+            <li>
+              <strong>Parent collection:</strong>
+              {{ conflict.parent_title or 'Untitled' }}
+              · Bindery book {{ conflict.parent_book_id }}
+              · file {{ conflict.parent_file_id }}
+              <div class="muted">
+                Stored path:
+                <code>{{ conflict.parent_path|e }}</code>
+              </div>
+            </li>
+            <li>
+              <strong>Conflicting child:</strong>
+              {{ conflict.child_title or 'Untitled' }}
+              · Bindery book {{ conflict.child_book_id }}
+              · file {{ conflict.child_file_id }}
+              <div class="muted">
+                Stored path:
+                <code>{{ conflict.child_path|e }}</code>
+              </div>
+            </li>
+          </ul>
+
+          <p class="muted">
+            Different Bindery book ownership within a parent path.
+            No automatic correction is available on this page.
+          </p>
+        </article>
+      {% endfor %}
+    </section>
+  {% endif %}
+</main>
+</body>
+</html>
