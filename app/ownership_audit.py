@@ -2,16 +2,21 @@
 
 from collections import defaultdict
 from pathlib import PurePosixPath
+from unicodedata import normalize
 
 from .db import bindery_conn
 
 
 def _ancestors(path: str) -> tuple[str, ...]:
     """Return component-aware ancestors of an absolute stored path."""
-    if not path.startswith("/") or ".." in path.split("/"):
-        raise ValueError("Invalid Bindery path")
+    if (
+        not path.startswith("/")
+        or path.startswith("//")
+        or any(part in ("", ".", "..") for part in path.split("/")[1:])
+    ):
+        raise ValueError(f"Invalid Bindery path: {path!r}")
 
-    parsed = PurePosixPath(path)
+    parsed = PurePosixPath(normalize("NFC", path))
     return tuple(
         str(parent)
         for parent in parsed.parents
@@ -46,7 +51,8 @@ def audit_ownership() -> list[dict]:
 
     for row in rows:
         path = str(row["path"])
-        paths[str(PurePosixPath(path))].append(row)
+        _ancestors(path)
+        paths[str(PurePosixPath(normalize("NFC", path)))].append(row)
 
     conflicts = []
 
