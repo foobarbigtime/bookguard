@@ -124,3 +124,48 @@ def test_scan_checks_conflict_outside_display_samples(tmp_path, monkeypatch):
     assert result["reason_code"] == "CONFLICTING_AUDIO_IDENTITY"
     assert len(result["metadata"]["samples"]) == 3
     assert all(p["album"] == "Cross Justice" for p in result["metadata"]["samples"])
+
+
+# Issue #172: author evidence must agree between classification and full-set analysis.
+from app.matcher import analyze_audio_identity_set
+
+
+def test_composer_author_is_counted_when_artist_is_narrator():
+    sample = {
+        "album": "Harry Potter 01 - Steen der Wijzen",
+        "title": "01 De Jongen Die Bleef Leven",
+        "artist": "Jan Meng",
+        "album_artist": "",
+        "author": "",
+        "composer": "J.K. Rowling",
+    }
+    assert classify_audio("Harry Potter", "J. K. Rowling", [sample])[0] == "PASS"
+    evidence = analyze_audio_identity_set("Harry Potter", "J. K. Rowling", [sample])
+    assert evidence["authorMatchCount"] == 1
+    assert evidence["pairMatchCount"] == 1
+
+
+def test_composer_author_does_not_override_wrong_work_title():
+    sample = {"album": "NYPD Red 4", "artist": "Narrated by Someone",
+              "composer": "James Patterson"}
+    assert classify_audio("NYPD Red 3", "James Patterson", [sample])[0] != "PASS"
+    evidence = analyze_audio_identity_set("NYPD Red 3", "James Patterson", [sample])
+    assert evidence["titleMismatchCount"] == 1
+    assert evidence["pairMatchCount"] == 0
+
+
+def test_narrator_only_is_not_author_confirmation():
+    sample = {"album": "Cross Justice", "artist": "Narrated by Jan Meng"}
+    evidence = analyze_audio_identity_set("Cross Justice", "James Patterson", [sample])
+    assert evidence["authorMatchCount"] == 0
+    assert evidence["pairMatchCount"] == 0
+
+
+def test_mixed_works_still_report_mixed_content_with_composer_credit():
+    samples = [
+        {"album": "Cross Justice", "artist": "Narrated by Reader", "composer": "James Patterson"},
+        {"album": "Ricket", "artist": "Narrated by Reader", "composer": "Mark Wayne McGinnis"},
+        {"album": "Coffin Road", "artist": "Narrated by Reader", "composer": "Peter May"},
+    ]
+    assert classify_audio("Cross Justice", "James Patterson", samples)[0] == "REVIEW"
+    assert analyze_audio_identity_set("Cross Justice", "James Patterson", samples)["mixedContent"] is True
